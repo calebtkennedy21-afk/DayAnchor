@@ -37,11 +37,18 @@ def init_db():
         return
     with conn.cursor() as cur:
         cur.execute('''
-            CREATE TABLE IF NOT EXISTS productivity (
+            CREATE TABLE IF NOT EXISTS tasks (
                 id SERIAL PRIMARY KEY,
-                entry_date DATE NOT NULL,
-                metric TEXT NOT NULL,
-                value NUMERIC NOT NULL
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT NOT NULL,
+                priority TEXT DEFAULT 'medium',
+                status TEXT DEFAULT 'todo',
+                created_date DATE NOT NULL,
+                due_date DATE,
+                completed_date DATE,
+                ai_suggested BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
         conn.commit()
@@ -49,3 +56,4 @@ def init_db():
 
 # Call this at app startup
 init_db()
+
