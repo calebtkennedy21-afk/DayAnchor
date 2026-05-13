@@ -46,6 +46,16 @@ def inject_styles():
             font-family: 'DM Sans', sans-serif;
         }
 
+        p,
+        li,
+        label,
+        .stMarkdown,
+        .stCaption,
+        .stText,
+        [data-testid="stMarkdownContainer"] {
+            color: #1f2933;
+        }
+
         h1, h2, h3, h4, .stMarkdown strong {
             font-family: 'Space Grotesk', sans-serif;
             color: #12212d;
@@ -59,6 +69,12 @@ def inject_styles():
 
         section[data-testid="stSidebar"] * {
             color: #f8fafc;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p {
+            color: #f8fafc !important;
         }
 
         .block-container {
@@ -444,6 +460,31 @@ def inject_styles():
         .stSelectbox [data-baseweb="select"] > div {
             border-radius: 14px !important;
             background: rgba(255, 255, 255, 0.72) !important;
+            color: #10212e !important;
+            border: 1px solid rgba(16, 33, 46, 0.22) !important;
+        }
+
+        .stTextInput input::placeholder,
+        .stTextArea textarea::placeholder {
+            color: #475467 !important;
+            opacity: 1;
+        }
+
+        [data-testid="stWidgetLabel"] p,
+        [data-testid="stWidgetLabel"] label,
+        [data-testid="stWidgetLabel"] span {
+            color: #10212e !important;
+            font-weight: 600;
+        }
+
+        .stSelectbox [data-baseweb="select"] [data-testid="stMarkdownContainer"],
+        .stDateInput [data-testid="stMarkdownContainer"] {
+            color: #10212e !important;
+        }
+
+        .stAlert p,
+        .stAlert div {
+            color: #10212e !important;
         }
 
         @media (max-width: 900px) {
