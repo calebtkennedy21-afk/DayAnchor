@@ -5,12 +5,13 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import date
 
-# Get DB connection info from environment variables
-DB_HOST = os.getenv("DB_HOST", "")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "")
-DB_USER = os.getenv("DB_USER", "")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+# Get DB connection info from environment variables.
+# Railway Postgres commonly exposes PG* variables, so support those directly.
+DB_HOST = os.getenv("DB_HOST") or os.getenv("PGHOST", "")
+DB_PORT = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
+DB_NAME = os.getenv("DB_NAME") or os.getenv("PGDATABASE", "")
+DB_USER = os.getenv("DB_USER") or os.getenv("PGUSER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
 
 @st.cache_resource
 def get_connection():
