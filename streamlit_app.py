@@ -1,17 +1,3 @@
-st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="centered")
-st.title("DayAnchor")
-st.markdown("""
-Welcome to **DayAnchor**! This is your starting point for a Streamlit app.
-
-
-
-### Example: Simple Echo Tool
-
-Type something below and see it echoed back!
-""")
-st.info("""
-#### Next Steps
-""")
 import streamlit as st
 from datetime import date, datetime
 from db import get_connection, init_db
