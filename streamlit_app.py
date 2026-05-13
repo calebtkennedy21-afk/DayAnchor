@@ -1,5 +1,6 @@
 import os
 from datetime import date, timedelta
+from html import escape
 
 import streamlit as st
 from openai import OpenAI
@@ -231,6 +232,192 @@ def inject_styles():
             font-size: 0.9rem;
         }
 
+        .dashboard-band {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 1rem;
+            margin: 1.1rem 0 1.35rem;
+        }
+
+        .focus-card {
+            padding: 1.25rem;
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(18, 33, 45, 0.96), rgba(15, 118, 110, 0.94));
+            color: white;
+            box-shadow: 0 28px 80px rgba(18, 33, 45, 0.22);
+        }
+
+        .focus-card h3,
+        .focus-card strong {
+            color: white;
+        }
+
+        .focus-kicker {
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-size: 0.72rem;
+            opacity: 0.72;
+            font-weight: 700;
+        }
+
+        .focus-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.65rem;
+            margin: 0.45rem 0;
+        }
+
+        .focus-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            margin-top: 0.9rem;
+        }
+
+        .focus-pill {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 999px;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.8rem;
+        }
+
+        .gauge-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+
+        .gauge-card {
+            padding: 1rem;
+            border-radius: 22px;
+            background: rgba(255, 252, 246, 0.88);
+            border: 1px solid rgba(18, 33, 45, 0.08);
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+
+        .gauge-ring {
+            --angle: 180deg;
+            width: 116px;
+            height: 116px;
+            margin: 0 auto 0.8rem;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: conic-gradient(#155eef 0deg, #0f766e var(--angle), rgba(18, 33, 45, 0.08) var(--angle));
+        }
+
+        .gauge-ring::before {
+            content: "";
+            width: 84px;
+            height: 84px;
+            border-radius: 50%;
+            background: #fffdf8;
+            position: absolute;
+        }
+
+        .gauge-value {
+            position: relative;
+            z-index: 1;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #12212d;
+        }
+
+        .gauge-label {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.96rem;
+            color: #12212d;
+        }
+
+        .gauge-copy {
+            color: var(--muted);
+            font-size: 0.82rem;
+            margin-top: 0.25rem;
+        }
+
+        .rhythm-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.85rem;
+            margin-bottom: 1.35rem;
+        }
+
+        .rhythm-card {
+            padding: 1rem;
+            border-radius: 20px;
+            background: rgba(255, 252, 246, 0.72);
+            border: 1px solid rgba(18, 33, 45, 0.08);
+            box-shadow: var(--shadow);
+        }
+
+        .rhythm-label {
+            color: var(--muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 700;
+        }
+
+        .rhythm-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.6rem;
+            color: #12212d;
+            margin-top: 0.3rem;
+        }
+
+        .rhythm-copy {
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+
+        .mini-list {
+            display: grid;
+            gap: 0.7rem;
+        }
+
+        .mini-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.75rem 0.9rem;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.48);
+            border: 1px solid rgba(18, 33, 45, 0.06);
+        }
+
+        .mini-title {
+            font-weight: 700;
+            color: #12212d;
+        }
+
+        .mini-subtitle {
+            color: var(--muted);
+            font-size: 0.84rem;
+        }
+
+        .lane-bar {
+            width: 100%;
+            height: 10px;
+            margin-top: 0.45rem;
+            border-radius: 999px;
+            background: rgba(18, 33, 45, 0.08);
+            overflow: hidden;
+        }
+
+        .lane-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #0f766e, #155eef, #fb923c);
+        }
+
+        .pill-status-overdue {
+            color: #991b1b;
+            background: #fee2e2;
+        }
+
         .stButton > button,
         .stFormSubmitButton > button {
             border-radius: 14px;
@@ -253,6 +440,15 @@ def inject_styles():
         @media (max-width: 900px) {
             .hero h1 {
                 font-size: 2.2rem;
+            }
+
+            .dashboard-band,
+            .rhythm-strip {
+                grid-template-columns: 1fr;
+            }
+
+            .gauge-grid {
+                grid-template-columns: 1fr 1fr;
             }
         }
         </style>
@@ -288,21 +484,26 @@ def priority_badge(priority):
 
 
 def render_task_card(task, show_status=False):
-    due_text = f"Due {task['due_date']}" if task.get("due_date") else "No due date"
-    description = task.get("description") or "No additional notes yet."
+    if task.get("due_date") and task["status"] != "completed" and task["due_date"] < date.today():
+        due_text = f"Overdue since {task['due_date']}"
+        due_class = "pill-status-overdue"
+    else:
+        due_text = f"Due {task['due_date']}" if task.get("due_date") else "No due date"
+        due_class = "pill-status"
+    description = escape(task.get("description") or "No additional notes yet.")
     meta = [
         priority_badge(task.get("priority", "medium")),
-        f'<span class="pill pill-category">{task.get("category", "General")}</span>',
-        f'<span class="pill pill-status">{due_text}</span>',
+        f'<span class="pill pill-category">{escape(task.get("category", "General"))}</span>',
+        f'<span class="pill {due_class}">{escape(due_text)}</span>',
     ]
     if show_status:
-        meta.append(f'<span class="pill pill-status">{task.get("status", "todo").title()}</span>')
+        meta.append(f'<span class="pill pill-status">{escape(task.get("status", "todo").title())}</span>')
 
     st.markdown(
         f"""
         <article class="task-card">
             <div class="task-topline">
-                <div class="task-title">{task['title']}</div>
+                <div class="task-title">{escape(task['title'])}</div>
             </div>
             <div>{description}</div>
             <div class="task-meta">{''.join(meta)}</div>
@@ -326,6 +527,119 @@ def render_panel(title, subtitle):
 
 def render_empty_state(message):
     st.markdown(f'<div class="empty-state">{message}</div>', unsafe_allow_html=True)
+
+
+def render_dashboard_spotlight(active_tasks, overdue_tasks, due_today, completed_this_week):
+    top_task = None
+    if active_tasks:
+        top_task = sorted(
+            active_tasks,
+            key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max),
+        )[0]
+
+    if top_task:
+        description = escape(top_task.get("description") or "No extra context added yet.")
+        spotlight = f"""
+        <div class="focus-card">
+            <div class="focus-kicker">Primary Focus</div>
+            <div class="focus-title">{escape(top_task['title'])}</div>
+            <div>{description}</div>
+            <div class="focus-meta">
+                <span class="focus-pill">{escape(top_task['category'])}</span>
+                <span class="focus-pill">Priority: {escape(top_task['priority'].title())}</span>
+                <span class="focus-pill">{escape('Due ' + str(top_task['due_date']) if top_task.get('due_date') else 'No due date')}</span>
+            </div>
+        </div>
+        """
+    else:
+        spotlight = """
+        <div class="focus-card">
+            <div class="focus-kicker">Primary Focus</div>
+            <div class="focus-title">No active tasks yet</div>
+            <div>Start by adding one personal task and one clinic task so the dashboard can shape the day.</div>
+        </div>
+        """
+
+    week_total = completed_this_week + len(active_tasks)
+    done_pct = int((completed_this_week / week_total) * 100) if week_total else 0
+    calm_pct = max(0, 100 - min(100, len(overdue_tasks) * 20))
+
+    gauges = f"""
+    <div class="gauge-grid">
+        <div class="gauge-card">
+            <div class="gauge-ring" style="--angle: {max(done_pct, 1) * 3.6}deg;">
+                <div class="gauge-value">{done_pct}%</div>
+            </div>
+            <div class="gauge-label">Weekly closure</div>
+            <div class="gauge-copy">{completed_this_week} completed this week</div>
+        </div>
+        <div class="gauge-card">
+            <div class="gauge-ring" style="--angle: {max(calm_pct, 1) * 3.6}deg;">
+                <div class="gauge-value">{len(due_today)}</div>
+            </div>
+            <div class="gauge-label">Due today</div>
+            <div class="gauge-copy">{len(overdue_tasks)} overdue tasks need recovery</div>
+        </div>
+    </div>
+    """
+
+    st.markdown(f'<div class="dashboard-band">{spotlight}{gauges}</div>', unsafe_allow_html=True)
+
+
+def render_rhythm_strip(active_tasks, overdue_tasks, personal_tasks, clinic_tasks):
+    high_priority = [task for task in active_tasks if task["priority"] == "high"]
+    personal_share = int((len(personal_tasks) / len(active_tasks)) * 100) if active_tasks else 0
+    clinic_share = int((len(clinic_tasks) / len(active_tasks)) * 100) if active_tasks else 0
+    st.markdown(
+        f"""
+        <div class="rhythm-strip">
+            <div class="rhythm-card">
+                <div class="rhythm-label">High Priority</div>
+                <div class="rhythm-value">{len(high_priority)}</div>
+                <div class="rhythm-copy">Tasks likely to shape the day</div>
+            </div>
+            <div class="rhythm-card">
+                <div class="rhythm-label">Overdue</div>
+                <div class="rhythm-value">{len(overdue_tasks)}</div>
+                <div class="rhythm-copy">Recovery items that need a decision</div>
+            </div>
+            <div class="rhythm-card">
+                <div class="rhythm-label">Personal Share</div>
+                <div class="rhythm-value">{personal_share}%</div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width: {personal_share}%;"></div></div>
+            </div>
+            <div class="rhythm-card">
+                <div class="rhythm-label">Clinic Share</div>
+                <div class="rhythm-value">{clinic_share}%</div>
+                <div class="lane-bar"><div class="lane-bar-fill" style="width: {clinic_share}%;"></div></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_upcoming_list(tasks, empty_message):
+    if not tasks:
+        render_empty_state(empty_message)
+        return
+
+    items = []
+    for task in tasks[:4]:
+        due = f"Due {task['due_date']}" if task.get("due_date") else "No due date"
+        items.append(
+            f"""
+            <div class="mini-row">
+                <div>
+                    <div class="mini-title">{escape(task['title'])}</div>
+                    <div class="mini-subtitle">{escape(task['category'])} • {escape(due)}</div>
+                </div>
+                {priority_badge(task.get('priority', 'medium'))}
+            </div>
+            """
+        )
+
+    st.markdown(f'<div class="mini-list">{"".join(items)}</div>', unsafe_allow_html=True)
 
 
 def fetch_tasks():
@@ -407,6 +721,12 @@ render_hero()
 if page == "Dashboard":
     all_tasks = fetch_tasks()
     active_tasks = [task for task in all_tasks if task["status"] != "completed"]
+    completed_this_week = [
+        task for task in all_tasks
+        if task["status"] == "completed"
+        and task.get("completed_date")
+        and task["completed_date"] >= date.today() - timedelta(days=date.today().weekday())
+    ]
     personal_tasks = sorted(
         [task for task in active_tasks if task["category"] == "Personal"],
         key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max),
@@ -416,12 +736,19 @@ if page == "Dashboard":
         key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max),
     )
     due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
+    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    upcoming_tasks = sorted(
+        [task for task in active_tasks if task.get("due_date") and task["due_date"] >= date.today()],
+        key=lambda task: (task["due_date"], priority_rank(task["priority"])),
+    )
 
     st.markdown('<p class="section-lead">A quick view of what needs attention across both halves of your day.</p>', unsafe_allow_html=True)
     metric_col1, metric_col2, metric_col3 = st.columns(3)
     metric_col1.metric("Active Tasks", len(active_tasks))
     metric_col2.metric("Due Today", len(due_today))
     metric_col3.metric("AI Ready", "On" if client else "Offline")
+    render_dashboard_spotlight(active_tasks, overdue_tasks, due_today, len(completed_this_week))
+    render_rhythm_strip(active_tasks, overdue_tasks, personal_tasks, clinic_tasks)
 
     col1, col2 = st.columns(2, gap="large")
     with col1:
@@ -442,6 +769,19 @@ if page == "Dashboard":
                 render_task_card(task)
         else:
             render_empty_state("No clinic tasks yet. Add one to keep the workstream visible.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    lower_left, lower_right = st.columns(2, gap="large")
+    with lower_left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        render_panel("Upcoming queue", "What is arriving next")
+        render_upcoming_list(upcoming_tasks, "No upcoming deadlines yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with lower_right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        render_panel("Recovery lane", "Overdue items that need triage")
+        render_upcoming_list(overdue_tasks, "Nothing overdue right now.")
         st.markdown('</div>', unsafe_allow_html=True)
 
 elif page == "Add Task":
