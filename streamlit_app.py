@@ -1,6 +1,7 @@
 import os
 from datetime import date, timedelta
 from html import escape
+from textwrap import dedent
 
 import streamlit as st
 from openai import OpenAI
@@ -550,27 +551,31 @@ def render_task_card(task, show_status=False):
         meta.append(f'<span class="pill pill-status">{escape(task.get("status", "todo").title())}</span>')
 
     st.markdown(
-        f"""
-        <article class="task-card">
-            <div class="task-topline">
-                <div class="task-title">{escape(task['title'])}</div>
-            </div>
-            <div>{description}</div>
-            <div class="task-meta">{''.join(meta)}</div>
-        </article>
-        """,
+        dedent(
+            f"""
+            <article class="task-card">
+                <div class="task-topline">
+                    <div class="task-title">{escape(task['title'])}</div>
+                </div>
+                <div>{description}</div>
+                <div class="task-meta">{''.join(meta)}</div>
+            </article>
+            """
+        ).strip(),
         unsafe_allow_html=True,
     )
 
 
 def render_panel(title, subtitle):
     st.markdown(
-        f"""
-        <div class="panel-title">
-            <h3>{title}</h3>
-            <span>{subtitle}</span>
-        </div>
-        """,
+        dedent(
+            f"""
+            <div class="panel-title">
+                <h3>{title}</h3>
+                <span>{subtitle}</span>
+            </div>
+            """
+        ).strip(),
         unsafe_allow_html=True,
     )
 
@@ -589,49 +594,55 @@ def render_dashboard_spotlight(active_tasks, overdue_tasks, due_today, completed
 
     if top_task:
         description = escape(top_task.get("description") or "No extra context added yet.")
-        spotlight = f"""
-        <div class="focus-card">
-            <div class="focus-kicker">Primary Focus</div>
-            <div class="focus-title">{escape(top_task['title'])}</div>
-            <div>{description}</div>
-            <div class="focus-meta">
-                <span class="focus-pill">{escape(top_task['category'])}</span>
-                <span class="focus-pill">Priority: {escape(top_task['priority'].title())}</span>
-                <span class="focus-pill">{escape('Due ' + str(top_task['due_date']) if top_task.get('due_date') else 'No due date')}</span>
+        spotlight = dedent(
+            f"""
+            <div class="focus-card">
+                <div class="focus-kicker">Primary Focus</div>
+                <div class="focus-title">{escape(top_task['title'])}</div>
+                <div>{description}</div>
+                <div class="focus-meta">
+                    <span class="focus-pill">{escape(top_task['category'])}</span>
+                    <span class="focus-pill">Priority: {escape(top_task['priority'].title())}</span>
+                    <span class="focus-pill">{escape('Due ' + str(top_task['due_date']) if top_task.get('due_date') else 'No due date')}</span>
+                </div>
             </div>
-        </div>
-        """
+            """
+        ).strip()
     else:
-        spotlight = """
-        <div class="focus-card">
-            <div class="focus-kicker">Primary Focus</div>
-            <div class="focus-title">No active tasks yet</div>
-            <div>Start by adding one personal task and one clinic task so the dashboard can shape the day.</div>
-        </div>
-        """
+        spotlight = dedent(
+            """
+            <div class="focus-card">
+                <div class="focus-kicker">Primary Focus</div>
+                <div class="focus-title">No active tasks yet</div>
+                <div>Start by adding one personal task and one clinic task so the dashboard can shape the day.</div>
+            </div>
+            """
+        ).strip()
 
     week_total = completed_this_week + len(active_tasks)
     done_pct = int((completed_this_week / week_total) * 100) if week_total else 0
     calm_pct = max(0, 100 - min(100, len(overdue_tasks) * 20))
 
-    gauges = f"""
-    <div class="gauge-grid">
-        <div class="gauge-card">
-            <div class="gauge-ring" style="--angle: {max(done_pct, 1) * 3.6}deg;">
-                <div class="gauge-value">{done_pct}%</div>
+    gauges = dedent(
+        f"""
+        <div class="gauge-grid">
+            <div class="gauge-card">
+                <div class="gauge-ring" style="--angle: {max(done_pct, 1) * 3.6}deg;">
+                    <div class="gauge-value">{done_pct}%</div>
+                </div>
+                <div class="gauge-label">Weekly closure</div>
+                <div class="gauge-copy">{completed_this_week} completed this week</div>
             </div>
-            <div class="gauge-label">Weekly closure</div>
-            <div class="gauge-copy">{completed_this_week} completed this week</div>
-        </div>
-        <div class="gauge-card">
-            <div class="gauge-ring" style="--angle: {max(calm_pct, 1) * 3.6}deg;">
-                <div class="gauge-value">{len(due_today)}</div>
+            <div class="gauge-card">
+                <div class="gauge-ring" style="--angle: {max(calm_pct, 1) * 3.6}deg;">
+                    <div class="gauge-value">{len(due_today)}</div>
+                </div>
+                <div class="gauge-label">Due today</div>
+                <div class="gauge-copy">{len(overdue_tasks)} overdue tasks need recovery</div>
             </div>
-            <div class="gauge-label">Due today</div>
-            <div class="gauge-copy">{len(overdue_tasks)} overdue tasks need recovery</div>
         </div>
-    </div>
-    """
+        """
+    ).strip()
 
     st.markdown(f'<div class="dashboard-band">{spotlight}{gauges}</div>', unsafe_allow_html=True)
 
@@ -641,30 +652,32 @@ def render_rhythm_strip(active_tasks, overdue_tasks, personal_tasks, clinic_task
     personal_share = int((len(personal_tasks) / len(active_tasks)) * 100) if active_tasks else 0
     clinic_share = int((len(clinic_tasks) / len(active_tasks)) * 100) if active_tasks else 0
     st.markdown(
-        f"""
-        <div class="rhythm-strip">
-            <div class="rhythm-card">
-                <div class="rhythm-label">High Priority</div>
-                <div class="rhythm-value">{len(high_priority)}</div>
-                <div class="rhythm-copy">Tasks likely to shape the day</div>
+        dedent(
+            f"""
+            <div class="rhythm-strip">
+                <div class="rhythm-card">
+                    <div class="rhythm-label">High Priority</div>
+                    <div class="rhythm-value">{len(high_priority)}</div>
+                    <div class="rhythm-copy">Tasks likely to shape the day</div>
+                </div>
+                <div class="rhythm-card">
+                    <div class="rhythm-label">Overdue</div>
+                    <div class="rhythm-value">{len(overdue_tasks)}</div>
+                    <div class="rhythm-copy">Recovery items that need a decision</div>
+                </div>
+                <div class="rhythm-card">
+                    <div class="rhythm-label">Personal Share</div>
+                    <div class="rhythm-value">{personal_share}%</div>
+                    <div class="lane-bar"><div class="lane-bar-fill" style="width: {personal_share}%;"></div></div>
+                </div>
+                <div class="rhythm-card">
+                    <div class="rhythm-label">Clinic Share</div>
+                    <div class="rhythm-value">{clinic_share}%</div>
+                    <div class="lane-bar"><div class="lane-bar-fill" style="width: {clinic_share}%;"></div></div>
+                </div>
             </div>
-            <div class="rhythm-card">
-                <div class="rhythm-label">Overdue</div>
-                <div class="rhythm-value">{len(overdue_tasks)}</div>
-                <div class="rhythm-copy">Recovery items that need a decision</div>
-            </div>
-            <div class="rhythm-card">
-                <div class="rhythm-label">Personal Share</div>
-                <div class="rhythm-value">{personal_share}%</div>
-                <div class="lane-bar"><div class="lane-bar-fill" style="width: {personal_share}%;"></div></div>
-            </div>
-            <div class="rhythm-card">
-                <div class="rhythm-label">Clinic Share</div>
-                <div class="rhythm-value">{clinic_share}%</div>
-                <div class="lane-bar"><div class="lane-bar-fill" style="width: {clinic_share}%;"></div></div>
-            </div>
-        </div>
-        """,
+            """
+        ).strip(),
         unsafe_allow_html=True,
     )
 
