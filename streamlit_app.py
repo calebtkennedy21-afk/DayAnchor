@@ -777,7 +777,7 @@ with st.sidebar:
     )
     st.header("Workspace")
     page = st.radio("Select View", ["Dashboard", "Add Task", "My Tasks", "AI Suggestions"])
-    st.caption("Connect Railway Postgres with PGHOST, PGPORT, PGDATABASE, PGUSER, and PGPASSWORD.")
+    st.caption("Connect Railway Postgres with DATABASE_URL/DATABASE_PUBLIC_URL, or use PGHOST, PGPORT, PGDATABASE, PGUSER, and PGPASSWORD.")
     st.caption(f"AI status: {ai_status}")
 
 render_hero()

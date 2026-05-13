@@ -3,10 +3,16 @@ import os
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import date
 
-# Get DB connection info from environment variables.
-# Railway Postgres commonly exposes PG* variables, so support those directly.
+# Support Railway URL-style variables first, then PG* and DB* variable styles.
+DATABASE_URL = (
+    os.getenv("DATABASE_URL")
+    or os.getenv("DATABASE_PUBLIC_URL")
+    or os.getenv("POSTGRES_URL")
+    or os.getenv("POSTGRESQL_URL")
+    or ""
+)
+
 DB_HOST = os.getenv("DB_HOST") or os.getenv("PGHOST", "")
 DB_PORT = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
 DB_NAME = os.getenv("DB_NAME") or os.getenv("PGDATABASE", "")
@@ -15,17 +21,25 @@ DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
 
 @st.cache_resource
 def get_connection():
-    if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
-        st.error("Database credentials are not set. Please set them as environment variables.")
-        return None
     try:
+        if DATABASE_URL:
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            return conn
+
+        if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+            st.error(
+                "Database credentials are not set. Use DATABASE_URL/DATABASE_PUBLIC_URL "
+                "or PGHOST/PGDATABASE/PGUSER/PGPASSWORD."
+            )
+            return None
+
         conn = psycopg2.connect(
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
             password=DB_PASSWORD,
-            cursor_factory=RealDictCursor
+            cursor_factory=RealDictCursor,
         )
         return conn
     except Exception as e:
