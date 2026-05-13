@@ -698,7 +698,7 @@ def get_ai_priority(task_title, category):
         return "medium"
 
 
-st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
+st.set_page_config(page_title="DayAnchor", layout="wide")
 inject_styles()
 init_db()
 
@@ -706,7 +706,7 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sidebar-brand">
-            <h2>⛵ DayAnchor</h2>
+            <h2>DayAnchor</h2>
             <p>Plan the day. Split the lanes. Let AI sharpen the order.</p>
         </div>
         """,
