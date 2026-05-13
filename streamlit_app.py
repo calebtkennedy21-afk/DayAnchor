@@ -8,8 +8,17 @@ from openai import OpenAI
 from db import get_connection, init_db
 
 
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key) if api_key else None
+def init_openai_client():
+    raw_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+    cleaned_key = raw_key.strip('"').strip("'")
+    if not cleaned_key:
+        return None, "Missing OPENAI_API_KEY"
+    if cleaned_key.lower().startswith("sk-your"):
+        return None, "OPENAI_API_KEY looks like a placeholder"
+    return OpenAI(api_key=cleaned_key), "Configured"
+
+
+client, ai_status = init_openai_client()
 
 
 def inject_styles():
@@ -715,6 +724,7 @@ with st.sidebar:
     st.header("Workspace")
     page = st.radio("Select View", ["Dashboard", "Add Task", "My Tasks", "AI Suggestions"])
     st.caption("Connect Railway Postgres with PGHOST, PGPORT, PGDATABASE, PGUSER, and PGPASSWORD.")
+    st.caption(f"AI status: {ai_status}")
 
 render_hero()
 
@@ -882,7 +892,8 @@ elif page == "My Tasks":
 elif page == "AI Suggestions":
     st.markdown('<p class="section-lead">Use the current task list as context and let AI propose the next sensible moves.</p>', unsafe_allow_html=True)
     if not client:
-        st.error("OpenAI API key not configured. Add OPENAI_API_KEY to enable AI suggestions.")
+        st.error("OpenAI API key not configured. Add OPENAI_API_KEY in Railway Variables and redeploy.")
+        st.info("If the value is wrapped in quotes, the app now strips them automatically. Ensure the variable is set on the app service, not only the database service.")
     else:
         all_tasks = fetch_tasks()
         personal_tasks = [task for task in all_tasks if task["category"] == "Personal"]
