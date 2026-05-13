@@ -24,6 +24,8 @@ export function useTasks() {
       const newHistory = [...history, ...yesterday.filter(t => !existing.has(t.id))];
       saveHistory(newHistory);
     }
+    // Run only on mount to archive past tasks once per session.
+    // allTasks is read from localStorage at that point, so no stale closure issue.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addTask = useCallback((text, category, priority = 'medium') => {

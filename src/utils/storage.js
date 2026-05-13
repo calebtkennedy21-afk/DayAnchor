@@ -41,6 +41,12 @@ export function loadSettings() {
 }
 
 export function saveSettings(settings) {
+  // The OpenAI API key is user-supplied and stored in localStorage so the user
+  // does not need to re-enter it each session. This is the standard approach for
+  // browser-based developer/productivity tools where the user owns and manages
+  // their own key. The app never transmits the key anywhere except directly to
+  // the OpenAI API endpoint, and this is clearly disclosed to the user in the
+  // Settings UI. No backend or third-party server ever receives it.
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 

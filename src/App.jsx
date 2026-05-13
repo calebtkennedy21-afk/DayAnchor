@@ -25,6 +25,8 @@ export default function App() {
     if (activeView === 'Dashboard' && settings.openaiKey && !suggestion) {
       fetchSuggestion(tasks, format(new Date(), 'EEEE, MMMM d, yyyy'));
     }
+    // Intentionally re-runs only when the view or API key changes, not on every task change.
+    // This avoids triggering a new API call every time a task is added/completed.
   }, [activeView, settings.openaiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleRefreshSuggestion() {
