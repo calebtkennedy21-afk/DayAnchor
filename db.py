@@ -26,6 +26,21 @@ def _get_setting(name):
     return ""
 
 
+def _setting_source(name):
+    env_value = _clean_setting(os.getenv(name))
+    if env_value:
+        return "env"
+
+    try:
+        secret_value = _clean_setting(st.secrets.get(name))
+        if secret_value:
+            return "secrets"
+    except Exception:
+        pass
+
+    return "missing"
+
+
 def _get_database_url():
     return (
         _get_setting("DATABASE_URL")
@@ -59,10 +74,19 @@ def get_connection():
     db_password = _get_setting("DB_PASSWORD") or _get_setting("PGPASSWORD")
 
     if not all([db_host, db_name, db_user, db_password]):
+        key_sources = {
+            "DATABASE_URL": _setting_source("DATABASE_URL"),
+            "DATABASE_PUBLIC_URL": _setting_source("DATABASE_PUBLIC_URL"),
+            "DATABASE_PRIVATE_URL": _setting_source("DATABASE_PRIVATE_URL"),
+            "POSTGRES_URL": _setting_source("POSTGRES_URL"),
+            "POSTGRESQL_URL": _setting_source("POSTGRESQL_URL"),
+            "DB_URL": _setting_source("DB_URL"),
+        }
         st.error(
             "Database is not configured. Set DATABASE_URL or DATABASE_PUBLIC_URL "
             "(or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or PGHOST/PGDATABASE/PGUSER/PGPASSWORD)."
         )
+        st.caption(f"DB key detection (safe): {key_sources}")
         st.caption(
             "Runtime note: these vars must be set in the same environment where Streamlit is running."
         )
