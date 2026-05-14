@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -83,39 +84,73 @@ def _setting_source(name):
 
 
 def get_db_key_diagnostics():
+    _, selected_key = _get_database_url_with_key()
     return {
         "DATABASE_URL": _setting_source("DATABASE_URL"),
-        "DATABASE_PUBLIC_URL": _setting_source("DATABASE_PUBLIC_URL"),
         "DATABASE_PRIVATE_URL": _setting_source("DATABASE_PRIVATE_URL"),
+        "DATABASE_PUBLIC_URL": _setting_source("DATABASE_PUBLIC_URL"),
         "POSTGRES_URL": _setting_source("POSTGRES_URL"),
         "POSTGRESQL_URL": _setting_source("POSTGRESQL_URL"),
         "DB_URL": _setting_source("DB_URL"),
+        "selected_url_key": selected_key or "none",
     }
 
 
+def _get_database_url_with_key():
+    candidates = [
+        "DATABASE_URL",
+        "DATABASE_PRIVATE_URL",
+        "DATABASE_PUBLIC_URL",
+        "POSTGRES_URL",
+        "POSTGRESQL_URL",
+        "DB_URL",
+    ]
+    for key in candidates:
+        value = _get_setting(key)
+        if value:
+            return value, key
+    return "", None
+
+
+def _with_sslmode_require(database_url):
+    parts = urlsplit(database_url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def _get_database_url():
-    return (
-        _get_setting("DATABASE_URL")
-        or _get_setting("DATABASE_PUBLIC_URL")
-        or _get_setting("DATABASE_PRIVATE_URL")
-        or _get_setting("POSTGRES_URL")
-        or _get_setting("POSTGRESQL_URL")
-        or _get_setting("DB_URL")
-        or ""
-    )
+    database_url, _ = _get_database_url_with_key()
+    return database_url
 
 
 def get_connection():
-    database_url = _get_database_url()
+    database_url, selected_key = _get_database_url_with_key()
 
     if database_url:
         try:
             return psycopg2.connect(
                 database_url,
+                connect_timeout=8,
                 cursor_factory=RealDictCursor,
             )
-        except Exception as e:
-            st.error(f"Database connection failed: {e}")
+        except Exception as first_error:
+            # Railway public URLs often require sslmode=require when not embedded in the URL.
+            if "sslmode=" not in database_url.lower():
+                try:
+                    return psycopg2.connect(
+                        _with_sslmode_require(database_url),
+                        connect_timeout=8,
+                        cursor_factory=RealDictCursor,
+                    )
+                except Exception as second_error:
+                    st.error(
+                        f"Database connection failed via {selected_key}: {second_error} "
+                        f"(initial error: {first_error})"
+                    )
+                    return None
+            st.error(f"Database connection failed via {selected_key}: {first_error}")
             return None
 
     # Backward-compatible fallback for split credentials.
@@ -144,6 +179,7 @@ def get_connection():
             dbname=db_name,
             user=db_user,
             password=db_password,
+            connect_timeout=8,
             cursor_factory=RealDictCursor,
         )
     except Exception as e:
