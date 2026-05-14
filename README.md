@@ -1,19 +1,17 @@
 # DayAnchor
 Daily Task app for both personal and clinic responsibilities with AI incorporation  
 
-## Postgres Setup (Minimal)
+## Current State
 
-Use one of these environment variables (either works):
+The app is temporarily running without a database or AI integration. Tasks are stored in session memory only.
 
-1. `DATABASE_URL`
-2. `DATABASE_PUBLIC_URL`
-
-Example:
+## Run
 
 ```bash
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME
+streamlit run streamlit_app.py
 ```
 
-Notes:
+## Notes
 
-- No extra SSL variable is required.
+- Database and AI dependencies have been removed for now.
+- You can add persistence back later once the core workflow is settled.
