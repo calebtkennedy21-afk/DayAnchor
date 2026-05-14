@@ -1,9 +1,15 @@
 # DayAnchor
-Daily Task app for both personal and clinic responsibilities with AI incorporation  
+Daily task app for personal and clinic responsibilities.
 
 ## Current State
 
 The app is temporarily running without a database or AI integration. Tasks are stored in session memory only.
+
+Current capabilities include:
+
+- Task capture with lane, priority, and due date.
+- Optional scheduling with date, time, and estimated duration.
+- Upcoming schedule panel for planned work blocks.
 
 ## Run
 

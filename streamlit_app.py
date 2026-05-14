@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, time
 
 import streamlit as st
 
@@ -189,11 +189,28 @@ def format_due(task):
     return due_date.strftime("%b %d, %Y") if hasattr(due_date, "strftime") else str(due_date)
 
 
+def format_schedule(task):
+    scheduled_date = task.get("scheduled_date")
+    scheduled_time = task.get("scheduled_time")
+    if not scheduled_date or not scheduled_time:
+        return "Unscheduled"
+    return f'{scheduled_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
+
+
 def task_matches(task, lane):
     return task["category"] == lane and task["status"] != "completed"
 
 
-def add_task(title, description, category, priority, due_date):
+def add_task(
+    title,
+    description,
+    category,
+    priority,
+    due_date,
+    scheduled_date=None,
+    scheduled_time=None,
+    scheduled_minutes=None,
+):
     st.session_state.tasks.append(
         {
             "id": len(st.session_state.tasks) + 1,
@@ -204,6 +221,9 @@ def add_task(title, description, category, priority, due_date):
             "status": "todo",
             "created_date": date.today(),
             "due_date": due_date,
+            "scheduled_date": scheduled_date,
+            "scheduled_time": scheduled_time,
+            "scheduled_minutes": scheduled_minutes,
             "completed_date": None,
         }
     )
@@ -232,6 +252,7 @@ def render_task_card(task):
             <span class="pill pill-category">{task["category"]}</span>
             <span class="pill pill-status">{task["status"].title()}</span>
             <span class="pill">Due: {format_due(task)}</span>
+            <span class="pill">Schedule: {format_schedule(task)}</span>
         </div>''',
         unsafe_allow_html=True,
     )
@@ -271,11 +292,20 @@ personal_tasks = sorted([task for task in active_tasks if task["category"] == "P
 clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
 due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
 overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+scheduled_tasks = sorted(
+    [
+        task
+        for task in active_tasks
+        if task.get("scheduled_date") and task.get("scheduled_time")
+    ],
+    key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
+)
 
-metric_col1, metric_col2, metric_col3 = st.columns(3)
+metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
 metric_col1.metric("Active Tasks", len(active_tasks))
 metric_col2.metric("Due Today", len(due_today))
 metric_col3.metric("Completed", len(completed_tasks))
+metric_col4.metric("Scheduled", len(scheduled_tasks))
 
 left, right = st.columns([1.1, 1], gap="large")
 with left:
@@ -287,13 +317,30 @@ with left:
         category = st.selectbox("Category", ["Personal", "Clinic"])
         priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
         due_date = st.date_input("Due date", value=date.today())
+        schedule_enabled = st.checkbox("Schedule this task")
+        schedule_cols = st.columns(3)
+        with schedule_cols[0]:
+            scheduled_date = st.date_input("Scheduled date", value=date.today(), disabled=not schedule_enabled)
+        with schedule_cols[1]:
+            scheduled_time = st.time_input("Scheduled time", value=time(9, 0), disabled=not schedule_enabled)
+        with schedule_cols[2]:
+            scheduled_minutes = st.selectbox("Duration (minutes)", [15, 30, 45, 60, 90, 120], index=3, disabled=not schedule_enabled)
         submitted = st.form_submit_button("Add task")
 
     if submitted:
         if not title.strip():
             st.warning("Add a task title first.")
         else:
-            add_task(title, description, category, priority, due_date)
+            add_task(
+                title,
+                description,
+                category,
+                priority,
+                due_date,
+                scheduled_date=scheduled_date if schedule_enabled else None,
+                scheduled_time=scheduled_time if schedule_enabled else None,
+                scheduled_minutes=scheduled_minutes if schedule_enabled else None,
+            )
             st.success("Task added.")
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -307,6 +354,24 @@ with right:
     else:
         st.markdown('<div class="empty-state">No tasks due today.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title"><h3>Upcoming Schedule</h3><span>Planned work blocks</span></div>', unsafe_allow_html=True)
+if scheduled_tasks:
+    for task in scheduled_tasks:
+        block_label = format_schedule(task)
+        minutes = task.get("scheduled_minutes")
+        if minutes:
+            block_label = f"{block_label} · {minutes} min"
+        st.markdown(
+            f"**{block_label}**",
+            unsafe_allow_html=False,
+        )
+        render_task_card(task)
+else:
+    st.markdown('<div class="empty-state">No scheduled tasks yet.</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2, gap="large")
 with col1:
