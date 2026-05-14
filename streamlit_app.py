@@ -788,12 +788,68 @@ def inject_styles():
         }
 
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(18, 33, 45, 0.98), rgba(17, 24, 39, 0.94));
-            border-right: 1px solid rgba(255, 255, 255, 0.08);
+            background:
+                radial-gradient(circle at 16% 8%, rgba(56, 189, 248, 0.22), transparent 22%),
+                radial-gradient(circle at 88% 18%, rgba(249, 115, 22, 0.18), transparent 24%),
+                linear-gradient(180deg, rgba(12, 24, 35, 0.98), rgba(15, 23, 42, 0.96));
+            border-right: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.06);
         }
 
         section[data-testid="stSidebar"] * {
             color: #f8fafc;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] .stCaption,
+        section[data-testid="stSidebar"] .stText,
+        section[data-testid="stSidebar"] .stMarkdown {
+            color: #f8fafc !important;
+            opacity: 1 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="input"] input,
+        section[data-testid="stSidebar"] [data-baseweb="textarea"] textarea,
+        section[data-testid="stSidebar"] [data-baseweb="select"] input,
+        section[data-testid="stSidebar"] [data-baseweb="select"] span,
+        section[data-testid="stSidebar"] [data-baseweb="tag"] span {
+            color: #f8fafc !important;
+            opacity: 1 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="input"] input::placeholder,
+        section[data-testid="stSidebar"] [data-baseweb="textarea"] textarea::placeholder {
+            color: rgba(248, 250, 252, 0.75) !important;
+            opacity: 1 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="input"] > div,
+        section[data-testid="stSidebar"] [data-baseweb="textarea"] > div,
+        section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+            background: rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
+            border-radius: 12px !important;
+        }
+
+        section[data-testid="stSidebar"] [data-baseweb="radio"] label,
+        section[data-testid="stSidebar"] [data-baseweb="radio"] div {
+            color: #f8fafc !important;
+            opacity: 1 !important;
+        }
+
+        section[data-testid="stSidebar"] .stButton > button {
+            background: linear-gradient(135deg, rgba(20, 184, 166, 0.9), rgba(37, 99, 235, 0.86));
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #ffffff !important;
+            font-weight: 700;
+            border-radius: 12px;
+        }
+
+        section[data-testid="stSidebar"] .stButton > button:hover {
+            border-color: rgba(255, 255, 255, 0.35);
+            filter: brightness(1.03);
         }
 
         .block-container {
