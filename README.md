@@ -17,6 +17,9 @@ Current capabilities include:
 - Sidebar view controls for search and filtering by category, priority, status, and schedule state.
 - Expanded workflow statuses: Todo, In Progress, Blocked, Completed.
 - Inline task editing and rescheduling directly from each task card.
+- Recurring tasks (daily/weekly) with automatic next-instance creation when completed.
+- Schedule Timeline panel with a configurable day window.
+- AI `Auto-Schedule Tasks` flow with one-click apply for schedule updates.
 
 ## Run
 

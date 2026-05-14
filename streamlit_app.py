@@ -25,6 +25,10 @@ if "ai_error" not in st.session_state:
     st.session_state.ai_error = ""
 if "ai_suggestions" not in st.session_state:
     st.session_state.ai_suggestions = []
+if "ai_schedule_error" not in st.session_state:
+    st.session_state.ai_schedule_error = ""
+if "ai_schedule_updates" not in st.session_state:
+    st.session_state.ai_schedule_updates = []
 
 
 def normalize_database_url(raw_url):
@@ -213,6 +217,47 @@ def parse_ai_suggestions(text):
     return suggestions[:5]
 
 
+def parse_ai_schedule_updates(text):
+    json_blob = extract_json_block(text)
+    if not json_blob:
+        return []
+
+    try:
+        payload = json.loads(json_blob)
+    except json.JSONDecodeError:
+        return []
+
+    raw_items = payload.get("schedule_updates", []) if isinstance(payload, dict) else []
+    updates = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            task_id = int(item.get("task_id"))
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            scheduled_minutes = int(item.get("scheduled_minutes") or 30)
+        except (TypeError, ValueError):
+            scheduled_minutes = 30
+
+        updates.append(
+            {
+                "task_id": task_id,
+                "scheduled_date": parse_date_value(item.get("scheduled_date")),
+                "scheduled_time": parse_time_value(item.get("scheduled_time")),
+                "scheduled_minutes": scheduled_minutes,
+            }
+        )
+
+    cleaned = []
+    for item in updates:
+        if item["scheduled_date"] and item["scheduled_time"] and item["scheduled_minutes"] > 0:
+            cleaned.append(item)
+    return cleaned[:20]
+
+
 def task_snapshot_for_ai(tasks, max_items=20):
     if not tasks:
         return "No tasks available."
@@ -223,6 +268,7 @@ def task_snapshot_for_ai(tasks, max_items=20):
             " | ".join(
                 [
                     f"#{idx}",
+                    f"id={task.get('id')}",
                     f"title={task.get('title', '')}",
                     f"category={task.get('category', '')}",
                     f"priority={task.get('priority', '')}",
@@ -231,6 +277,8 @@ def task_snapshot_for_ai(tasks, max_items=20):
                     f"scheduled_date={task.get('scheduled_date') or 'none'}",
                     f"scheduled_time={task.get('scheduled_time') or 'none'}",
                     f"scheduled_minutes={task.get('scheduled_minutes') or 'none'}",
+                    f"recurrence_rule={task.get('recurrence_rule') or 'none'}",
+                    f"recurrence_interval={task.get('recurrence_interval') or 'none'}",
                 ]
             )
         )
@@ -248,6 +296,27 @@ def status_label(status):
         "blocked": "Blocked",
         "completed": "Completed",
     }.get(status, status.replace("_", " ").title())
+
+
+def recurrence_label(rule, interval):
+    if not rule:
+        return "No recurrence"
+    if rule == "daily":
+        return f"Every {interval} day(s)"
+    if rule == "weekly":
+        return f"Every {interval} week(s)"
+    return "No recurrence"
+
+
+def shift_date_by_rule(value, rule, interval):
+    if not value:
+        return None
+    safe_interval = max(1, int(interval or 1))
+    if rule == "daily":
+        return value + timedelta(days=safe_interval)
+    if rule == "weekly":
+        return value + timedelta(days=7 * safe_interval)
+    return value
 
 
 def generate_ai_plan(tasks, user_prompt):
@@ -323,6 +392,73 @@ def apply_ai_suggestions(suggestions):
         )
 
 
+def generate_ai_schedule(tasks, user_prompt):
+    if not ai_enabled():
+        return "", "AI is not configured. Add OPENAI_API_KEY to enable it.", []
+
+    schedulable = [item for item in tasks if item.get("status") != "completed"]
+    if not schedulable:
+        return "", "No active tasks available for auto-scheduling.", []
+
+    try:
+        client = OpenAI(api_key=ai_api_key())
+        task_snapshot = task_snapshot_for_ai(schedulable)
+        response = client.chat.completions.create(
+            model=ai_model_name(),
+            temperature=0.2,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a precise scheduling assistant. Create realistic schedule blocks "
+                        "for active tasks and return strict JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Scheduling context: {user_prompt}\n\n"
+                        "Tasks:\n"
+                        f"{task_snapshot}\n\n"
+                        "Return a short rationale plus a JSON block with this exact shape:\n"
+                        "```json\n"
+                        "{\n"
+                        "  \"schedule_updates\": [\n"
+                        "    {\n"
+                        "      \"task_id\": 123,\n"
+                        "      \"scheduled_date\": \"YYYY-MM-DD\",\n"
+                        "      \"scheduled_time\": \"HH:MM\",\n"
+                        "      \"scheduled_minutes\": 30\n"
+                        "    }\n"
+                        "  ]\n"
+                        "}\n"
+                        "```\n"
+                        "Do not include completed tasks."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty auto-schedule response.", []
+        updates = parse_ai_schedule_updates(text)
+        if not updates:
+            return text, "AI returned no valid schedule updates.", []
+        return text, "", updates
+    except Exception as exc:
+        return "", f"AI auto-schedule failed: {exc}", []
+
+
+def apply_ai_schedule_updates(updates):
+    for item in updates:
+        update_task(
+            item["task_id"],
+            scheduled_date=item["scheduled_date"],
+            scheduled_time=item["scheduled_time"],
+            scheduled_minutes=item["scheduled_minutes"],
+        )
+
+
 DB_CANDIDATE_SOURCE = None
 DB_URL = None
 DB_ERROR = None
@@ -370,10 +506,14 @@ def initialize_database():
                             scheduled_date DATE,
                             scheduled_time TIME,
                             scheduled_minutes INTEGER,
+                            recurrence_rule TEXT,
+                            recurrence_interval INTEGER,
                             completed_date DATE
                         )
                         """
                     )
+                    cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_rule TEXT")
+                    cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER")
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -403,6 +543,8 @@ def load_tasks():
                         scheduled_date,
                         scheduled_time,
                         scheduled_minutes,
+                        recurrence_rule,
+                        recurrence_interval,
                         completed_date
                     FROM tasks
                     ORDER BY created_date DESC, id DESC
@@ -679,6 +821,8 @@ def add_task(
     scheduled_date=None,
     scheduled_time=None,
     scheduled_minutes=None,
+    recurrence_rule=None,
+    recurrence_interval=1,
 ):
     if db_enabled():
         with get_connection() as conn:
@@ -696,8 +840,10 @@ def add_task(
                         scheduled_date,
                         scheduled_time,
                         scheduled_minutes,
+                        recurrence_rule,
+                        recurrence_interval,
                         completed_date
-                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         title.strip(),
@@ -709,6 +855,8 @@ def add_task(
                         scheduled_date,
                         scheduled_time,
                         scheduled_minutes,
+                        recurrence_rule,
+                        max(1, int(recurrence_interval or 1)),
                         None,
                     ),
                 )
@@ -727,6 +875,8 @@ def add_task(
             "scheduled_date": scheduled_date,
             "scheduled_time": scheduled_time,
             "scheduled_minutes": scheduled_minutes,
+            "recurrence_rule": recurrence_rule,
+            "recurrence_interval": max(1, int(recurrence_interval or 1)),
             "completed_date": None,
         }
     )
@@ -743,6 +893,8 @@ def update_task(task_id, **fields):
         "scheduled_date",
         "scheduled_time",
         "scheduled_minutes",
+        "recurrence_rule",
+        "recurrence_interval",
         "completed_date",
     }
     sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
@@ -776,13 +928,78 @@ def delete_task(task_id):
     st.session_state.tasks = [task for task in st.session_state.tasks if task["id"] != task_id]
 
 
+def get_task_by_id(task_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        title,
+                        description,
+                        category,
+                        priority,
+                        status,
+                        created_date,
+                        due_date,
+                        scheduled_date,
+                        scheduled_time,
+                        scheduled_minutes,
+                        recurrence_rule,
+                        recurrence_interval,
+                        completed_date
+                    FROM tasks
+                    WHERE id = %s
+                    """,
+                    (task_id,),
+                )
+                return cur.fetchone()
+
+    for task in st.session_state.tasks:
+        if task["id"] == task_id:
+            return task
+    return None
+
+
 def complete_task(task_id):
+    task = get_task_by_id(task_id)
+    if not task:
+        return
+
+    if task.get("status") == "completed":
+        return
+
     update_task(task_id, status="completed", completed_date=date.today())
+
+    recurrence_rule = task.get("recurrence_rule")
+    recurrence_interval = max(1, int(task.get("recurrence_interval") or 1))
+    if recurrence_rule in ("daily", "weekly"):
+        next_due = shift_date_by_rule(task.get("due_date") or date.today(), recurrence_rule, recurrence_interval)
+        next_sched_date = shift_date_by_rule(task.get("scheduled_date"), recurrence_rule, recurrence_interval)
+        add_task(
+            title=task.get("title", ""),
+            description=task.get("description", ""),
+            category=task.get("category", "Personal"),
+            priority=task.get("priority", "medium"),
+            due_date=next_due,
+            scheduled_date=next_sched_date,
+            scheduled_time=task.get("scheduled_time"),
+            scheduled_minutes=task.get("scheduled_minutes"),
+            recurrence_rule=recurrence_rule,
+            recurrence_interval=recurrence_interval,
+        )
 
 
 def set_task_status(task_id, new_status):
+    task = get_task_by_id(task_id)
+    if not task:
+        return
+    if task.get("status") == new_status:
+        return
+
     if new_status == "completed":
-        update_task(task_id, status="completed", completed_date=date.today())
+        complete_task(task_id)
     else:
         update_task(task_id, status=new_status, completed_date=None)
 
@@ -799,6 +1016,7 @@ def render_task_card(task, key_prefix="task"):
             <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
             <span class="pill">Due: {format_due(task)}</span>
             <span class="pill">Schedule: {format_schedule(task)}</span>
+            <span class="pill">Repeat: {recurrence_label(task.get("recurrence_rule"), task.get("recurrence_interval") or 1)}</span>
         </div>''',
         unsafe_allow_html=True,
     )
@@ -885,6 +1103,30 @@ def render_task_card(task, key_prefix="task"):
                 key=f"{key_prefix}_edit_sched_minutes_{task['id']}",
             )
 
+        recurrence_options = ["none", "daily", "weekly"]
+        current_rule = task.get("recurrence_rule") or "none"
+        if current_rule not in recurrence_options:
+            current_rule = "none"
+        rec_cols = st.columns(2)
+        with rec_cols[0]:
+            edit_recurrence_rule = st.selectbox(
+                "Recurrence",
+                recurrence_options,
+                index=recurrence_options.index(current_rule),
+                format_func=lambda value: "None" if value == "none" else value.title(),
+                key=f"{key_prefix}_edit_recurrence_rule_{task['id']}",
+            )
+        with rec_cols[1]:
+            edit_recurrence_interval = st.number_input(
+                "Every",
+                min_value=1,
+                max_value=30,
+                value=int(task.get("recurrence_interval") or 1),
+                step=1,
+                disabled=edit_recurrence_rule == "none",
+                key=f"{key_prefix}_edit_recurrence_interval_{task['id']}",
+            )
+
         if st.button("Save changes", key=f"{key_prefix}_save_{task['id']}"):
             update_task(
                 task["id"],
@@ -896,6 +1138,8 @@ def render_task_card(task, key_prefix="task"):
                 scheduled_date=edit_sched_date if edit_has_schedule else None,
                 scheduled_time=edit_sched_time if edit_has_schedule else None,
                 scheduled_minutes=edit_sched_minutes if edit_has_schedule else None,
+                recurrence_rule=None if edit_recurrence_rule == "none" else edit_recurrence_rule,
+                recurrence_interval=int(edit_recurrence_interval),
             )
             st.success("Task updated.")
             st.rerun()
@@ -961,6 +1205,7 @@ with st.sidebar:
         format_func=status_label,
     )
     scheduled_only = st.checkbox("Scheduled tasks only", value=False)
+    timeline_days = st.slider("Timeline window (days)", min_value=3, max_value=21, value=7)
 
     st.markdown("---")
     st.markdown("### AI")
@@ -1023,14 +1268,29 @@ st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidance</span></div>', unsafe_allow_html=True)
 default_prompt = "Give me a focused plan for today."
 ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90)
-if st.button("Generate AI Plan"):
+action_cols = st.columns(2)
+with action_cols[0]:
+    generate_plan_clicked = st.button("Generate AI Plan")
+with action_cols[1]:
+    auto_schedule_clicked = st.button("Auto-Schedule Tasks")
+
+if generate_plan_clicked:
     result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
     st.session_state.ai_response = result
     st.session_state.ai_error = error
     st.session_state.ai_suggestions = suggestions
 
+if auto_schedule_clicked:
+    schedule_text, schedule_error, schedule_updates = generate_ai_schedule(active_tasks, ai_prompt)
+    st.session_state.ai_schedule_error = schedule_error
+    st.session_state.ai_schedule_updates = schedule_updates
+    if schedule_text:
+        st.session_state.ai_response = schedule_text
+
 if st.session_state.ai_error:
     st.warning(st.session_state.ai_error)
+if st.session_state.ai_schedule_error:
+    st.warning(st.session_state.ai_schedule_error)
 if st.session_state.ai_response:
     st.markdown(st.session_state.ai_response)
 if st.session_state.ai_suggestions:
@@ -1040,6 +1300,14 @@ if st.session_state.ai_suggestions:
         added_count = len(st.session_state.ai_suggestions)
         st.session_state.ai_suggestions = []
         st.success(f"Added {added_count} suggested task(s).")
+        st.rerun()
+if st.session_state.ai_schedule_updates:
+    st.caption(f"Schedule updates detected: {len(st.session_state.ai_schedule_updates)}")
+    if st.button("Apply Auto-Schedule", type="secondary"):
+        apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
+        applied_count = len(st.session_state.ai_schedule_updates)
+        st.session_state.ai_schedule_updates = []
+        st.success(f"Applied {applied_count} schedule update(s).")
         st.rerun()
 if not st.session_state.ai_response and not st.session_state.ai_error:
     st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
@@ -1063,6 +1331,22 @@ with left:
             scheduled_time = st.time_input("Scheduled time", value=time(9, 0), disabled=not schedule_enabled)
         with schedule_cols[2]:
             scheduled_minutes = st.selectbox("Duration (minutes)", [15, 30, 45, 60, 90, 120], index=3, disabled=not schedule_enabled)
+        recurrence_cols = st.columns(2)
+        with recurrence_cols[0]:
+            recurrence_rule = st.selectbox(
+                "Recurrence",
+                ["none", "daily", "weekly"],
+                format_func=lambda value: "None" if value == "none" else value.title(),
+            )
+        with recurrence_cols[1]:
+            recurrence_interval = st.number_input(
+                "Every",
+                min_value=1,
+                max_value=30,
+                value=1,
+                step=1,
+                disabled=recurrence_rule == "none",
+            )
         submitted = st.form_submit_button("Add task")
 
     if submitted:
@@ -1078,6 +1362,8 @@ with left:
                 scheduled_date=scheduled_date if schedule_enabled else None,
                 scheduled_time=scheduled_time if schedule_enabled else None,
                 scheduled_minutes=scheduled_minutes if schedule_enabled else None,
+                recurrence_rule=None if recurrence_rule == "none" else recurrence_rule,
+                recurrence_interval=int(recurrence_interval),
             )
             st.success("Task added.")
             st.rerun()
@@ -1109,6 +1395,33 @@ if scheduled_tasks:
         render_task_card(task, key_prefix="schedule")
 else:
     st.markdown('<div class="empty-state">No scheduled tasks yet.</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title"><h3>Schedule Timeline</h3><span>Calendar-style view</span></div>', unsafe_allow_html=True)
+timeline_start = date.today()
+timeline_end = timeline_start + timedelta(days=int(timeline_days) - 1)
+timeline_tasks = [
+    task
+    for task in scheduled_tasks
+    if task.get("scheduled_date") and timeline_start <= task["scheduled_date"] <= timeline_end
+]
+
+if timeline_tasks:
+    for offset in range(int(timeline_days)):
+        day = timeline_start + timedelta(days=offset)
+        day_items = [item for item in timeline_tasks if item.get("scheduled_date") == day]
+        if not day_items:
+            continue
+        st.markdown(f"**{day.strftime('%A, %b %d')}**")
+        day_items = sorted(day_items, key=lambda item: (item.get("scheduled_time") or time(23, 59), priority_rank(item.get("priority"))))
+        for item in day_items:
+            at = item.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if item.get("scheduled_time") else "Any time"
+            mins = item.get("scheduled_minutes") or "-"
+            st.markdown(f"- {at} · {mins} min · {item.get('title')} ({status_label(item.get('status', 'todo'))})")
+else:
+    st.markdown('<div class="empty-state">No scheduled tasks in this timeline window.</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2, gap="large")
