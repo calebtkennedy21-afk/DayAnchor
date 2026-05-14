@@ -22,5 +22,7 @@ streamlit run streamlit_app.py
 ## Notes
 
 - Postgres URL env var priority: `DATABASE_URL`, then `DATABASE_PUBLIC_URL`.
+- Connection behavior: the app tries both URLs and uses the first one that connects.
 - No additional SSL env var is required; the app defaults to `sslmode=require` if omitted.
 - Table creation is automatic on startup (`tasks`).
+- Sidebar now shows detected DB variable names and health state for quick troubleshooting.

@@ -14,11 +14,14 @@ if "tasks" not in st.session_state:
     st.session_state.tasks = []
 
 
-def resolve_database_url():
-    url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
-    if not url:
+def normalize_database_url(raw_url):
+    if not raw_url:
         return None
+    cleaned = raw_url.strip().strip('"').strip("'")
+    return cleaned or None
 
+
+def ensure_sslmode(url):
     parsed = urlsplit(url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     if "sslmode" not in query:
@@ -27,7 +30,22 @@ def resolve_database_url():
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 
-DB_URL = resolve_database_url()
+def database_url_candidates():
+    candidates = []
+    for env_name in ("DATABASE_URL", "DATABASE_PUBLIC_URL"):
+        raw = os.getenv(env_name)
+        normalized = normalize_database_url(raw)
+        if normalized:
+            candidates.append((env_name, ensure_sslmode(normalized)))
+    return candidates
+
+
+def configured_database_env_names():
+    return [name for name in ("DATABASE_URL", "DATABASE_PUBLIC_URL") if normalize_database_url(os.getenv(name))]
+
+
+DB_CANDIDATE_SOURCE = None
+DB_URL = None
 DB_ERROR = None
 
 
@@ -42,32 +60,48 @@ def get_connection():
 
 
 def initialize_database():
+    global DB_URL
     global DB_ERROR
-    if not db_enabled():
+    global DB_CANDIDATE_SOURCE
+
+    DB_URL = None
+    DB_ERROR = None
+    DB_CANDIDATE_SOURCE = None
+
+    candidates = database_url_candidates()
+    if not candidates:
         return
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id BIGSERIAL PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        description TEXT NOT NULL DEFAULT '',
-                        category TEXT NOT NULL,
-                        priority TEXT NOT NULL,
-                        status TEXT NOT NULL DEFAULT 'todo',
-                        created_date DATE NOT NULL,
-                        due_date DATE,
-                        scheduled_date DATE,
-                        scheduled_time TIME,
-                        scheduled_minutes INTEGER,
-                        completed_date DATE
+
+    errors = []
+    for source_name, candidate_url in candidates:
+        try:
+            with psycopg.connect(candidate_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS tasks (
+                            id BIGSERIAL PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            description TEXT NOT NULL DEFAULT '',
+                            category TEXT NOT NULL,
+                            priority TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'todo',
+                            created_date DATE NOT NULL,
+                            due_date DATE,
+                            scheduled_date DATE,
+                            scheduled_time TIME,
+                            scheduled_minutes INTEGER,
+                            completed_date DATE
+                        )
+                        """
                     )
-                    """
-                )
-    except psycopg.Error as exc:
-        DB_ERROR = str(exc)
+            DB_URL = candidate_url
+            DB_CANDIDATE_SOURCE = source_name
+            return
+        except psycopg.Error as exc:
+            errors.append(f"{source_name}: {exc}")
+
+    DB_ERROR = " | ".join(errors)
 
 
 def load_tasks():
@@ -101,7 +135,7 @@ def load_tasks():
 
 
 def db_health_status():
-    if not DB_URL:
+    if not database_url_candidates():
         return "missing", "No database URL configured."
     if DB_ERROR:
         return "error", "Database setup failed; running in fallback mode."
@@ -488,7 +522,8 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     if db_enabled():
-        st.caption("Connected to Postgres (Railway URL env).")
+        source = DB_CANDIDATE_SOURCE or "database URL"
+        st.caption(f"Connected to Postgres via {source}.")
         st.caption("Tasks persist across restarts and deployments.")
     elif DB_ERROR:
         st.caption("Database connection failed.")
@@ -500,6 +535,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Data Controls")
     health_state, health_message = db_health_status()
+    detected_names = configured_database_env_names()
+    if detected_names:
+        st.caption(f"Detected DB vars: {', '.join(detected_names)}")
+    else:
+        st.caption("Detected DB vars: none")
     if health_state == "ok":
         st.success(f"DB Health: {health_message}")
     elif health_state == "error":
