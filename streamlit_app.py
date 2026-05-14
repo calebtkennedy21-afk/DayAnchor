@@ -29,6 +29,21 @@ if "ai_schedule_error" not in st.session_state:
     st.session_state.ai_schedule_error = ""
 if "ai_schedule_updates" not in st.session_state:
     st.session_state.ai_schedule_updates = []
+if "daily_review_text" not in st.session_state:
+    st.session_state.daily_review_text = ""
+if "tomorrow_plan_text" not in st.session_state:
+    st.session_state.tomorrow_plan_text = ""
+if "daily_review_error" not in st.session_state:
+    st.session_state.daily_review_error = ""
+
+
+DEFAULT_APP_SETTINGS = {
+    "default_category": "Personal",
+    "default_priority": "medium",
+    "default_duration": 60,
+    "default_schedule_time": "09:00",
+    "timeline_days": 7,
+}
 
 
 def normalize_database_url(raw_url):
@@ -459,6 +474,69 @@ def apply_ai_schedule_updates(updates):
         )
 
 
+def generate_daily_review(active_tasks, completed_today, user_notes):
+    completed_lines = [f"- {task.get('title')}" for task in completed_today]
+    active_lines = [
+        f"- {task.get('title')} ({task.get('priority')}, due={task.get('due_date') or 'none'}, status={task.get('status')})"
+        for task in active_tasks[:20]
+    ]
+
+    completed_text = "\n".join(completed_lines) if completed_lines else "- None"
+    active_text = "\n".join(active_lines) if active_lines else "- None"
+
+    if not ai_enabled():
+        fallback_review = (
+            "## End-of-Day Review\n"
+            f"Completed today: {len(completed_today)} tasks\n"
+            f"Active remaining: {len(active_tasks)} tasks\n"
+            "\n"
+            "AI is not configured, so this is a local summary."
+        )
+        fallback_tomorrow = "Focus first on overdue and high-priority active tasks, then schedule unscheduled items."
+        return fallback_review, fallback_tomorrow, ""
+
+    try:
+        client = OpenAI(api_key=ai_api_key())
+        response = client.chat.completions.create(
+            model=ai_model_name(),
+            temperature=0.4,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a concise productivity coach preparing an end-of-day review and next-day plan.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Notes: {user_notes}\n\n"
+                        "Completed today:\n"
+                        f"{completed_text}\n\n"
+                        "Active remaining:\n"
+                        f"{active_text}\n\n"
+                        "Return markdown with two sections exactly:\n"
+                        "## End-of-Day Review\n"
+                        "## Tomorrow Draft Plan"
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "", "AI returned an empty daily review response."
+
+        split_marker = "## Tomorrow Draft Plan"
+        if split_marker in text:
+            head, tail = text.split(split_marker, 1)
+            review_text = head.strip()
+            tomorrow_text = f"## Tomorrow Draft Plan{tail}".strip()
+        else:
+            review_text = text.strip()
+            tomorrow_text = "## Tomorrow Draft Plan\nNo structured tomorrow plan was returned."
+        return review_text, tomorrow_text, ""
+    except Exception as exc:
+        return "", "", f"Daily review generation failed: {exc}"
+
+
 DB_CANDIDATE_SOURCE = None
 DB_URL = None
 DB_ERROR = None
@@ -514,6 +592,15 @@ def initialize_database():
                     )
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_rule TEXT")
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER")
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS app_settings (
+                            id INTEGER PRIMARY KEY,
+                            payload TEXT NOT NULL,
+                            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -568,6 +655,54 @@ def db_health_status():
         return "ok", "Database reachable."
     except psycopg.Error:
         return "error", "Database unreachable right now."
+
+
+def load_app_settings():
+    if db_enabled():
+        try:
+            with get_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("SELECT payload FROM app_settings WHERE id = 1")
+                    row = cur.fetchone()
+                    if row and row.get("payload"):
+                        payload = json.loads(row["payload"])
+                        merged = dict(DEFAULT_APP_SETTINGS)
+                        merged.update(payload)
+                        return merged
+        except (psycopg.Error, json.JSONDecodeError):
+            pass
+
+    stored = st.session_state.get("app_settings")
+    if isinstance(stored, dict):
+        merged = dict(DEFAULT_APP_SETTINGS)
+        merged.update(stored)
+        return merged
+    return dict(DEFAULT_APP_SETTINGS)
+
+
+def save_app_settings(settings):
+    merged = dict(DEFAULT_APP_SETTINGS)
+    merged.update(settings)
+
+    if db_enabled():
+        try:
+            payload_text = json.dumps(merged)
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO app_settings (id, payload, updated_at)
+                        VALUES (1, %s, NOW())
+                        ON CONFLICT (id)
+                        DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+                        """,
+                        (payload_text,),
+                    )
+        except psycopg.Error:
+            pass
+
+    st.session_state["app_settings"] = merged
+    return merged
 
 
 def seed_sample_tasks():
@@ -1146,191 +1281,52 @@ def render_task_card(task, key_prefix="task"):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-initialize_database()
-
-inject_styles()
-render_hero()
-
-with st.sidebar:
-    st.markdown(
-        """
-        <div style="padding: 1rem 1rem 1.15rem; margin-bottom: 1rem; border-radius: 20px; background: linear-gradient(135deg, rgba(15, 118, 110, 0.28), rgba(21, 94, 239, 0.24)); border: 1px solid rgba(255, 255, 255, 0.1);">
-            <h2 style="margin: 0; color: white; font-size: 1.2rem;">DayAnchor</h2>
-            <p style="margin: 0.45rem 0 0; color: rgba(248, 250, 252, 0.82); font-size: 0.9rem;">Task capture with Postgres persistence and optional AI planning.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    if db_enabled():
-        source = DB_CANDIDATE_SOURCE or "database URL"
-        st.caption(f"Connected to Postgres via {source}.")
-        st.caption("Tasks persist across restarts and deployments.")
-    elif DB_ERROR:
-        st.caption("Database connection failed.")
-        st.caption("Using session-only fallback until DB is reachable.")
+def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_text):
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
+    if tasks_to_render:
+        for task in tasks_to_render:
+            render_task_card(task, key_prefix=key_prefix)
     else:
-        st.caption("No DATABASE_URL or DATABASE_PUBLIC_URL found.")
-        st.caption("Running in session-only fallback mode.")
-
-    st.markdown("---")
-    st.markdown("### Data Controls")
-    health_state, health_message = db_health_status()
-    detected_names = configured_database_env_names()
-    if detected_names:
-        st.caption(f"Detected DB vars: {', '.join(detected_names)}")
-    else:
-        st.caption("Detected DB vars: none")
-        st.caption("Tip: ensure the web app service has DATABASE_URL or DATABASE_PUBLIC_URL set in Railway.")
-    if health_state == "ok":
-        st.success(f"DB Health: {health_message}")
-    elif health_state == "error":
-        st.warning(f"DB Health: {health_message}")
-    else:
-        st.info(f"DB Health: {health_message}")
-
-    if st.button("Seed Sample Tasks", use_container_width=True):
-        seed_sample_tasks()
-        st.success("Sample tasks added.")
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown("### View Controls")
-    search_query = st.text_input("Search tasks", placeholder="Title or description")
-    category_filter = st.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
-    priority_filter = st.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
-    status_filter = st.multiselect(
-        "Status",
-        ["todo", "in_progress", "blocked", "completed"],
-        default=["todo", "in_progress", "blocked", "completed"],
-        format_func=status_label,
-    )
-    scheduled_only = st.checkbox("Scheduled tasks only", value=False)
-    timeline_days = st.slider("Timeline window (days)", min_value=3, max_value=21, value=7)
-
-    st.markdown("---")
-    st.markdown("### AI")
-    if ai_enabled():
-        st.success(f"AI ready ({ai_model_name()})")
-    else:
-        st.info("AI disabled. Set OPENAI_API_KEY to enable.")
-
-st.markdown('<p class="section-lead">Capture work quickly and split it between your personal lane and clinic lane.</p>', unsafe_allow_html=True)
-
-tasks = load_tasks()
-query = (search_query or "").strip().lower()
+        st.markdown(f'<div class="empty-state">{empty_text}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
-def task_matches_filters(task):
-    if category_filter and task.get("category") not in category_filter:
-        return False
-    if priority_filter and task.get("priority") not in priority_filter:
-        return False
-    if status_filter and task.get("status") not in status_filter:
-        return False
-    if scheduled_only and not (task.get("scheduled_date") and task.get("scheduled_time")):
-        return False
-    if query:
-        title = str(task.get("title", "")).lower()
-        description = str(task.get("description", "")).lower()
-        if query not in title and query not in description:
-            return False
-    return True
-
-
-filtered_tasks = [task for task in tasks if task_matches_filters(task)]
-
-active_tasks = [task for task in filtered_tasks if task["status"] != "completed"]
-completed_tasks = [task for task in filtered_tasks if task["status"] == "completed"]
-personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
-clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
-due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
-overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
-scheduled_tasks = sorted(
-    [
-        task
-        for task in active_tasks
-        if task.get("scheduled_date") and task.get("scheduled_time")
-    ],
-    key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
-)
-
-metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-metric_col1.metric("Active Tasks", len(active_tasks))
-metric_col2.metric("Due Today", len(due_today))
-metric_col3.metric("Completed", len(completed_tasks))
-metric_col4.metric("Scheduled", len(scheduled_tasks))
-
-if len(filtered_tasks) != len(tasks):
-    st.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
-
-st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidance</span></div>', unsafe_allow_html=True)
-default_prompt = "Give me a focused plan for today."
-ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90)
-action_cols = st.columns(2)
-with action_cols[0]:
-    generate_plan_clicked = st.button("Generate AI Plan")
-with action_cols[1]:
-    auto_schedule_clicked = st.button("Auto-Schedule Tasks")
-
-if generate_plan_clicked:
-    result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
-    st.session_state.ai_response = result
-    st.session_state.ai_error = error
-    st.session_state.ai_suggestions = suggestions
-
-if auto_schedule_clicked:
-    schedule_text, schedule_error, schedule_updates = generate_ai_schedule(active_tasks, ai_prompt)
-    st.session_state.ai_schedule_error = schedule_error
-    st.session_state.ai_schedule_updates = schedule_updates
-    if schedule_text:
-        st.session_state.ai_response = schedule_text
-
-if st.session_state.ai_error:
-    st.warning(st.session_state.ai_error)
-if st.session_state.ai_schedule_error:
-    st.warning(st.session_state.ai_schedule_error)
-if st.session_state.ai_response:
-    st.markdown(st.session_state.ai_response)
-if st.session_state.ai_suggestions:
-    st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
-    if st.button("Add Suggested Tasks", type="primary"):
-        apply_ai_suggestions(st.session_state.ai_suggestions)
-        added_count = len(st.session_state.ai_suggestions)
-        st.session_state.ai_suggestions = []
-        st.success(f"Added {added_count} suggested task(s).")
-        st.rerun()
-if st.session_state.ai_schedule_updates:
-    st.caption(f"Schedule updates detected: {len(st.session_state.ai_schedule_updates)}")
-    if st.button("Apply Auto-Schedule", type="secondary"):
-        apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
-        applied_count = len(st.session_state.ai_schedule_updates)
-        st.session_state.ai_schedule_updates = []
-        st.success(f"Applied {applied_count} schedule update(s).")
-        st.rerun()
-if not st.session_state.ai_response and not st.session_state.ai_error:
-    st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-left, right = st.columns([1.1, 1], gap="large")
-with left:
+def render_add_task_panel(form_key, defaults, default_category=None):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Add Task</h3><span>Quick capture</span></div>', unsafe_allow_html=True)
-    with st.form("add_task_form"):
+    with st.form(form_key):
         title = st.text_input("Task title")
         description = st.text_area("Description", height=100)
-        category = st.selectbox("Category", ["Personal", "Clinic"])
-        priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+        category_options = ["Personal", "Clinic"]
+        resolved_default_category = default_category or defaults.get("default_category", "Personal")
+        category_index = category_options.index(resolved_default_category) if resolved_default_category in category_options else 0
+        category = st.selectbox("Category", category_options, index=category_index)
+        priority_options = ["high", "medium", "low"]
+        default_priority = defaults.get("default_priority", "medium")
+        priority_index = priority_options.index(default_priority) if default_priority in priority_options else 1
+        priority = st.selectbox("Priority", priority_options, index=priority_index)
         due_date = st.date_input("Due date", value=date.today())
         schedule_enabled = st.checkbox("Schedule this task")
         schedule_cols = st.columns(3)
         with schedule_cols[0]:
             scheduled_date = st.date_input("Scheduled date", value=date.today(), disabled=not schedule_enabled)
         with schedule_cols[1]:
-            scheduled_time = st.time_input("Scheduled time", value=time(9, 0), disabled=not schedule_enabled)
+            scheduled_time = st.time_input(
+                "Scheduled time",
+                value=parse_time_value(defaults.get("default_schedule_time")) or time(9, 0),
+                disabled=not schedule_enabled,
+            )
         with schedule_cols[2]:
-            scheduled_minutes = st.selectbox("Duration (minutes)", [15, 30, 45, 60, 90, 120], index=3, disabled=not schedule_enabled)
+            duration_options = [15, 30, 45, 60, 90, 120]
+            default_duration = int(defaults.get("default_duration", 60))
+            duration_index = duration_options.index(default_duration) if default_duration in duration_options else 3
+            scheduled_minutes = st.selectbox(
+                "Duration (minutes)",
+                duration_options,
+                index=duration_index,
+                disabled=not schedule_enabled,
+            )
         recurrence_cols = st.columns(2)
         with recurrence_cols[0]:
             recurrence_rule = st.selectbox(
@@ -1369,100 +1365,433 @@ with left:
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-with right:
+
+def render_ai_panel(tasks, active_tasks, panel_key="main"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Today</h3><span>What needs attention now</span></div>', unsafe_allow_html=True)
-    if due_today:
-        for task in sorted(due_today, key=lambda item: priority_rank(item["priority"])):
-            render_task_card(task, key_prefix="today")
-    else:
-        st.markdown('<div class="empty-state">No tasks due today.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidance</span></div>', unsafe_allow_html=True)
+    default_prompt = "Give me a focused plan for today."
+    ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90, key=f"{panel_key}_ai_prompt")
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        generate_plan_clicked = st.button("Generate AI Plan", key=f"{panel_key}_gen")
+    with action_cols[1]:
+        auto_schedule_clicked = st.button("Auto-Schedule Tasks", key=f"{panel_key}_auto")
+
+    if generate_plan_clicked:
+        result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
+        st.session_state.ai_response = result
+        st.session_state.ai_error = error
+        st.session_state.ai_suggestions = suggestions
+
+    if auto_schedule_clicked:
+        schedule_text, schedule_error, schedule_updates = generate_ai_schedule(active_tasks, ai_prompt)
+        st.session_state.ai_schedule_error = schedule_error
+        st.session_state.ai_schedule_updates = schedule_updates
+        if schedule_text:
+            st.session_state.ai_response = schedule_text
+
+    if st.session_state.ai_error:
+        st.warning(st.session_state.ai_error)
+    if st.session_state.ai_schedule_error:
+        st.warning(st.session_state.ai_schedule_error)
+    if st.session_state.ai_response:
+        st.markdown(st.session_state.ai_response)
+    if st.session_state.ai_suggestions:
+        st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
+        if st.button("Add Suggested Tasks", type="primary", key=f"{panel_key}_apply_suggested"):
+            apply_ai_suggestions(st.session_state.ai_suggestions)
+            added_count = len(st.session_state.ai_suggestions)
+            st.session_state.ai_suggestions = []
+            st.success(f"Added {added_count} suggested task(s).")
+            st.rerun()
+    if st.session_state.ai_schedule_updates:
+        st.caption(f"Schedule updates detected: {len(st.session_state.ai_schedule_updates)}")
+        if st.button("Apply Auto-Schedule", type="secondary", key=f"{panel_key}_apply_schedule"):
+            apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
+            applied_count = len(st.session_state.ai_schedule_updates)
+            st.session_state.ai_schedule_updates = []
+            st.success(f"Applied {applied_count} schedule update(s).")
+            st.rerun()
+    if not st.session_state.ai_response and not st.session_state.ai_error:
+        st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="panel-title"><h3>Upcoming Schedule</h3><span>Planned work blocks</span></div>', unsafe_allow_html=True)
-if scheduled_tasks:
-    for task in scheduled_tasks:
-        block_label = format_schedule(task)
-        minutes = task.get("scheduled_minutes")
-        if minutes:
-            block_label = f"{block_label} · {minutes} min"
-        st.markdown(
-            f"**{block_label}**",
-            unsafe_allow_html=False,
+
+def render_timeline_panel(scheduled_tasks, timeline_days):
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Schedule Timeline</h3><span>Calendar-style view</span></div>', unsafe_allow_html=True)
+    timeline_start = date.today()
+    timeline_end = timeline_start + timedelta(days=int(timeline_days) - 1)
+    timeline_tasks = [
+        task
+        for task in scheduled_tasks
+        if task.get("scheduled_date") and timeline_start <= task["scheduled_date"] <= timeline_end
+    ]
+
+    if timeline_tasks:
+        for offset in range(int(timeline_days)):
+            day = timeline_start + timedelta(days=offset)
+            day_items = [item for item in timeline_tasks if item.get("scheduled_date") == day]
+            if not day_items:
+                continue
+            st.markdown(f"**{day.strftime('%A, %b %d')}**")
+            day_items = sorted(day_items, key=lambda item: (item.get("scheduled_time") or time(23, 59), priority_rank(item.get("priority"))))
+            for item in day_items:
+                at = item.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if item.get("scheduled_time") else "Any time"
+                mins = item.get("scheduled_minutes") or "-"
+                st.markdown(f"- {at} · {mins} min · {item.get('title')} ({status_label(item.get('status', 'todo'))})")
+    else:
+        st.markdown('<div class="empty-state">No scheduled tasks in this timeline window.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+initialize_database()
+
+app_settings = load_app_settings()
+
+inject_styles()
+render_hero()
+
+with st.sidebar:
+    st.markdown(
+        """
+        <div style="padding: 1rem 1rem 1.15rem; margin-bottom: 1rem; border-radius: 20px; background: linear-gradient(135deg, rgba(15, 118, 110, 0.28), rgba(21, 94, 239, 0.24)); border: 1px solid rgba(255, 255, 255, 0.1);">
+            <h2 style="margin: 0; color: white; font-size: 1.2rem;">DayAnchor</h2>
+            <p style="margin: 0.45rem 0 0; color: rgba(248, 250, 252, 0.82); font-size: 0.9rem;">Task capture with Postgres persistence and optional AI planning.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if db_enabled():
+        source = DB_CANDIDATE_SOURCE or "database URL"
+        st.caption(f"Connected to Postgres via {source}.")
+        st.caption("Tasks persist across restarts and deployments.")
+    elif DB_ERROR:
+        st.caption("Database connection failed.")
+        st.caption("Using session-only fallback until DB is reachable.")
+    else:
+        st.caption("No DATABASE_URL or DATABASE_PUBLIC_URL found.")
+        st.caption("Running in session-only fallback mode.")
+
+    st.markdown("---")
+    st.markdown("### Navigation")
+    current_page = st.radio(
+        "Go to",
+        ["Overview", "Personal", "Clinic", "Schedule", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+    st.markdown("### Data Controls")
+    health_state, health_message = db_health_status()
+    detected_names = configured_database_env_names()
+    if detected_names:
+        st.caption(f"Detected DB vars: {', '.join(detected_names)}")
+    else:
+        st.caption("Detected DB vars: none")
+        st.caption("Tip: ensure the web app service has DATABASE_URL or DATABASE_PUBLIC_URL set in Railway.")
+    if health_state == "ok":
+        st.success(f"DB Health: {health_message}")
+    elif health_state == "error":
+        st.warning(f"DB Health: {health_message}")
+    else:
+        st.info(f"DB Health: {health_message}")
+
+    if st.button("Seed Sample Tasks", use_container_width=True):
+        seed_sample_tasks()
+        st.success("Sample tasks added.")
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### View Controls")
+    search_query = st.text_input("Search tasks", placeholder="Title or description")
+    category_filter = st.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
+    priority_filter = st.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
+    status_filter = st.multiselect(
+        "Status",
+        ["todo", "in_progress", "blocked", "completed"],
+        default=["todo", "in_progress", "blocked", "completed"],
+        format_func=status_label,
+    )
+    scheduled_only = st.checkbox("Scheduled tasks only", value=False)
+    timeline_days = st.slider(
+        "Timeline window (days)",
+        min_value=3,
+        max_value=21,
+        value=int(app_settings.get("timeline_days", 7)),
+    )
+
+    st.markdown("---")
+    st.markdown("### AI")
+    if ai_enabled():
+        st.success(f"AI ready ({ai_model_name()})")
+    else:
+        st.info("AI disabled. Set OPENAI_API_KEY to enable.")
+
+st.markdown('<p class="section-lead">Navigate by lane and workflow area from the sidebar.</p>', unsafe_allow_html=True)
+
+tasks = load_tasks()
+query = (search_query or "").strip().lower()
+all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
+all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
+completed_today_all = [task for task in all_completed_tasks if task.get("completed_date") == date.today()]
+
+
+def task_matches_filters(task):
+    if category_filter and task.get("category") not in category_filter:
+        return False
+    if priority_filter and task.get("priority") not in priority_filter:
+        return False
+    if status_filter and task.get("status") not in status_filter:
+        return False
+    if scheduled_only and not (task.get("scheduled_date") and task.get("scheduled_time")):
+        return False
+    if query:
+        title = str(task.get("title", "")).lower()
+        description = str(task.get("description", "")).lower()
+        if query not in title and query not in description:
+            return False
+    return True
+
+
+filtered_tasks = [task for task in tasks if task_matches_filters(task)]
+active_tasks = [task for task in filtered_tasks if task["status"] != "completed"]
+completed_tasks = [task for task in filtered_tasks if task["status"] == "completed"]
+personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
+clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
+due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
+overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+scheduled_tasks = sorted(
+    [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
+    key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
+)
+
+
+def render_metrics_row():
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1.metric("Active Tasks", len(active_tasks))
+    metric_col2.metric("Due Today", len(due_today))
+    metric_col3.metric("Completed", len(completed_tasks))
+    metric_col4.metric("Scheduled", len(scheduled_tasks))
+
+
+if len(filtered_tasks) != len(tasks):
+    st.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
+
+if current_page == "Overview":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    left, right = st.columns([1.1, 1], gap="large")
+    with left:
+        render_add_task_panel("add_task_form_overview", app_settings)
+    with right:
+        render_task_list_panel("Today", "What needs attention now", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_list_panel("Upcoming Schedule", "Planned work blocks", scheduled_tasks, "overview_schedule", "No scheduled tasks yet.")
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    cols = st.columns(2, gap="large")
+    with cols[0]:
+        render_task_list_panel("Personal lane", "Active tasks", personal_tasks, "overview_personal", "No personal tasks yet.")
+    with cols[1]:
+        render_task_list_panel("Clinic lane", "Active tasks", clinic_tasks, "overview_clinic", "No clinic tasks yet.")
+
+elif current_page == "Personal":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    left, right = st.columns([1, 1.2], gap="large")
+    with left:
+        render_add_task_panel("add_task_form_personal", app_settings, default_category="Personal")
+    with right:
+        render_task_list_panel("Personal Tasks", "Your personal workflow", personal_tasks, "personal_page", "No personal tasks match your filters.")
+
+elif current_page == "Clinic":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    left, right = st.columns([1, 1.2], gap="large")
+    with left:
+        render_add_task_panel("add_task_form_clinic", app_settings, default_category="Clinic")
+    with right:
+        render_task_list_panel("Clinic Tasks", "Operational and patient-facing work", clinic_tasks, "clinic_page", "No clinic tasks match your filters.")
+
+elif current_page == "Schedule":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_timeline_panel(scheduled_tasks, timeline_days)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    unscheduled_tasks = [task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]
+    cols = st.columns(2, gap="large")
+    with cols[0]:
+        render_task_list_panel("Scheduled Blocks", "Chronological", scheduled_tasks, "schedule_page", "No scheduled tasks yet.")
+    with cols[1]:
+        render_task_list_panel("Unscheduled Tasks", "Good candidates for AI auto-schedule", unscheduled_tasks, "unscheduled_page", "Everything is scheduled.")
+
+elif current_page == "AI":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_ai_panel(filtered_tasks, active_tasks, panel_key="ai_page")
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_list_panel("Blocked Tasks", "AI can help unblock these", [task for task in active_tasks if task.get("status") == "blocked"], "ai_blocked", "No blocked tasks right now.")
+
+elif current_page == "Analytics":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Analytics</h3><span>Snapshot of workload and execution</span></div>', unsafe_allow_html=True)
+
+    status_counts = {
+        "Todo": len([task for task in filtered_tasks if task.get("status") == "todo"]),
+        "In Progress": len([task for task in filtered_tasks if task.get("status") == "in_progress"]),
+        "Blocked": len([task for task in filtered_tasks if task.get("status") == "blocked"]),
+        "Completed": len([task for task in filtered_tasks if task.get("status") == "completed"]),
+    }
+    category_counts = {
+        "Personal": len([task for task in filtered_tasks if task.get("category") == "Personal"]),
+        "Clinic": len([task for task in filtered_tasks if task.get("category") == "Clinic"]),
+    }
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("By Status")
+        st.bar_chart(status_counts)
+    with col_b:
+        st.subheader("By Category")
+        st.bar_chart(category_counts)
+
+    upcoming_3_days = len([task for task in active_tasks if task.get("due_date") and task["due_date"] <= (date.today() + timedelta(days=3))])
+    recurring_count = len([task for task in active_tasks if task.get("recurrence_rule") in ("daily", "weekly")])
+    insight_cols = st.columns(3)
+    insight_cols[0].metric("Overdue", len(overdue_tasks))
+    insight_cols[1].metric("Due in 3 Days", upcoming_3_days)
+    insight_cols[2].metric("Recurring Active", recurring_count)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+elif current_page == "Notifications":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    overdue_all = [task for task in all_active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    blocked_all = [task for task in all_active_tasks if task.get("status") == "blocked"]
+    unscheduled_high = [
+        task
+        for task in all_active_tasks
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
+    ]
+    due_tomorrow = [task for task in all_active_tasks if task.get("due_date") == (date.today() + timedelta(days=1))]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Alerts</h3><span>Actionable items that need attention</span></div>', unsafe_allow_html=True)
+
+    if overdue_all:
+        st.error(f"{len(overdue_all)} overdue task(s) need triage.")
+    if blocked_all:
+        st.warning(f"{len(blocked_all)} blocked task(s) are waiting on unblock actions.")
+    if unscheduled_high:
+        st.warning(f"{len(unscheduled_high)} high-priority task(s) are unscheduled.")
+    if due_tomorrow:
+        st.info(f"{len(due_tomorrow)} task(s) are due tomorrow.")
+    if not (overdue_all or blocked_all or unscheduled_high or due_tomorrow):
+        st.success("No urgent alerts right now.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    cols = st.columns(2, gap="large")
+    with cols[0]:
+        render_task_list_panel("Overdue Tasks", "Highest urgency", overdue_all, "notif_overdue", "No overdue tasks.")
+    with cols[1]:
+        render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
+
+elif current_page == "Daily Review":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Daily Review</h3><span>End-of-day recap and tomorrow draft plan</span></div>', unsafe_allow_html=True)
+
+    review_notes = st.text_area(
+        "Context notes for today",
+        placeholder="Anything important from today? Wins, blockers, meetings, constraints...",
+        height=100,
+        key="daily_review_notes",
+    )
+
+    if st.button("Generate Daily Review", key="gen_daily_review"):
+        review_text, tomorrow_text, review_error = generate_daily_review(all_active_tasks, completed_today_all, review_notes)
+        st.session_state.daily_review_text = review_text
+        st.session_state.tomorrow_plan_text = tomorrow_text
+        st.session_state.daily_review_error = review_error
+
+    if st.session_state.daily_review_error:
+        st.warning(st.session_state.daily_review_error)
+    if st.session_state.daily_review_text:
+        st.markdown(st.session_state.daily_review_text)
+    if st.session_state.tomorrow_plan_text:
+        st.markdown(st.session_state.tomorrow_plan_text)
+
+    if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
+        st.markdown('<div class="empty-state">Generate a review to get your end-of-day summary and tomorrow draft plan.</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_list_panel("Completed Today", "What you finished", completed_today_all, "daily_completed", "No tasks completed today yet.")
+
+elif current_page == "Settings":
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Settings</h3><span>Default values and planning preferences</span></div>', unsafe_allow_html=True)
+
+    settings_category = st.selectbox(
+        "Default category",
+        ["Personal", "Clinic"],
+        index=0 if app_settings.get("default_category") == "Personal" else 1,
+    )
+    settings_priority = st.selectbox(
+        "Default priority",
+        ["high", "medium", "low"],
+        index=["high", "medium", "low"].index(app_settings.get("default_priority", "medium"))
+        if app_settings.get("default_priority", "medium") in ["high", "medium", "low"]
+        else 1,
+    )
+    settings_duration = st.selectbox(
+        "Default duration (minutes)",
+        [15, 30, 45, 60, 90, 120],
+        index=[15, 30, 45, 60, 90, 120].index(app_settings.get("default_duration", 60))
+        if app_settings.get("default_duration", 60) in [15, 30, 45, 60, 90, 120]
+        else 3,
+    )
+    settings_time = st.time_input(
+        "Default schedule time",
+        value=parse_time_value(app_settings.get("default_schedule_time")) or time(9, 0),
+    )
+    settings_timeline_days = st.slider(
+        "Default timeline window (days)",
+        min_value=3,
+        max_value=21,
+        value=max(3, min(21, int(app_settings.get("timeline_days", 7)))),
+    )
+
+    if st.button("Save Settings", type="primary"):
+        app_settings = save_app_settings(
+            {
+                "default_category": settings_category,
+                "default_priority": settings_priority,
+                "default_duration": int(settings_duration),
+                "default_schedule_time": settings_time.strftime("%H:%M"),
+                "timeline_days": int(settings_timeline_days),
+            }
         )
-        render_task_card(task, key_prefix="schedule")
+        st.success("Settings saved.")
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 else:
-    st.markdown('<div class="empty-state">No scheduled tasks yet.</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="panel-title"><h3>Schedule Timeline</h3><span>Calendar-style view</span></div>', unsafe_allow_html=True)
-timeline_start = date.today()
-timeline_end = timeline_start + timedelta(days=int(timeline_days) - 1)
-timeline_tasks = [
-    task
-    for task in scheduled_tasks
-    if task.get("scheduled_date") and timeline_start <= task["scheduled_date"] <= timeline_end
-]
-
-if timeline_tasks:
-    for offset in range(int(timeline_days)):
-        day = timeline_start + timedelta(days=offset)
-        day_items = [item for item in timeline_tasks if item.get("scheduled_date") == day]
-        if not day_items:
-            continue
-        st.markdown(f"**{day.strftime('%A, %b %d')}**")
-        day_items = sorted(day_items, key=lambda item: (item.get("scheduled_time") or time(23, 59), priority_rank(item.get("priority"))))
-        for item in day_items:
-            at = item.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if item.get("scheduled_time") else "Any time"
-            mins = item.get("scheduled_minutes") or "-"
-            st.markdown(f"- {at} · {mins} min · {item.get('title')} ({status_label(item.get('status', 'todo'))})")
-else:
-    st.markdown('<div class="empty-state">No scheduled tasks in this timeline window.</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-col1, col2 = st.columns(2, gap="large")
-with col1:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Personal lane</h3><span>Active tasks</span></div>', unsafe_allow_html=True)
-    if personal_tasks:
-        for task in personal_tasks:
-            render_task_card(task, key_prefix="personal")
-    else:
-        st.markdown('<div class="empty-state">No personal tasks yet.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col2:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Clinic lane</h3><span>Active tasks</span></div>', unsafe_allow_html=True)
-    if clinic_tasks:
-        for task in clinic_tasks:
-            render_task_card(task, key_prefix="clinic")
-    else:
-        st.markdown('<div class="empty-state">No clinic tasks yet.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-overdue_col1, overdue_col2 = st.columns(2, gap="large")
-with overdue_col1:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Overdue</h3><span>Needs triage</span></div>', unsafe_allow_html=True)
-    if overdue_tasks:
-        for task in overdue_tasks:
-            render_task_card(task, key_prefix="overdue")
-    else:
-        st.markdown('<div class="empty-state">Nothing overdue right now.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with overdue_col2:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Completed</h3><span>Finished work</span></div>', unsafe_allow_html=True)
-    if completed_tasks:
-        for task in completed_tasks:
-            render_task_card(task, key_prefix="completed")
-    else:
-        st.markdown('<div class="empty-state">No completed tasks yet.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.info("Select a page from the sidebar navigation.")

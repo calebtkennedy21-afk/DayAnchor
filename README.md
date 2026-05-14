@@ -8,6 +8,7 @@ If no database URL is found, the app falls back to session memory.
 
 Current capabilities include:
 
+- Multi-page navigation: Overview, Personal, Clinic, Schedule, AI, Analytics, Notifications, Daily Review, Settings.
 - Task capture with lane, priority, and due date.
 - Optional scheduling with date, time, and estimated duration.
 - Upcoming schedule panel for planned work blocks.
@@ -20,6 +21,9 @@ Current capabilities include:
 - Recurring tasks (daily/weekly) with automatic next-instance creation when completed.
 - Schedule Timeline panel with a configurable day window.
 - AI `Auto-Schedule Tasks` flow with one-click apply for schedule updates.
+- Notifications page with alert-focused task triage (overdue, blocked, unscheduled high priority, due tomorrow).
+- Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
+- Settings page with persistent defaults (category, priority, duration, schedule time, timeline window).
 
 ## Run
 
