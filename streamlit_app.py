@@ -6,7 +6,7 @@ from textwrap import dedent
 import streamlit as st
 from openai import OpenAI
 
-from db import get_connection, init_db
+from db import get_connection, get_db_key_diagnostics, init_db
 
 
 def init_openai_client():
@@ -778,6 +778,7 @@ with st.sidebar:
     st.header("Workspace")
     page = st.radio("Select View", ["Dashboard", "Add Task", "My Tasks", "AI Suggestions"])
     st.caption("Connect Railway Postgres with DATABASE_URL/DATABASE_PUBLIC_URL, or use PGHOST, PGPORT, PGDATABASE, PGUSER, and PGPASSWORD.")
+    st.caption(f"DB key detection (safe): {get_db_key_diagnostics()}")
     st.caption(f"AI status: {ai_status}")
 
 render_hero()

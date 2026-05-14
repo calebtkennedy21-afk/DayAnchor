@@ -63,6 +63,10 @@ def _setting_source(name):
     if env_value:
         return "env"
 
+    lower_env_value = _clean_setting(os.getenv(name.lower()))
+    if lower_env_value:
+        return "env"
+
     try:
         secret_value = _clean_setting(st.secrets.get(name))
         if secret_value:
@@ -70,7 +74,23 @@ def _setting_source(name):
     except Exception:
         pass
 
+    dotenv_values = _load_dotenv()
+    dotenv_value = _clean_setting(dotenv_values.get(name) or dotenv_values.get(name.lower()))
+    if dotenv_value:
+        return ".env"
+
     return "missing"
+
+
+def get_db_key_diagnostics():
+    return {
+        "DATABASE_URL": _setting_source("DATABASE_URL"),
+        "DATABASE_PUBLIC_URL": _setting_source("DATABASE_PUBLIC_URL"),
+        "DATABASE_PRIVATE_URL": _setting_source("DATABASE_PRIVATE_URL"),
+        "POSTGRES_URL": _setting_source("POSTGRES_URL"),
+        "POSTGRESQL_URL": _setting_source("POSTGRESQL_URL"),
+        "DB_URL": _setting_source("DB_URL"),
+    }
 
 
 def _get_database_url():
@@ -106,14 +126,7 @@ def get_connection():
     db_password = _get_setting("DB_PASSWORD") or _get_setting("PGPASSWORD")
 
     if not all([db_host, db_name, db_user, db_password]):
-        key_sources = {
-            "DATABASE_URL": _setting_source("DATABASE_URL"),
-            "DATABASE_PUBLIC_URL": _setting_source("DATABASE_PUBLIC_URL"),
-            "DATABASE_PRIVATE_URL": _setting_source("DATABASE_PRIVATE_URL"),
-            "POSTGRES_URL": _setting_source("POSTGRES_URL"),
-            "POSTGRESQL_URL": _setting_source("POSTGRESQL_URL"),
-            "DB_URL": _setting_source("DB_URL"),
-        }
+        key_sources = get_db_key_diagnostics()
         st.error(
             "Database is not configured. Set DATABASE_URL or DATABASE_PUBLIC_URL "
             "(or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or PGHOST/PGDATABASE/PGUSER/PGPASSWORD)."
