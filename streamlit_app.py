@@ -237,6 +237,19 @@ def task_snapshot_for_ai(tasks, max_items=20):
     return "\n".join(lines)
 
 
+def status_rank(status):
+    return {"todo": 0, "in_progress": 1, "blocked": 2, "completed": 3}.get(status, 4)
+
+
+def status_label(status):
+    return {
+        "todo": "Todo",
+        "in_progress": "In Progress",
+        "blocked": "Blocked",
+        "completed": "Completed",
+    }.get(status, status.replace("_", " ").title())
+
+
 def generate_ai_plan(tasks, user_prompt):
     if not ai_enabled():
         return "", "AI is not configured. Add OPENAI_API_KEY to enable it.", []
@@ -603,6 +616,10 @@ def inject_styles():
         .pill-priority-low { color: #166534; background: #dcfce7; }
         .pill-category { color: #0f172a; background: #e2e8f0; }
         .pill-status { color: #0f766e; background: #ccfbf1; }
+        .pill-status-todo { color: #1e3a8a; background: #dbeafe; }
+        .pill-status-in_progress { color: #7c2d12; background: #ffedd5; }
+        .pill-status-blocked { color: #991b1b; background: #fee2e2; }
+        .pill-status-completed { color: #166534; background: #dcfce7; }
 
         .empty-state {
             border: 1px dashed rgba(18, 33, 45, 0.15);
@@ -715,6 +732,41 @@ def add_task(
     )
 
 
+def update_task(task_id, **fields):
+    allowed_fields = {
+        "title",
+        "description",
+        "category",
+        "priority",
+        "status",
+        "due_date",
+        "scheduled_date",
+        "scheduled_time",
+        "scheduled_minutes",
+        "completed_date",
+    }
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if db_enabled():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(task_id)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE tasks SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    for task in st.session_state.tasks:
+        if task["id"] == task_id:
+            task.update(sanitized)
+            return
+
+
 def delete_task(task_id):
     if db_enabled():
         with get_connection() as conn:
@@ -725,24 +777,14 @@ def delete_task(task_id):
 
 
 def complete_task(task_id):
-    if db_enabled():
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'completed', completed_date = %s
-                    WHERE id = %s
-                    """,
-                    (date.today(), task_id),
-                )
-        return
+    update_task(task_id, status="completed", completed_date=date.today())
 
-    for task in st.session_state.tasks:
-        if task["id"] == task_id:
-            task["status"] = "completed"
-            task["completed_date"] = date.today()
-            return
+
+def set_task_status(task_id, new_status):
+    if new_status == "completed":
+        update_task(task_id, status="completed", completed_date=date.today())
+    else:
+        update_task(task_id, status=new_status, completed_date=None)
 
 
 def render_task_card(task, key_prefix="task"):
@@ -754,20 +796,108 @@ def render_task_card(task, key_prefix="task"):
         f'''<div class="task-meta">
             <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
             <span class="pill pill-category">{task["category"]}</span>
-            <span class="pill pill-status">{task["status"].title()}</span>
+            <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
             <span class="pill">Due: {format_due(task)}</span>
             <span class="pill">Schedule: {format_schedule(task)}</span>
         </div>''',
         unsafe_allow_html=True,
     )
-    cols = st.columns(2)
+    cols = st.columns(3)
     with cols[0]:
         if task["status"] != "completed" and st.button("Mark complete", key=f"{key_prefix}_complete_{task['id']}"):
             complete_task(task["id"])
             st.rerun()
     with cols[1]:
+        status_options = ["todo", "in_progress", "blocked", "completed"]
+        current_index = status_options.index(task["status"]) if task["status"] in status_options else 0
+        next_status = st.selectbox(
+            "Status",
+            status_options,
+            index=current_index,
+            format_func=status_label,
+            key=f"{key_prefix}_status_select_{task['id']}",
+            label_visibility="collapsed",
+        )
+        if st.button("Apply status", key=f"{key_prefix}_status_apply_{task['id']}"):
+            set_task_status(task["id"], next_status)
+            st.rerun()
+    with cols[2]:
         if st.button("Delete", key=f"{key_prefix}_delete_{task['id']}"):
             delete_task(task["id"])
+            st.rerun()
+
+    with st.expander("Edit task", expanded=False):
+        edit_title = st.text_input("Task title", value=task.get("title", ""), key=f"{key_prefix}_edit_title_{task['id']}")
+        edit_description = st.text_area(
+            "Description",
+            value=task.get("description", ""),
+            height=80,
+            key=f"{key_prefix}_edit_description_{task['id']}",
+        )
+        edit_category = st.selectbox(
+            "Category",
+            ["Personal", "Clinic"],
+            index=0 if task.get("category") == "Personal" else 1,
+            key=f"{key_prefix}_edit_category_{task['id']}",
+        )
+        edit_priority = st.selectbox(
+            "Priority",
+            ["high", "medium", "low"],
+            index=["high", "medium", "low"].index(task.get("priority", "medium")),
+            key=f"{key_prefix}_edit_priority_{task['id']}",
+        )
+        edit_due = st.date_input(
+            "Due date",
+            value=task.get("due_date") or date.today(),
+            key=f"{key_prefix}_edit_due_{task['id']}",
+        )
+
+        has_schedule = bool(task.get("scheduled_date") and task.get("scheduled_time"))
+        edit_has_schedule = st.checkbox(
+            "Keep schedule",
+            value=has_schedule,
+            key=f"{key_prefix}_edit_has_schedule_{task['id']}",
+        )
+        sched_cols = st.columns(3)
+        with sched_cols[0]:
+            edit_sched_date = st.date_input(
+                "Scheduled date",
+                value=task.get("scheduled_date") or date.today(),
+                disabled=not edit_has_schedule,
+                key=f"{key_prefix}_edit_sched_date_{task['id']}",
+            )
+        with sched_cols[1]:
+            edit_sched_time = st.time_input(
+                "Scheduled time",
+                value=task.get("scheduled_time") or time(9, 0),
+                disabled=not edit_has_schedule,
+                key=f"{key_prefix}_edit_sched_time_{task['id']}",
+            )
+        with sched_cols[2]:
+            current_minutes = task.get("scheduled_minutes")
+            minute_options = [15, 30, 45, 60, 90, 120]
+            minute_index = minute_options.index(current_minutes) if current_minutes in minute_options else 3
+            edit_sched_minutes = st.selectbox(
+                "Duration",
+                minute_options,
+                index=minute_index,
+                disabled=not edit_has_schedule,
+                key=f"{key_prefix}_edit_sched_minutes_{task['id']}",
+            )
+
+        if st.button("Save changes", key=f"{key_prefix}_save_{task['id']}"):
+            update_task(
+                task["id"],
+                title=edit_title.strip(),
+                description=edit_description.strip(),
+                category=edit_category,
+                priority=edit_priority,
+                due_date=edit_due,
+                scheduled_date=edit_sched_date if edit_has_schedule else None,
+                scheduled_time=edit_sched_time if edit_has_schedule else None,
+                scheduled_minutes=edit_sched_minutes if edit_has_schedule else None,
+            )
+            st.success("Task updated.")
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -820,6 +950,19 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
+    st.markdown("### View Controls")
+    search_query = st.text_input("Search tasks", placeholder="Title or description")
+    category_filter = st.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
+    priority_filter = st.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
+    status_filter = st.multiselect(
+        "Status",
+        ["todo", "in_progress", "blocked", "completed"],
+        default=["todo", "in_progress", "blocked", "completed"],
+        format_func=status_label,
+    )
+    scheduled_only = st.checkbox("Scheduled tasks only", value=False)
+
+    st.markdown("---")
     st.markdown("### AI")
     if ai_enabled():
         st.success(f"AI ready ({ai_model_name()})")
@@ -829,8 +972,30 @@ with st.sidebar:
 st.markdown('<p class="section-lead">Capture work quickly and split it between your personal lane and clinic lane.</p>', unsafe_allow_html=True)
 
 tasks = load_tasks()
-active_tasks = [task for task in tasks if task["status"] != "completed"]
-completed_tasks = [task for task in tasks if task["status"] == "completed"]
+query = (search_query or "").strip().lower()
+
+
+def task_matches_filters(task):
+    if category_filter and task.get("category") not in category_filter:
+        return False
+    if priority_filter and task.get("priority") not in priority_filter:
+        return False
+    if status_filter and task.get("status") not in status_filter:
+        return False
+    if scheduled_only and not (task.get("scheduled_date") and task.get("scheduled_time")):
+        return False
+    if query:
+        title = str(task.get("title", "")).lower()
+        description = str(task.get("description", "")).lower()
+        if query not in title and query not in description:
+            return False
+    return True
+
+
+filtered_tasks = [task for task in tasks if task_matches_filters(task)]
+
+active_tasks = [task for task in filtered_tasks if task["status"] != "completed"]
+completed_tasks = [task for task in filtered_tasks if task["status"] == "completed"]
 personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
 clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
 due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
@@ -849,6 +1014,9 @@ metric_col1.metric("Active Tasks", len(active_tasks))
 metric_col2.metric("Due Today", len(due_today))
 metric_col3.metric("Completed", len(completed_tasks))
 metric_col4.metric("Scheduled", len(scheduled_tasks))
+
+if len(filtered_tasks) != len(tasks):
+    st.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
 st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 st.markdown('<div class="panel">', unsafe_allow_html=True)

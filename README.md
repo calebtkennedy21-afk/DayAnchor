@@ -14,6 +14,9 @@ Current capabilities include:
 - Sidebar data controls for DB health and one-click sample task seeding.
 - AI Planner panel to generate a prioritized daily plan from your current tasks.
 - One-click `Add Suggested Tasks` action to insert AI-generated tasks into your board.
+- Sidebar view controls for search and filtering by category, priority, status, and schedule state.
+- Expanded workflow statuses: Todo, In Progress, Blocked, Completed.
+- Inline task editing and rescheduling directly from each task card.
 
 ## Run
 
