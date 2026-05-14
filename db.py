@@ -1,47 +1,59 @@
-# Database connection and schema setup for DayAnchor
 import os
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# Support Railway URL-style variables first, then PG* and DB* variable styles.
-DATABASE_URL = (
-    os.getenv("DATABASE_URL")
-    or os.getenv("DATABASE_PUBLIC_URL")
-    or os.getenv("POSTGRES_URL")
-    or os.getenv("POSTGRESQL_URL")
-    or ""
-)
 
-DB_HOST = os.getenv("DB_HOST") or os.getenv("PGHOST", "")
-DB_PORT = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
-DB_NAME = os.getenv("DB_NAME") or os.getenv("PGDATABASE", "")
-DB_USER = os.getenv("DB_USER") or os.getenv("PGUSER", "")
-DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
+def _get_database_url():
+    return (
+        os.getenv("DATABASE_URL")
+        or os.getenv("DATABASE_PUBLIC_URL")
+        or os.getenv("POSTGRES_URL")
+        or os.getenv("POSTGRESQL_URL")
+        or os.getenv("DB_URL")
+        or ""
+    )
 
-@st.cache_resource
+
 def get_connection():
-    try:
-        if DATABASE_URL:
-            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-            return conn
+    database_url = _get_database_url()
+    sslmode = os.getenv("DATABASE_SSLMODE", os.getenv("DB_SSLMODE", "require"))
 
-        if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
-            st.error(
-                "Database credentials are not set. Use DATABASE_URL/DATABASE_PUBLIC_URL "
-                "or PGHOST/PGDATABASE/PGUSER/PGPASSWORD."
+    if database_url:
+        try:
+            return psycopg2.connect(
+                database_url,
+                sslmode=sslmode,
+                cursor_factory=RealDictCursor,
             )
+        except Exception as e:
+            st.error(f"Database connection failed: {e}")
             return None
 
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
+    # Backward-compatible fallback for split credentials.
+    db_host = os.getenv("DB_HOST") or os.getenv("PGHOST", "")
+    db_port = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
+    db_name = os.getenv("DB_NAME") or os.getenv("PGDATABASE", "")
+    db_user = os.getenv("DB_USER") or os.getenv("PGUSER", "")
+    db_password = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
+
+    if not all([db_host, db_name, db_user, db_password]):
+        st.error(
+            "Database is not configured. Set DATABASE_URL and DATABASE_SSLMODE "
+            "(or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or PGHOST/PGDATABASE/PGUSER/PGPASSWORD)."
+        )
+        return None
+
+    try:
+        return psycopg2.connect(
+            host=db_host,
+            port=db_port,
+            dbname=db_name,
+            user=db_user,
+            password=db_password,
+            sslmode=sslmode,
             cursor_factory=RealDictCursor,
         )
-        return conn
     except Exception as e:
         st.error(f"Database connection failed: {e}")
         return None
@@ -68,7 +80,3 @@ def init_db():
         ''')
         conn.commit()
     conn.close()
-
-# Call this at app startup
-init_db()
-
