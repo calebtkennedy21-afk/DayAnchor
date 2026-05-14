@@ -782,7 +782,7 @@ with st.sidebar:
         """
         <div style="padding: 1rem 1rem 1.15rem; margin-bottom: 1rem; border-radius: 20px; background: linear-gradient(135deg, rgba(15, 118, 110, 0.28), rgba(21, 94, 239, 0.24)); border: 1px solid rgba(255, 255, 255, 0.1);">
             <h2 style="margin: 0; color: white; font-size: 1.2rem;">DayAnchor</h2>
-            <p style="margin: 0.45rem 0 0; color: rgba(248, 250, 252, 0.82); font-size: 0.9rem;">Simple task capture without database or AI.</p>
+            <p style="margin: 0.45rem 0 0; color: rgba(248, 250, 252, 0.82); font-size: 0.9rem;">Task capture with Postgres persistence and optional AI planning.</p>
         </div>
         """,
         unsafe_allow_html=True,
