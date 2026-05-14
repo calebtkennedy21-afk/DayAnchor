@@ -3,13 +3,15 @@ Daily task app for personal and clinic responsibilities.
 
 ## Current State
 
-The app is temporarily running without a database or AI integration. Tasks are stored in session memory only.
+The app now supports Postgres persistence using Railway-provided URL environment variables.
+If no database URL is found, the app falls back to session memory.
 
 Current capabilities include:
 
 - Task capture with lane, priority, and due date.
 - Optional scheduling with date, time, and estimated duration.
 - Upcoming schedule panel for planned work blocks.
+- Sidebar data controls for DB health and one-click sample task seeding.
 
 ## Run
 
@@ -19,5 +21,6 @@ streamlit run streamlit_app.py
 
 ## Notes
 
-- Database and AI dependencies have been removed for now.
-- You can add persistence back later once the core workflow is settled.
+- Postgres URL env var priority: `DATABASE_URL`, then `DATABASE_PUBLIC_URL`.
+- No additional SSL env var is required; the app defaults to `sslmode=require` if omitted.
+- Table creation is automatic on startup (`tasks`).

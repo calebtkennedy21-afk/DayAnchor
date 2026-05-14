@@ -1,5 +1,9 @@
+import os
 from datetime import date, time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import psycopg
+from psycopg.rows import dict_row
 import streamlit as st
 
 
@@ -8,6 +12,154 @@ st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
 
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
+
+
+def resolve_database_url():
+    url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
+    if not url:
+        return None
+
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if "sslmode" not in query:
+        # Railway Postgres commonly requires SSL; default here avoids extra env vars.
+        query["sslmode"] = "require"
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+DB_URL = resolve_database_url()
+DB_ERROR = None
+
+
+def db_enabled():
+    return bool(DB_URL) and DB_ERROR is None
+
+
+def get_connection():
+    if not DB_URL:
+        raise RuntimeError("Database URL is not configured.")
+    return psycopg.connect(DB_URL)
+
+
+def initialize_database():
+    global DB_ERROR
+    if not db_enabled():
+        return
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id BIGSERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        category TEXT NOT NULL,
+                        priority TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'todo',
+                        created_date DATE NOT NULL,
+                        due_date DATE,
+                        scheduled_date DATE,
+                        scheduled_time TIME,
+                        scheduled_minutes INTEGER,
+                        completed_date DATE
+                    )
+                    """
+                )
+    except psycopg.Error as exc:
+        DB_ERROR = str(exc)
+
+
+def load_tasks():
+    if not db_enabled():
+        return st.session_state.tasks
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        title,
+                        description,
+                        category,
+                        priority,
+                        status,
+                        created_date,
+                        due_date,
+                        scheduled_date,
+                        scheduled_time,
+                        scheduled_minutes,
+                        completed_date
+                    FROM tasks
+                    ORDER BY created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st.session_state.tasks
+
+
+def db_health_status():
+    if not DB_URL:
+        return "missing", "No database URL configured."
+    if DB_ERROR:
+        return "error", "Database setup failed; running in fallback mode."
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return "ok", "Database reachable."
+    except psycopg.Error:
+        return "error", "Database unreachable right now."
+
+
+def seed_sample_tasks():
+    sample_data = [
+        {
+            "title": "Prep tomorrow clinic huddle",
+            "description": "Review patient list and note high-priority follow-ups.",
+            "category": "Clinic",
+            "priority": "high",
+            "due_date": date.today(),
+            "scheduled_date": date.today(),
+            "scheduled_time": time(8, 30),
+            "scheduled_minutes": 30,
+        },
+        {
+            "title": "Personal finance check-in",
+            "description": "Quick budget review and upcoming bill check.",
+            "category": "Personal",
+            "priority": "medium",
+            "due_date": date.today(),
+            "scheduled_date": date.today(),
+            "scheduled_time": time(19, 0),
+            "scheduled_minutes": 45,
+        },
+        {
+            "title": "Inbox zero sprint",
+            "description": "Process starred messages and archive the rest.",
+            "category": "Personal",
+            "priority": "low",
+            "due_date": date.today(),
+            "scheduled_date": date.today(),
+            "scheduled_time": time(16, 0),
+            "scheduled_minutes": 30,
+        },
+    ]
+
+    for item in sample_data:
+        add_task(
+            item["title"],
+            item["description"],
+            item["category"],
+            item["priority"],
+            item["due_date"],
+            scheduled_date=item["scheduled_date"],
+            scheduled_time=item["scheduled_time"],
+            scheduled_minutes=item["scheduled_minutes"],
+        )
 
 
 def inject_styles():
@@ -211,6 +363,40 @@ def add_task(
     scheduled_time=None,
     scheduled_minutes=None,
 ):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tasks (
+                        title,
+                        description,
+                        category,
+                        priority,
+                        status,
+                        created_date,
+                        due_date,
+                        scheduled_date,
+                        scheduled_time,
+                        scheduled_minutes,
+                        completed_date
+                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        title.strip(),
+                        description.strip(),
+                        category,
+                        priority,
+                        date.today(),
+                        due_date,
+                        scheduled_date,
+                        scheduled_time,
+                        scheduled_minutes,
+                        None,
+                    ),
+                )
+        return
+
     st.session_state.tasks.append(
         {
             "id": len(st.session_state.tasks) + 1,
@@ -230,10 +416,28 @@ def add_task(
 
 
 def delete_task(task_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        return
     st.session_state.tasks = [task for task in st.session_state.tasks if task["id"] != task_id]
 
 
 def complete_task(task_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'completed', completed_date = %s
+                    WHERE id = %s
+                    """,
+                    (date.today(), task_id),
+                )
+        return
+
     for task in st.session_state.tasks:
         if task["id"] == task_id:
             task["status"] = "completed"
@@ -241,7 +445,7 @@ def complete_task(task_id):
             return
 
 
-def render_task_card(task):
+def render_task_card(task, key_prefix="task"):
     st.markdown('<div class="task-card">', unsafe_allow_html=True)
     st.markdown(f'<div class="task-title">{task["title"]}</div>', unsafe_allow_html=True)
     if task.get("description"):
@@ -258,15 +462,17 @@ def render_task_card(task):
     )
     cols = st.columns(2)
     with cols[0]:
-        if task["status"] != "completed" and st.button("Mark complete", key=f"complete_{task['id']}"):
+        if task["status"] != "completed" and st.button("Mark complete", key=f"{key_prefix}_complete_{task['id']}"):
             complete_task(task["id"])
             st.rerun()
     with cols[1]:
-        if st.button("Delete", key=f"delete_{task['id']}"):
+        if st.button("Delete", key=f"{key_prefix}_delete_{task['id']}"):
             delete_task(task["id"])
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
+
+initialize_database()
 
 inject_styles()
 render_hero()
@@ -281,13 +487,36 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("This version keeps everything in session memory for now.")
-    st.caption("You can restore persistence later once the core flow is settled.")
+    if db_enabled():
+        st.caption("Connected to Postgres (Railway URL env).")
+        st.caption("Tasks persist across restarts and deployments.")
+    elif DB_ERROR:
+        st.caption("Database connection failed.")
+        st.caption("Using session-only fallback until DB is reachable.")
+    else:
+        st.caption("No DATABASE_URL or DATABASE_PUBLIC_URL found.")
+        st.caption("Running in session-only fallback mode.")
+
+    st.markdown("---")
+    st.markdown("### Data Controls")
+    health_state, health_message = db_health_status()
+    if health_state == "ok":
+        st.success(f"DB Health: {health_message}")
+    elif health_state == "error":
+        st.warning(f"DB Health: {health_message}")
+    else:
+        st.info(f"DB Health: {health_message}")
+
+    if st.button("Seed Sample Tasks", use_container_width=True):
+        seed_sample_tasks()
+        st.success("Sample tasks added.")
+        st.rerun()
 
 st.markdown('<p class="section-lead">Capture work quickly and split it between your personal lane and clinic lane.</p>', unsafe_allow_html=True)
 
-active_tasks = [task for task in st.session_state.tasks if task["status"] != "completed"]
-completed_tasks = [task for task in st.session_state.tasks if task["status"] == "completed"]
+tasks = load_tasks()
+active_tasks = [task for task in tasks if task["status"] != "completed"]
+completed_tasks = [task for task in tasks if task["status"] == "completed"]
 personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
 clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
 due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
@@ -350,7 +579,7 @@ with right:
     st.markdown('<div class="panel-title"><h3>Today</h3><span>What needs attention now</span></div>', unsafe_allow_html=True)
     if due_today:
         for task in sorted(due_today, key=lambda item: priority_rank(item["priority"])):
-            render_task_card(task)
+            render_task_card(task, key_prefix="today")
     else:
         st.markdown('<div class="empty-state">No tasks due today.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -368,7 +597,7 @@ if scheduled_tasks:
             f"**{block_label}**",
             unsafe_allow_html=False,
         )
-        render_task_card(task)
+        render_task_card(task, key_prefix="schedule")
 else:
     st.markdown('<div class="empty-state">No scheduled tasks yet.</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
@@ -379,7 +608,7 @@ with col1:
     st.markdown('<div class="panel-title"><h3>Personal lane</h3><span>Active tasks</span></div>', unsafe_allow_html=True)
     if personal_tasks:
         for task in personal_tasks:
-            render_task_card(task)
+            render_task_card(task, key_prefix="personal")
     else:
         st.markdown('<div class="empty-state">No personal tasks yet.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -389,7 +618,7 @@ with col2:
     st.markdown('<div class="panel-title"><h3>Clinic lane</h3><span>Active tasks</span></div>', unsafe_allow_html=True)
     if clinic_tasks:
         for task in clinic_tasks:
-            render_task_card(task)
+            render_task_card(task, key_prefix="clinic")
     else:
         st.markdown('<div class="empty-state">No clinic tasks yet.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -401,7 +630,7 @@ with overdue_col1:
     st.markdown('<div class="panel-title"><h3>Overdue</h3><span>Needs triage</span></div>', unsafe_allow_html=True)
     if overdue_tasks:
         for task in overdue_tasks:
-            render_task_card(task)
+            render_task_card(task, key_prefix="overdue")
     else:
         st.markdown('<div class="empty-state">Nothing overdue right now.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -411,7 +640,7 @@ with overdue_col2:
     st.markdown('<div class="panel-title"><h3>Completed</h3><span>Finished work</span></div>', unsafe_allow_html=True)
     if completed_tasks:
         for task in completed_tasks:
-            render_task_card(task)
+            render_task_card(task, key_prefix="completed")
     else:
         st.markdown('<div class="empty-state">No completed tasks yet.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
