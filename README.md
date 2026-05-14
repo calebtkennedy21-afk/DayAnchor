@@ -26,3 +26,14 @@ streamlit run streamlit_app.py
 - No additional SSL env var is required; the app defaults to `sslmode=require` if omitted.
 - Table creation is automatic on startup (`tasks`).
 - Sidebar now shows detected DB variable names and health state for quick troubleshooting.
+
+## Railway Troubleshooting
+
+If the app shows `Detected DB vars: none`, the variables are not reaching the running web service container.
+
+1. Open your **web app service** in Railway (not only the Postgres service).
+2. In **Variables**, set one of:
+	- `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+	- `DATABASE_PUBLIC_URL=${{Postgres.DATABASE_PUBLIC_URL}}`
+3. Save and **redeploy** the web app service.
+4. Confirm sidebar now shows detected vars and connected DB health.

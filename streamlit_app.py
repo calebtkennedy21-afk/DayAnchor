@@ -32,16 +32,62 @@ def ensure_sslmode(url):
 
 def database_url_candidates():
     candidates = []
-    for env_name in ("DATABASE_URL", "DATABASE_PUBLIC_URL"):
+    seen = set()
+
+    # Preferred names for this project.
+    preferred_names = (
+        "DATABASE_URL",
+        "DATABASE_PUBLIC_URL",
+        # Common Railway/host aliases as compatibility fallbacks.
+        "DATABASE_PRIVATE_URL",
+        "POSTGRES_URL",
+        "POSTGRESQL_URL",
+    )
+
+    for env_name in preferred_names:
         raw = os.getenv(env_name)
         normalized = normalize_database_url(raw)
         if normalized:
-            candidates.append((env_name, ensure_sslmode(normalized)))
+            url = ensure_sslmode(normalized)
+            if url not in seen:
+                candidates.append((env_name, url))
+                seen.add(url)
+
+    # Fallback: build a DSN from PG* vars if URL vars are absent.
+    pghost = normalize_database_url(os.getenv("PGHOST"))
+    pgport = normalize_database_url(os.getenv("PGPORT"))
+    pguser = normalize_database_url(os.getenv("PGUSER"))
+    pgpassword = normalize_database_url(os.getenv("PGPASSWORD"))
+    pgdatabase = normalize_database_url(os.getenv("PGDATABASE"))
+
+    if pghost and pguser and pgpassword and pgdatabase:
+        port = pgport or "5432"
+        dsn = f"postgresql://{pguser}:{pgpassword}@{pghost}:{port}/{pgdatabase}"
+        url = ensure_sslmode(dsn)
+        if url not in seen:
+            candidates.append(("PG*", url))
+            seen.add(url)
+
     return candidates
 
 
 def configured_database_env_names():
-    return [name for name in ("DATABASE_URL", "DATABASE_PUBLIC_URL") if normalize_database_url(os.getenv(name))]
+    names = []
+    for name in (
+        "DATABASE_URL",
+        "DATABASE_PUBLIC_URL",
+        "DATABASE_PRIVATE_URL",
+        "POSTGRES_URL",
+        "POSTGRESQL_URL",
+        "PGHOST",
+        "PGPORT",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGDATABASE",
+    ):
+        if normalize_database_url(os.getenv(name)):
+            names.append(name)
+    return names
 
 
 DB_CANDIDATE_SOURCE = None
@@ -540,6 +586,7 @@ with st.sidebar:
         st.caption(f"Detected DB vars: {', '.join(detected_names)}")
     else:
         st.caption("Detected DB vars: none")
+        st.caption("Tip: ensure the web app service has DATABASE_URL or DATABASE_PUBLIC_URL set in Railway.")
     if health_state == "ok":
         st.success(f"DB Health: {health_message}")
     elif health_state == "error":
