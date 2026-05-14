@@ -17,13 +17,11 @@ def _get_database_url():
 
 def get_connection():
     database_url = _get_database_url()
-    sslmode = os.getenv("DATABASE_SSLMODE", os.getenv("DB_SSLMODE", "require"))
 
     if database_url:
         try:
             return psycopg2.connect(
                 database_url,
-                sslmode=sslmode,
                 cursor_factory=RealDictCursor,
             )
         except Exception as e:
@@ -39,7 +37,7 @@ def get_connection():
 
     if not all([db_host, db_name, db_user, db_password]):
         st.error(
-            "Database is not configured. Set DATABASE_URL and DATABASE_SSLMODE "
+            "Database is not configured. Set DATABASE_URL or DATABASE_PUBLIC_URL "
             "(or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or PGHOST/PGDATABASE/PGUSER/PGPASSWORD)."
         )
         return None
@@ -51,7 +49,6 @@ def get_connection():
             dbname=db_name,
             user=db_user,
             password=db_password,
-            sslmode=sslmode,
             cursor_factory=RealDictCursor,
         )
     except Exception as e:
