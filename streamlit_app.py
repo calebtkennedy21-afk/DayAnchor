@@ -1,5 +1,7 @@
 import os
-from datetime import date, time
+import json
+import re
+from datetime import date, time, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
@@ -21,6 +23,8 @@ if "ai_response" not in st.session_state:
     st.session_state.ai_response = ""
 if "ai_error" not in st.session_state:
     st.session_state.ai_error = ""
+if "ai_suggestions" not in st.session_state:
+    st.session_state.ai_suggestions = []
 
 
 def normalize_database_url(raw_url):
@@ -111,6 +115,104 @@ def ai_enabled():
     return OpenAI is not None and bool(ai_api_key())
 
 
+def parse_date_value(raw_value):
+    if raw_value is None:
+        return None
+    cleaned = str(raw_value).strip().lower()
+    if not cleaned:
+        return None
+    if cleaned in ("today", "now"):
+        return date.today()
+    if cleaned == "tomorrow":
+        return date.today() + timedelta(days=1)
+    try:
+        return date.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def parse_time_value(raw_value):
+    if raw_value is None:
+        return None
+    cleaned = str(raw_value).strip()
+    if not cleaned:
+        return None
+    try:
+        return time.fromisoformat(cleaned)
+    except ValueError:
+        pass
+    if len(cleaned) == 5 and cleaned[2] == ":":
+        try:
+            return time.fromisoformat(f"{cleaned}:00")
+        except ValueError:
+            return None
+    return None
+
+
+def extract_json_block(text):
+    if not text:
+        return None
+    json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if json_blocks:
+        return json_blocks[-1]
+    match = re.search(r"(\{\s*\"suggested_tasks\"\s*:\s*\[.*\]\s*\})", text, flags=re.DOTALL)
+    return match.group(1) if match else None
+
+
+def parse_ai_suggestions(text):
+    json_blob = extract_json_block(text)
+    if not json_blob:
+        return []
+
+    try:
+        payload = json.loads(json_blob)
+    except json.JSONDecodeError:
+        return []
+
+    raw_items = payload.get("suggested_tasks", []) if isinstance(payload, dict) else []
+    suggestions = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+
+        category = str(item.get("category", "Personal")).strip().title()
+        if category not in ("Personal", "Clinic"):
+            category = "Personal"
+
+        priority = str(item.get("priority", "medium")).strip().lower()
+        if priority not in ("high", "medium", "low"):
+            priority = "medium"
+
+        due_date = parse_date_value(item.get("due_date")) or date.today()
+        scheduled_date = parse_date_value(item.get("scheduled_date"))
+        scheduled_time = parse_time_value(item.get("scheduled_time"))
+
+        raw_minutes = item.get("scheduled_minutes")
+        try:
+            scheduled_minutes = int(raw_minutes) if raw_minutes is not None else None
+        except (TypeError, ValueError):
+            scheduled_minutes = None
+
+        suggestions.append(
+            {
+                "title": title,
+                "description": str(item.get("description", "")).strip(),
+                "category": category,
+                "priority": priority,
+                "due_date": due_date,
+                "scheduled_date": scheduled_date,
+                "scheduled_time": scheduled_time,
+                "scheduled_minutes": scheduled_minutes,
+            }
+        )
+
+    return suggestions[:5]
+
+
 def task_snapshot_for_ai(tasks, max_items=20):
     if not tasks:
         return "No tasks available."
@@ -137,7 +239,7 @@ def task_snapshot_for_ai(tasks, max_items=20):
 
 def generate_ai_plan(tasks, user_prompt):
     if not ai_enabled():
-        return "", "AI is not configured. Add OPENAI_API_KEY to enable it."
+        return "", "AI is not configured. Add OPENAI_API_KEY to enable it.", []
 
     try:
         client = OpenAI(api_key=ai_api_key())
@@ -162,17 +264,50 @@ def generate_ai_plan(tasks, user_prompt):
                         "Return:\n"
                         "1) A short prioritized plan for today\n"
                         "2) Scheduling adjustments if needed\n"
-                        "3) Any blockers or risks"
+                        "3) Any blockers or risks\n"
+                        "4) A JSON code block with this exact shape:\n"
+                        "```json\n"
+                        "{\n"
+                        "  \"suggested_tasks\": [\n"
+                        "    {\n"
+                        "      \"title\": \"...\",\n"
+                        "      \"description\": \"...\",\n"
+                        "      \"category\": \"Personal\" or \"Clinic\",\n"
+                        "      \"priority\": \"high\" | \"medium\" | \"low\",\n"
+                        "      \"due_date\": \"YYYY-MM-DD\",\n"
+                        "      \"scheduled_date\": \"YYYY-MM-DD\",\n"
+                        "      \"scheduled_time\": \"HH:MM\",\n"
+                        "      \"scheduled_minutes\": 30\n"
+                        "    }\n"
+                        "  ]\n"
+                        "}\n"
+                        "```\n"
+                        "Keep suggested_tasks to at most 3 items."
                     ),
                 },
             ],
         )
         text = response.choices[0].message.content if response.choices else ""
         if not text:
-            return "", "AI returned an empty response."
-        return text, ""
+            return "", "AI returned an empty response.", []
+        suggestions = parse_ai_suggestions(text)
+        return text, "", suggestions
     except Exception as exc:
-        return "", f"AI request failed: {exc}"
+        return "", f"AI request failed: {exc}", []
+
+
+def apply_ai_suggestions(suggestions):
+    for item in suggestions:
+        add_task(
+            item["title"],
+            item["description"],
+            item["category"],
+            item["priority"],
+            item["due_date"],
+            scheduled_date=item.get("scheduled_date"),
+            scheduled_time=item.get("scheduled_time"),
+            scheduled_minutes=item.get("scheduled_minutes"),
+        )
 
 
 DB_CANDIDATE_SOURCE = None
@@ -721,14 +856,23 @@ st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidan
 default_prompt = "Give me a focused plan for today."
 ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90)
 if st.button("Generate AI Plan"):
-    result, error = generate_ai_plan(tasks, ai_prompt)
+    result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
     st.session_state.ai_response = result
     st.session_state.ai_error = error
+    st.session_state.ai_suggestions = suggestions
 
 if st.session_state.ai_error:
     st.warning(st.session_state.ai_error)
 if st.session_state.ai_response:
     st.markdown(st.session_state.ai_response)
+if st.session_state.ai_suggestions:
+    st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
+    if st.button("Add Suggested Tasks", type="primary"):
+        apply_ai_suggestions(st.session_state.ai_suggestions)
+        added_count = len(st.session_state.ai_suggestions)
+        st.session_state.ai_suggestions = []
+        st.success(f"Added {added_count} suggested task(s).")
+        st.rerun()
 if not st.session_state.ai_response and not st.session_state.ai_error:
     st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)

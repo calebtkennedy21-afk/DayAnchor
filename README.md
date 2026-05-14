@@ -13,6 +13,7 @@ Current capabilities include:
 - Upcoming schedule panel for planned work blocks.
 - Sidebar data controls for DB health and one-click sample task seeding.
 - AI Planner panel to generate a prioritized daily plan from your current tasks.
+- One-click `Add Suggested Tasks` action to insert AI-generated tasks into your board.
 
 ## Run
 
