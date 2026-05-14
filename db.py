@@ -4,13 +4,36 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
+def _clean_setting(value):
+    if value is None:
+        return ""
+    text = str(value).strip().strip('"').strip("'").strip()
+    return text
+
+
+def _get_setting(name):
+    env_value = _clean_setting(os.getenv(name))
+    if env_value:
+        return env_value
+
+    try:
+        secret_value = _clean_setting(st.secrets.get(name))
+        if secret_value:
+            return secret_value
+    except Exception:
+        pass
+
+    return ""
+
+
 def _get_database_url():
     return (
-        os.getenv("DATABASE_URL")
-        or os.getenv("DATABASE_PUBLIC_URL")
-        or os.getenv("POSTGRES_URL")
-        or os.getenv("POSTGRESQL_URL")
-        or os.getenv("DB_URL")
+        _get_setting("DATABASE_URL")
+        or _get_setting("DATABASE_PUBLIC_URL")
+        or _get_setting("DATABASE_PRIVATE_URL")
+        or _get_setting("POSTGRES_URL")
+        or _get_setting("POSTGRESQL_URL")
+        or _get_setting("DB_URL")
         or ""
     )
 
@@ -29,16 +52,19 @@ def get_connection():
             return None
 
     # Backward-compatible fallback for split credentials.
-    db_host = os.getenv("DB_HOST") or os.getenv("PGHOST", "")
-    db_port = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
-    db_name = os.getenv("DB_NAME") or os.getenv("PGDATABASE", "")
-    db_user = os.getenv("DB_USER") or os.getenv("PGUSER", "")
-    db_password = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
+    db_host = _get_setting("DB_HOST") or _get_setting("PGHOST")
+    db_port = _get_setting("DB_PORT") or _get_setting("PGPORT") or "5432"
+    db_name = _get_setting("DB_NAME") or _get_setting("PGDATABASE")
+    db_user = _get_setting("DB_USER") or _get_setting("PGUSER")
+    db_password = _get_setting("DB_PASSWORD") or _get_setting("PGPASSWORD")
 
     if not all([db_host, db_name, db_user, db_password]):
         st.error(
             "Database is not configured. Set DATABASE_URL or DATABASE_PUBLIC_URL "
             "(or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or PGHOST/PGDATABASE/PGUSER/PGPASSWORD)."
+        )
+        st.caption(
+            "Runtime note: these vars must be set in the same environment where Streamlit is running."
         )
         return None
 
