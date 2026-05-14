@@ -12,6 +12,7 @@ Current capabilities include:
 - Optional scheduling with date, time, and estimated duration.
 - Upcoming schedule panel for planned work blocks.
 - Sidebar data controls for DB health and one-click sample task seeding.
+- AI Planner panel to generate a prioritized daily plan from your current tasks.
 
 ## Run
 
@@ -26,6 +27,8 @@ streamlit run streamlit_app.py
 - No additional SSL env var is required; the app defaults to `sslmode=require` if omitted.
 - Table creation is automatic on startup (`tasks`).
 - Sidebar now shows detected DB variable names and health state for quick troubleshooting.
+- AI is enabled by setting `OPENAI_API_KEY`.
+- Optional model override: `OPENAI_MODEL` (default: `gpt-4o-mini`).
 
 ## Railway Troubleshooting
 

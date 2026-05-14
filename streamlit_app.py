@@ -6,12 +6,21 @@ import psycopg
 from psycopg.rows import dict_row
 import streamlit as st
 
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
 
 st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
 
 
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
+if "ai_response" not in st.session_state:
+    st.session_state.ai_response = ""
+if "ai_error" not in st.session_state:
+    st.session_state.ai_error = ""
 
 
 def normalize_database_url(raw_url):
@@ -88,6 +97,82 @@ def configured_database_env_names():
         if normalize_database_url(os.getenv(name)):
             names.append(name)
     return names
+
+
+def ai_model_name():
+    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def ai_api_key():
+    return normalize_database_url(os.getenv("OPENAI_API_KEY"))
+
+
+def ai_enabled():
+    return OpenAI is not None and bool(ai_api_key())
+
+
+def task_snapshot_for_ai(tasks, max_items=20):
+    if not tasks:
+        return "No tasks available."
+
+    lines = []
+    for idx, task in enumerate(tasks[:max_items], start=1):
+        lines.append(
+            " | ".join(
+                [
+                    f"#{idx}",
+                    f"title={task.get('title', '')}",
+                    f"category={task.get('category', '')}",
+                    f"priority={task.get('priority', '')}",
+                    f"status={task.get('status', '')}",
+                    f"due_date={task.get('due_date') or 'none'}",
+                    f"scheduled_date={task.get('scheduled_date') or 'none'}",
+                    f"scheduled_time={task.get('scheduled_time') or 'none'}",
+                    f"scheduled_minutes={task.get('scheduled_minutes') or 'none'}",
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
+def generate_ai_plan(tasks, user_prompt):
+    if not ai_enabled():
+        return "", "AI is not configured. Add OPENAI_API_KEY to enable it."
+
+    try:
+        client = OpenAI(api_key=ai_api_key())
+        task_snapshot = task_snapshot_for_ai(tasks)
+        response = client.chat.completions.create(
+            model=ai_model_name(),
+            temperature=0.4,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are DayAnchor AI planner. Create practical, concise planning guidance "
+                        "using the provided tasks. Focus on priority, due dates, and schedule blocks."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"User request: {user_prompt}\n\n"
+                        "Current tasks:\n"
+                        f"{task_snapshot}\n\n"
+                        "Return:\n"
+                        "1) A short prioritized plan for today\n"
+                        "2) Scheduling adjustments if needed\n"
+                        "3) Any blockers or risks"
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty response."
+        return text, ""
+    except Exception as exc:
+        return "", f"AI request failed: {exc}"
 
 
 DB_CANDIDATE_SOURCE = None
@@ -403,7 +488,7 @@ def render_hero():
         """
         <div class="hero">
             <h1>DayAnchor</h1>
-            <p>A focused daily task board for personal and clinic work. No backend, no AI, just a clean place to capture and manage the day.</p>
+            <p>A focused task board for personal and clinic work, with optional AI planning and Postgres persistence.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -599,6 +684,13 @@ with st.sidebar:
         st.success("Sample tasks added.")
         st.rerun()
 
+    st.markdown("---")
+    st.markdown("### AI")
+    if ai_enabled():
+        st.success(f"AI ready ({ai_model_name()})")
+    else:
+        st.info("AI disabled. Set OPENAI_API_KEY to enable.")
+
 st.markdown('<p class="section-lead">Capture work quickly and split it between your personal lane and clinic lane.</p>', unsafe_allow_html=True)
 
 tasks = load_tasks()
@@ -622,6 +714,24 @@ metric_col1.metric("Active Tasks", len(active_tasks))
 metric_col2.metric("Due Today", len(due_today))
 metric_col3.metric("Completed", len(completed_tasks))
 metric_col4.metric("Scheduled", len(scheduled_tasks))
+
+st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidance</span></div>', unsafe_allow_html=True)
+default_prompt = "Give me a focused plan for today."
+ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90)
+if st.button("Generate AI Plan"):
+    result, error = generate_ai_plan(tasks, ai_prompt)
+    st.session_state.ai_response = result
+    st.session_state.ai_error = error
+
+if st.session_state.ai_error:
+    st.warning(st.session_state.ai_error)
+if st.session_state.ai_response:
+    st.markdown(st.session_state.ai_response)
+if not st.session_state.ai_response and not st.session_state.ai_error:
+    st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 left, right = st.columns([1.1, 1], gap="large")
 with left:
