@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+
+_DOTENV_CACHE = None
 
 
 def _clean_setting(value):
@@ -11,10 +15,33 @@ def _clean_setting(value):
     return text
 
 
+def _load_dotenv():
+    global _DOTENV_CACHE
+    if _DOTENV_CACHE is not None:
+        return _DOTENV_CACHE
+
+    values = {}
+    dotenv_path = Path(".env")
+    if dotenv_path.exists():
+        for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            values[key.strip()] = _clean_setting(val)
+
+    _DOTENV_CACHE = values
+    return _DOTENV_CACHE
+
+
 def _get_setting(name):
     env_value = _clean_setting(os.getenv(name))
     if env_value:
         return env_value
+
+    lower_env_value = _clean_setting(os.getenv(name.lower()))
+    if lower_env_value:
+        return lower_env_value
 
     try:
         secret_value = _clean_setting(st.secrets.get(name))
@@ -22,6 +49,11 @@ def _get_setting(name):
             return secret_value
     except Exception:
         pass
+
+    dotenv_values = _load_dotenv()
+    dotenv_value = _clean_setting(dotenv_values.get(name) or dotenv_values.get(name.lower()))
+    if dotenv_value:
+        return dotenv_value
 
     return ""
 

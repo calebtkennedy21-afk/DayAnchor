@@ -19,3 +19,4 @@ Notes:
 - No extra SSL variable is required.
 - The app also accepts `POSTGRES_URL`, `POSTGRESQL_URL`, or `DB_URL` as URL variable names.
 - Legacy split variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) still work as a fallback.
+- If runtime env injection fails, add a local `.env` file with `DATABASE_URL=...` (or `DATABASE_PUBLIC_URL=...`) and restart the app.
