@@ -43,6 +43,21 @@ DEFAULT_APP_SETTINGS = {
     "default_duration": 60,
     "default_schedule_time": "09:00",
     "timeline_days": 7,
+    "surgeon_clinic_patient_target": 25,
+    "general_clinic_patient_target": 25,
+    "procedure_friday_procedure_target": 8,
+    "clinic_visit_minutes": 12,
+    "clinic_admin_buffer_minutes": 60,
+    "procedure_block_minutes": 30,
+    "personal_focus_minutes": 90,
+    "overview_day_mode": "Auto",
+    "overview_role_label": "Medical assistant",
+    "overview_site_label": "Outpatient hospital",
+    "overview_patient_target": 25,
+    "overview_procedure_target": 8,
+    "overview_admin_buffer_minutes": 60,
+    "overview_shift_minutes": 480,
+    "overview_focus_window_minutes": 90,
 }
 
 
@@ -1546,6 +1561,705 @@ def ai_workbench_summary(tasks, active_tasks):
     }
 
 
+def safe_int(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def clinic_day_profiles(app_settings):
+    patient_target = safe_int(app_settings.get("surgeon_clinic_patient_target", 25), 25)
+    general_patient_target = safe_int(app_settings.get("general_clinic_patient_target", 25), 25)
+    procedure_target = safe_int(app_settings.get("procedure_friday_procedure_target", 8), 8)
+    visit_minutes = max(8, safe_int(app_settings.get("clinic_visit_minutes", 12), 12))
+    admin_buffer = max(30, safe_int(app_settings.get("clinic_admin_buffer_minutes", 60), 60))
+    procedure_block_minutes = max(20, safe_int(app_settings.get("procedure_block_minutes", 30), 30))
+
+    return {
+        "surgeon_clinic": {
+            "key": "surgeon_clinic",
+            "label": "Surgeon clinic day",
+            "volume_label": "patients",
+            "volume_target": patient_target,
+            "visit_minutes": visit_minutes,
+            "prep_minutes": 30,
+            "admin_buffer_minutes": admin_buffer,
+            "focus": "front-load patient flow, protect note-writing time, and leave slack for follow-ups.",
+        },
+        "general_clinic": {
+            "key": "general_clinic",
+            "label": "General clinic day",
+            "volume_label": "patients",
+            "volume_target": general_patient_target,
+            "visit_minutes": visit_minutes,
+            "prep_minutes": 30,
+            "admin_buffer_minutes": admin_buffer,
+            "focus": "treat this like a steady patient-volume day with minimal context switching.",
+        },
+        "procedure_friday": {
+            "key": "procedure_friday",
+            "label": "Procedure Friday",
+            "volume_label": "procedures",
+            "volume_target": procedure_target,
+            "visit_minutes": procedure_block_minutes,
+            "prep_minutes": 45,
+            "admin_buffer_minutes": max(45, admin_buffer),
+            "focus": "optimize room turnover, pre-charting, and post-procedure documentation.",
+        },
+    }
+
+
+def build_time_blocks(profile):
+    total_minutes = 8 * 60
+    core_minutes = max(120, total_minutes - profile["prep_minutes"] - profile["admin_buffer_minutes"])
+    per_block_minutes = max(15, min(profile["visit_minutes"], profile["visit_minutes"] if profile["key"] != "procedure_friday" else profile["visit_minutes"]))
+    if profile["key"] == "procedure_friday":
+        per_block_minutes = max(20, profile["visit_minutes"])
+    target_count = max(1, profile["volume_target"])
+    estimated_blocks = max(2, min(target_count, core_minutes // per_block_minutes))
+    block_minutes = max(15, core_minutes // estimated_blocks)
+
+    morning_volume = max(1, estimated_blocks // 2)
+    afternoon_volume = max(1, estimated_blocks - morning_volume)
+
+    return {
+        "total_minutes": total_minutes,
+        "core_minutes": core_minutes,
+        "block_minutes": block_minutes,
+        "estimated_blocks": estimated_blocks,
+        "morning_volume": morning_volume,
+        "afternoon_volume": afternoon_volume,
+        "slack_minutes": max(0, total_minutes - profile["prep_minutes"] - profile["admin_buffer_minutes"] - (estimated_blocks * block_minutes)),
+    }
+
+
+def clinic_day_summary(clinic_tasks, active_tasks, app_settings, mode_key):
+    profiles = clinic_day_profiles(app_settings)
+    profile = profiles.get(mode_key, profiles["general_clinic"])
+    block_plan = build_time_blocks(profile)
+    clinic_open = [task for task in clinic_tasks if task.get("status") != "completed"]
+    top_clinic_tasks = sorted(clinic_open, key=lambda task: (priority_rank(task["priority"]), task.get("due_date") or date.max))[:5]
+    clinic_unscheduled = [task for task in clinic_open if not (task.get("scheduled_date") and task.get("scheduled_time"))]
+    due_soon = [task for task in clinic_open if task.get("due_date") and task["due_date"] <= date.today() + timedelta(days=3)]
+
+    return {
+        "profile": profile,
+        "block_plan": block_plan,
+        "top_clinic_tasks": top_clinic_tasks,
+        "clinic_unscheduled_count": len(clinic_unscheduled),
+        "due_soon_count": len(due_soon),
+        "active_clinic_count": len(clinic_open),
+        "clinic_backlog_count": len([task for task in active_tasks if task.get("category") == "Clinic"]),
+    }
+
+
+def personal_focus_summary(personal_tasks, active_tasks, app_settings):
+    focus_minutes = safe_int(app_settings.get("personal_focus_minutes", 90), 90)
+    sorted_tasks = sorted(personal_tasks, key=lambda task: (priority_rank(task["priority"]), task.get("due_date") or date.max))
+    focus_tasks = sorted_tasks[:5]
+    focus_driver = focus_tasks[0] if focus_tasks else None
+    focus_name = focus_driver["title"] if focus_driver else "No personal task ready"
+    total_personal = len([task for task in active_tasks if task.get("category") == "Personal"])
+    return {
+        "focus_minutes": focus_minutes,
+        "focus_tasks": focus_tasks,
+        "focus_name": focus_name,
+        "personal_count": total_personal,
+        "blocked_count": len([task for task in personal_tasks if task.get("status") == "blocked"]),
+    }
+
+
+def schedule_workload_snapshot(active_tasks):
+    upcoming = sorted(
+        [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
+        key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
+    )
+    unscheduled = [task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]
+    return {
+        "upcoming": upcoming,
+        "unscheduled": unscheduled,
+        "unscheduled_high": [task for task in unscheduled if task.get("priority") == "high"],
+        "capacity_gap": len(unscheduled) - len(upcoming),
+    }
+
+
+def overview_runtime_settings(app_settings):
+    return {
+        "day_mode": app_settings.get("overview_day_mode", "Auto"),
+        "role_label": app_settings.get("overview_role_label", "Medical assistant"),
+        "site_label": app_settings.get("overview_site_label", "Outpatient hospital"),
+        "patient_target": safe_int(app_settings.get("overview_patient_target", 25), 25),
+        "procedure_target": safe_int(app_settings.get("overview_procedure_target", 8), 8),
+        "admin_buffer_minutes": safe_int(app_settings.get("overview_admin_buffer_minutes", 60), 60),
+        "shift_minutes": safe_int(app_settings.get("overview_shift_minutes", 480), 480),
+        "focus_window_minutes": safe_int(app_settings.get("overview_focus_window_minutes", 90), 90),
+        "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Monday", "Tuesday", "Thursday"]),
+        "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Wednesday"]),
+        "procedure_friday_frequency_weeks": safe_int(app_settings.get("overview_procedure_friday_frequency_weeks", 2), 2),
+        "procedure_friday_cycle_offset": safe_int(app_settings.get("overview_procedure_friday_cycle_offset", 0), 0),
+    }
+
+
+def overview_mode_label(mode_key):
+    return {
+        "Auto": "Auto",
+        "Outpatient clinic": "Outpatient clinic",
+        "Procedure Friday": "Procedure Friday",
+        "Admin catch-up": "Admin catch-up",
+        "Mixed day": "Mixed day",
+    }.get(mode_key, "Auto")
+
+
+def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks, clinic_tasks):
+    today = date.today()
+    mode = overview_settings.get("day_mode", "Auto")
+    weekday_name = today.strftime("%A")
+    clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Monday", "Tuesday", "Thursday"]
+    admin_weekdays = overview_settings.get("admin_weekdays") or ["Wednesday"]
+    cadence_weeks = max(1, safe_int(overview_settings.get("procedure_friday_frequency_weeks", 2), 2))
+    cycle_offset = safe_int(overview_settings.get("procedure_friday_cycle_offset", 0), 0)
+    week_number = today.isocalendar().week
+
+    auto_mode = "Mixed day"
+    reason_text = "Use the board signal to stay flexible when the weekly pattern is unclear."
+    if today.weekday() == 4 and ((week_number + cycle_offset) % cadence_weeks == 0):
+        auto_mode = "Procedure Friday"
+        reason_text = f"Friday matches the {cadence_weeks}-week procedure cadence."
+    elif weekday_name in admin_weekdays:
+        auto_mode = "Admin catch-up"
+        reason_text = f"{weekday_name} is marked as an admin catch-up day in your settings."
+    elif weekday_name in clinic_weekdays:
+        auto_mode = "Outpatient clinic"
+        reason_text = f"{weekday_name} is marked as a clinic day in your settings."
+    elif len([task for task in clinic_tasks if task.get("priority") == "high"]) > len(personal_tasks):
+        auto_mode = "Outpatient clinic"
+        reason_text = "Clinic pressure is heavier than personal work, so the page is leaning toward patient flow."
+    elif len(personal_tasks) > len(clinic_tasks):
+        auto_mode = "Mixed day"
+        reason_text = "Personal work is heavier, so the page keeps the day balanced instead of clinic-dominant."
+
+    resolved_mode = auto_mode if mode == "Auto" else mode
+    if mode != "Auto":
+        reason_text = "You pinned this mode manually."
+
+    if resolved_mode == "Procedure Friday":
+        target_label = "procedures"
+        target_value = overview_settings["procedure_target"]
+        focus_text = "Prioritize room turnover, pre-charting, and post-procedure documentation."
+        signal_text = "Keep procedures contiguous and protect charting time."
+    elif resolved_mode == "Admin catch-up":
+        target_label = "admin blocks"
+        target_value = max(2, overview_settings["shift_minutes"] // 120)
+        focus_text = "Use the day for documentation, inbox cleanup, results follow-up, and callbacks."
+        signal_text = "Minimize patient-facing interruptions and batch the desk work."
+    elif resolved_mode == "Mixed day":
+        target_label = "work blocks"
+        target_value = max(overview_settings["patient_target"] // 3, 6)
+        focus_text = "Balance outpatient flow with personal catch-up and preserve one buffer block."
+        signal_text = "Switch tasks only when the clinic queue or schedule demands it."
+    else:
+        target_label = "patients"
+        target_value = overview_settings["patient_target"]
+        focus_text = "Front-load the patient queue, protect note-writing time, and hold a buffer for spillover."
+        signal_text = "Keep the day moving while leaving slack for walk-ins, calls, and documentation."
+
+    clinic_pressure = len([task for task in clinic_tasks if task.get("status") != "completed"])
+    personal_pressure = len([task for task in personal_tasks if task.get("status") != "completed"])
+    active_pressure = len([task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))])
+
+    return {
+        "mode": resolved_mode,
+        "target_label": target_label,
+        "target_value": target_value,
+        "focus_text": focus_text,
+        "signal_text": signal_text,
+        "reason_text": reason_text,
+        "clinic_pressure": clinic_pressure,
+        "personal_pressure": personal_pressure,
+        "active_pressure": active_pressure,
+        "timeline_window_minutes": overview_settings["shift_minutes"],
+    }
+
+
+def render_overview_tuning_panel(app_settings, panel_key="overview"):
+    settings_key = f"{panel_key}_settings"
+    if settings_key not in st.session_state:
+        st.session_state[settings_key] = overview_runtime_settings(app_settings)
+
+    current = st.session_state[settings_key]
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Today\'s Setup</h3><span>Edit this whenever the day changes</span></div>', unsafe_allow_html=True)
+    left_col, right_col = st.columns([1.1, 0.9], gap="large")
+
+    with left_col:
+        day_mode = st.selectbox(
+            "Day mode",
+            ["Auto", "Outpatient clinic", "Procedure Friday", "Admin catch-up", "Mixed day"],
+            index=["Auto", "Outpatient clinic", "Procedure Friday", "Admin catch-up", "Mixed day"].index(current["day_mode"]) if current["day_mode"] in ["Auto", "Outpatient clinic", "Procedure Friday", "Admin catch-up", "Mixed day"] else 0,
+            key=f"{panel_key}_day_mode",
+        )
+        role_label = st.text_input("Role label", value=current["role_label"], key=f"{panel_key}_role_label")
+        site_label = st.text_input("Work setting", value=current["site_label"], key=f"{panel_key}_site_label")
+        patient_target = st.slider("Expected patient load", min_value=10, max_value=40, value=current["patient_target"], step=1, key=f"{panel_key}_patient_target")
+        procedure_target = st.slider("Procedure target", min_value=2, max_value=20, value=current["procedure_target"], step=1, key=f"{panel_key}_procedure_target")
+        clinic_weekdays = st.multiselect(
+            "Clinic weekdays",
+            ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            default=current["clinic_weekdays"] if isinstance(current.get("clinic_weekdays"), list) else ["Monday", "Tuesday", "Thursday"],
+            key=f"{panel_key}_clinic_weekdays",
+        )
+
+    with right_col:
+        admin_buffer = st.slider("Admin buffer minutes", min_value=30, max_value=150, value=current["admin_buffer_minutes"], step=15, key=f"{panel_key}_admin_buffer")
+        shift_minutes = st.slider("Shift length minutes", min_value=240, max_value=600, value=current["shift_minutes"], step=15, key=f"{panel_key}_shift_minutes")
+        focus_window_minutes = st.slider("Focus window minutes", min_value=30, max_value=180, value=current["focus_window_minutes"], step=15, key=f"{panel_key}_focus_window")
+        admin_weekdays = st.multiselect(
+            "Admin weekdays",
+            ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            default=current["admin_weekdays"] if isinstance(current.get("admin_weekdays"), list) else ["Wednesday"],
+            key=f"{panel_key}_admin_weekdays",
+        )
+        procedure_frequency = st.selectbox(
+            "Procedure Friday cadence",
+            [1, 2, 3, 4],
+            index=[1, 2, 3, 4].index(int(current.get("procedure_friday_frequency_weeks", 2))) if int(current.get("procedure_friday_frequency_weeks", 2)) in [1, 2, 3, 4] else 1,
+            key=f"{panel_key}_procedure_frequency",
+        )
+        procedure_cycle_offset = st.selectbox(
+            "Procedure cycle offset",
+            [0, 1],
+            index=[0, 1].index(int(current.get("procedure_friday_cycle_offset", 0))) if int(current.get("procedure_friday_cycle_offset", 0)) in [0, 1] else 0,
+            format_func=lambda value: "This week" if value == 0 else "Next week",
+            key=f"{panel_key}_procedure_cycle_offset",
+        )
+        st.caption("These controls are session-editable so the overview can flex from clinic days to procedure days to admin catch-up.")
+
+    updated = {
+        "day_mode": day_mode,
+        "role_label": role_label.strip() or "Medical assistant",
+        "site_label": site_label.strip() or "Outpatient hospital",
+        "patient_target": int(patient_target),
+        "procedure_target": int(procedure_target),
+        "admin_buffer_minutes": int(admin_buffer),
+        "shift_minutes": int(shift_minutes),
+        "focus_window_minutes": int(focus_window_minutes),
+        "clinic_weekdays": clinic_weekdays or ["Monday", "Tuesday", "Thursday"],
+        "admin_weekdays": admin_weekdays or ["Wednesday"],
+        "procedure_friday_frequency_weeks": int(procedure_frequency),
+        "procedure_friday_cycle_offset": int(procedure_cycle_offset),
+    }
+    st.session_state[settings_key] = updated
+
+    if st.button("Save overview defaults", key=f"{panel_key}_save_overview_defaults", type="secondary"):
+        app_settings = save_app_settings(
+            {
+                **app_settings,
+                "overview_day_mode": updated["day_mode"],
+                "overview_role_label": updated["role_label"],
+                "overview_site_label": updated["site_label"],
+                "overview_patient_target": updated["patient_target"],
+                "overview_procedure_target": updated["procedure_target"],
+                "overview_admin_buffer_minutes": updated["admin_buffer_minutes"],
+                "overview_shift_minutes": updated["shift_minutes"],
+                "overview_focus_window_minutes": updated["focus_window_minutes"],
+                "overview_clinic_weekdays": updated["clinic_weekdays"],
+                "overview_admin_weekdays": updated["admin_weekdays"],
+                "overview_procedure_friday_frequency_weeks": updated["procedure_friday_frequency_weeks"],
+                "overview_procedure_friday_cycle_offset": updated["procedure_friday_cycle_offset"],
+            }
+        )
+        st.success("Overview defaults saved.")
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    return updated
+
+
+def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="personal"):
+    summary = personal_focus_summary(personal_tasks, active_tasks, app_settings)
+    focus_key = f"{panel_key}_focus_task"
+    sprint_key = f"{panel_key}_sprint_minutes"
+
+    if sprint_key not in st.session_state:
+        st.session_state[sprint_key] = summary["focus_minutes"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Focus Sprint</h3><span>Pick one task and protect a working block</span></div>', unsafe_allow_html=True)
+    left_col, right_col = st.columns([1.15, 0.85], gap="large")
+
+    with left_col:
+        st.markdown(f"<div class='ai-chip-grid'><span class='ai-chip'>{summary['personal_count']} active personal tasks</span><span class='ai-chip'>{summary['blocked_count']} blocked</span><span class='ai-chip'>{summary['focus_minutes']}-minute default sprint</span></div>", unsafe_allow_html=True)
+        focus_options = [task["title"] for task in summary["focus_tasks"]] or ["No personal task ready"]
+        if focus_key not in st.session_state:
+            st.session_state[focus_key] = focus_options[0]
+        selected_focus = st.selectbox("Focus task", focus_options, key=focus_key)
+        sprint_minutes = st.slider("Sprint length (minutes)", min_value=30, max_value=180, value=int(st.session_state[sprint_key]), step=15, key=sprint_key)
+        st.caption("Use this page to isolate one personal objective before the day gets noisy.")
+        if st.button("Start Focus Sprint", key=f"{panel_key}_start_sprint", type="primary"):
+            chosen = next((task for task in summary["focus_tasks"] if task["title"] == selected_focus), None)
+            if chosen:
+                set_task_status(chosen["id"], "in_progress")
+                st.session_state[focus_key] = chosen["title"]
+                st.success(f"Pulled '{chosen['title']}' into in-progress for a {sprint_minutes}-minute sprint.")
+                st.rerun()
+
+    with right_col:
+        st.markdown('<div class="panel-title"><h3>Personal Stack</h3><span>Ranked by urgency and friction</span></div>', unsafe_allow_html=True)
+        if summary["focus_tasks"]:
+            for task in summary["focus_tasks"]:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {task.get('due_date') or 'No due date'} · {status_label(task.get('status', 'todo'))}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="empty-state">No personal task is ready to pull into a sprint.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic"):
+    profiles = clinic_day_profiles(app_settings)
+    mode_key = f"{panel_key}_mode"
+    focus_task_key = f"{panel_key}_focus_task"
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = "surgeon_clinic"
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Clinic Command Center</h3><span>Build clinic-day structure around patient volume</span></div>', unsafe_allow_html=True)
+    mode_choice = st.radio(
+        "Clinic day type",
+        ["surgeon_clinic", "general_clinic", "procedure_friday"],
+        index=["surgeon_clinic", "general_clinic", "procedure_friday"].index(st.session_state[mode_key]),
+        format_func=lambda value: profiles[value]["label"],
+        horizontal=True,
+        key=mode_key,
+    )
+    summary = clinic_day_summary(clinic_tasks, active_tasks, app_settings, mode_choice)
+    profile = summary["profile"]
+    blocks = summary["block_plan"]
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric(profile["volume_label"].title(), profile["volume_target"])
+    metric_cols[1].metric("Estimated blocks", blocks["estimated_blocks"])
+    metric_cols[2].metric("Clinic tasks", summary["active_clinic_count"])
+    metric_cols[3].metric("Unscheduled", summary["clinic_unscheduled_count"])
+
+    body_left, body_right = st.columns([1.15, 0.85], gap="large")
+    with body_left:
+        st.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>{profile['label']}</strong><br />Target {profile['volume_target']} {profile['volume_label']} · {profile['focus']}<br />Prep {profile['prep_minutes']} min · Admin buffer {profile['admin_buffer_minutes']} min · Estimated slack {blocks['slack_minutes']} min</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='panel-title' style='margin-top:1rem;'><h3>Clinic Day Blueprint</h3><span>Time-block estimate for the selected day type</span></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"- Prep and huddle: {profile['prep_minutes']} minutes\n"
+            f"- Morning clinic/procedures: about {blocks['morning_volume']} blocks\n"
+            f"- Midday admin buffer: {profile['admin_buffer_minutes']} minutes\n"
+            f"- Afternoon clinic/procedures: about {blocks['afternoon_volume']} blocks\n"
+            f"- Remaining slack: {blocks['slack_minutes']} minutes",
+            unsafe_allow_html=True,
+        )
+        st.caption("The goal is to protect note time and keep the schedule realistic, not to pack every minute.")
+
+    with body_right:
+        st.markdown('<div class="panel-title"><h3>Top Clinic Tasks</h3><span>What should be handled first</span></div>', unsafe_allow_html=True)
+        if summary["top_clinic_tasks"]:
+            task_titles = [task["title"] for task in summary["top_clinic_tasks"]]
+            if focus_task_key not in st.session_state:
+                st.session_state[focus_task_key] = task_titles[0]
+            selected_task = st.selectbox("Clinic focus task", task_titles, key=focus_task_key)
+            if st.button("Move clinic focus to In Progress", key=f"{panel_key}_start_clinic_focus", type="primary"):
+                target = next((task for task in summary["top_clinic_tasks"] if task["title"] == selected_task), None)
+                if target:
+                    set_task_status(target["id"], "in_progress")
+                    st.success(f"'{target['title']}' moved to In Progress.")
+                    st.rerun()
+            for task in summary["top_clinic_tasks"]:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {task.get('due_date') or 'No due date'} · {status_label(task.get('status', 'todo'))}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="empty-state">No clinic tasks are currently active.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule"):
+    snapshot = schedule_workload_snapshot(active_tasks)
+    lens_key = f"{panel_key}_lens"
+    if lens_key not in st.session_state:
+        st.session_state[lens_key] = "Balanced"
+
+    lens_choice = st.radio(
+        "Planning lens",
+        ["Balanced", "Clinic-first", "Personal-first", "Urgent-first"],
+        horizontal=True,
+        key=lens_key,
+    )
+
+    def sort_key(task):
+        due_value = task.get("due_date") or date.max
+        if lens_choice == "Clinic-first":
+            return (0 if task.get("category") == "Clinic" else 1, priority_rank(task["priority"]), due_value)
+        if lens_choice == "Personal-first":
+            return (0 if task.get("category") == "Personal" else 1, priority_rank(task["priority"]), due_value)
+        if lens_choice == "Urgent-first":
+            return (priority_rank(task["priority"]), due_value, 0 if task.get("status") == "blocked" else 1)
+        return (due_value, priority_rank(task["priority"]), 0 if task.get("scheduled_date") else 1)
+
+    ranked_tasks = sorted(snapshot["unscheduled"], key=sort_key)[:8]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Schedule Builder</h3><span>Preview the next best blocks before you pin times</span></div>', unsafe_allow_html=True)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Scheduled", len(snapshot["upcoming"]))
+    metric_cols[1].metric("Unscheduled", len(snapshot["unscheduled"]))
+    metric_cols[2].metric("High-priority unscheduled", len(snapshot["unscheduled_high"]))
+    metric_cols[3].metric("Capacity gap", max(0, snapshot["capacity_gap"]))
+
+    left_col, right_col = st.columns([1.1, 0.9], gap="large")
+    with left_col:
+        st.markdown('<div class="panel-title"><h3>Draft Order</h3><span>Ranked according to the selected lens</span></div>', unsafe_allow_html=True)
+        if ranked_tasks:
+            for task in ranked_tasks:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['category']} · {task['priority'].title()} · {task.get('due_date') or 'No due date'}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="empty-state">No unscheduled tasks need ordering right now.</div>', unsafe_allow_html=True)
+    with right_col:
+        st.markdown('<div class="panel-title"><h3>Scheduling Rules</h3><span>Keep the day coherent</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<div class='ai-list'>"
+            "<li>Protect the first two hours for the highest-value work.</li>"
+            "<li>Keep clinic items contiguous when the selected lens is clinic-first.</li>"
+            "<li>Leave one buffer block each day for notes, handoffs, or overruns.</li>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        if snapshot["unscheduled_high"]:
+            st.caption(f"Top unscheduled high-priority task: {snapshot['unscheduled_high'][0]['title']}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_review_command_panel(active_tasks, completed_today, app_settings, panel_key="review"):
+    clinic_completed = [task for task in completed_today if task.get("category") == "Clinic"]
+    personal_completed = [task for task in completed_today if task.get("category") == "Personal"]
+    clinic_open = [task for task in active_tasks if task.get("category") == "Clinic"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Shift Debrief</h3><span>Capture what happened and what should happen next</span></div>', unsafe_allow_html=True)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Completed today", len(completed_today))
+    metric_cols[1].metric("Clinic completed", len(clinic_completed))
+    metric_cols[2].metric("Personal completed", len(personal_completed))
+    metric_cols[3].metric("Active clinic tasks", len(clinic_open))
+
+    left_col, right_col = st.columns([1.05, 0.95], gap="large")
+    with left_col:
+        notes = st.text_area(
+            "Review notes",
+            placeholder="What moved, what stalled, what surprised you, and what needs to happen tomorrow?",
+            height=120,
+            key=f"{panel_key}_notes",
+        )
+        if st.button("Generate Daily Review", key=f"{panel_key}_generate", type="primary"):
+            review_text, tomorrow_text, review_error = generate_daily_review(active_tasks, completed_today, notes)
+            st.session_state.daily_review_text = review_text
+            st.session_state.tomorrow_plan_text = tomorrow_text
+            st.session_state.daily_review_error = review_error
+        if st.session_state.daily_review_error:
+            st.warning(st.session_state.daily_review_error)
+        if st.session_state.daily_review_text:
+            st.markdown(st.session_state.daily_review_text)
+        if st.session_state.tomorrow_plan_text:
+            st.markdown(st.session_state.tomorrow_plan_text)
+
+    with right_col:
+        st.markdown('<div class="panel-title"><h3>Debrief Prompts</h3><span>Focus your reflection</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<div class='ai-list'>"
+            "<li>Did clinic flow stay on time?</li>"
+            "<li>What should be pre-charted or prepped before the next clinic block?</li>"
+            "<li>Which personal tasks can wait until the next non-clinic window?</li>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        if clinic_completed:
+            st.caption(f"Clinic completions today: {', '.join(task['title'] for task in clinic_completed[:4])}")
+        if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
+            st.markdown('<div class="empty-state">Run the debrief after a clinic or non-clinic day to capture the transition to tomorrow.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def overview_lens_options(app_settings):
+    return [
+        "Auto",
+        "Clinic day",
+        "Procedure Friday",
+        "Personal focus",
+        "Schedule pressure",
+    ]
+
+
+def resolve_overview_lens(active_tasks, personal_tasks, clinic_tasks, app_settings, lens_choice):
+    today = date.today()
+    friday_profile = clinic_day_profiles(app_settings)["procedure_friday"] if today.weekday() == 4 and today.isocalendar().week % 2 == 0 else clinic_day_profiles(app_settings)["general_clinic"]
+    if lens_choice == "Clinic day":
+        return clinic_day_profiles(app_settings)["surgeon_clinic"]
+    if lens_choice == "Procedure Friday":
+        return friday_profile
+    if lens_choice == "Personal focus":
+        return {
+            "label": "Personal focus",
+            "focus": "Protect one deep-work block for personal admin, planning, and catch-up.",
+            "priority_set": "personal",
+        }
+    if lens_choice == "Schedule pressure":
+        return {
+            "label": "Schedule pressure",
+            "focus": "Clear the most urgent unscheduled work and protect one buffer block.",
+            "priority_set": "schedule",
+        }
+
+    if today.weekday() == 4:
+        return friday_profile
+
+    clinic_pressure = len(clinic_tasks) + len([task for task in active_tasks if task.get("category") == "Clinic" and task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))])
+    personal_pressure = len(personal_tasks) + len([task for task in active_tasks if task.get("category") == "Personal" and task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))])
+
+    if clinic_pressure >= personal_pressure and clinic_pressure > 0:
+        return clinic_day_profiles(app_settings)["surgeon_clinic"]
+    if personal_pressure > 0:
+        return {
+            "label": "Personal focus",
+            "focus": "The board is lighter outside clinic, so protect a clean personal work block.",
+            "priority_set": "personal",
+        }
+    return {
+        "label": "Balanced day",
+        "focus": "Keep one eye on clinic flow, one on tasks, and one on the schedule runway.",
+        "priority_set": "balanced",
+    }
+
+
+def render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview"):
+    today = date.today()
+    lens_key = f"{panel_key}_lens"
+    if lens_key not in st.session_state:
+        st.session_state[lens_key] = "Auto"
+
+    lens_choice = st.selectbox("Overview lens", overview_lens_options(app_settings), key=lens_key)
+    lens = resolve_overview_lens(active_tasks, personal_tasks, clinic_tasks, app_settings, lens_choice)
+    day_context = resolve_overview_day_context(overview_settings, active_tasks, personal_tasks, clinic_tasks)
+    if lens_choice == "Clinic day":
+        clinic_mode_key = "surgeon_clinic"
+    elif lens_choice == "Procedure Friday":
+        clinic_mode_key = "procedure_friday"
+    elif lens_choice == "Auto" and today.weekday() == 4 and today.isocalendar().week % 2 == 0:
+        clinic_mode_key = "procedure_friday"
+    else:
+        clinic_mode_key = "general_clinic"
+
+    due_today_tasks = [task for task in active_tasks if task.get("due_date") == date.today()]
+    overdue_tasks_today = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    unscheduled_high = [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]
+    clinic_backlog = [task for task in active_tasks if task.get("category") == "Clinic"]
+    personal_backlog = [task for task in active_tasks if task.get("category") == "Personal"]
+
+    overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == date.today() else 1 if task.get("due_date") else 2, priority_rank(task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
+    next_scheduled = scheduled_tasks[:4]
+    clinic_summary = clinic_day_summary(clinic_tasks, active_tasks, app_settings, clinic_mode_key)
+    schedule_snapshot = schedule_workload_snapshot(active_tasks)
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Active", len(active_tasks))
+    metric_cols[1].metric("Due today", len(due_today_tasks))
+    metric_cols[2].metric("Overdue", len(overdue_tasks_today))
+    metric_cols[3].metric("Scheduled", len(scheduled_tasks))
+
+    top_left, top_right = st.columns([1.25, 0.85], gap="large")
+    with top_left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Today at a Glance</h3><span>Fast read on the day’s operating mode</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {overview_settings['site_label']}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {len(clinic_backlog)} active · Personal: {len(personal_backlog)} active · High-priority unscheduled: {len(unscheduled_high)}</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(day_context["reason_text"])
+        st.markdown(
+            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span></div>",
+            unsafe_allow_html=True,
+        )
+        if overview_focus:
+            st.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Next actions</h3><span>What should move first</span></div>', unsafe_allow_html=True)
+            for task in overview_focus:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['category']} · {task['priority'].title()} · {format_due(task)}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with top_right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Outpatient Load</h3><span>Editable patient and procedure planning</span></div>', unsafe_allow_html=True)
+        st.metric("Day mode", day_context["mode"])
+        st.caption(f"{overview_settings['site_label']} · {overview_settings['role_label']} · buffer {overview_settings['admin_buffer_minutes']} min")
+        st.markdown(
+            f"<div class='ai-chip-grid'><span class='ai-chip'>Clinic active: {clinic_summary['active_clinic_count']}</span><span class='ai-chip'>Unscheduled: {clinic_summary['clinic_unscheduled_count']}</span><span class='ai-chip'>Due soon: {clinic_summary['due_soon_count']}</span><span class='ai-chip'>Active pressure: {day_context['active_pressure']}</span></div>",
+            unsafe_allow_html=True,
+        )
+        if clinic_summary["top_clinic_tasks"]:
+            st.markdown("<div class='panel-title' style='margin-top:0.75rem;'><h3>Top outpatient priorities</h3><span>First things first</span></div>", unsafe_allow_html=True)
+            for task in clinic_summary["top_clinic_tasks"][:3]:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {format_due(task)}",
+                    unsafe_allow_html=True,
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    lower_left, lower_right = st.columns(2, gap="large")
+    with lower_left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Schedule Runway</h3><span>What can still be placed cleanly</span></div>', unsafe_allow_html=True)
+        st.caption(f"{len(schedule_snapshot['unscheduled'])} unscheduled tasks, {len(schedule_snapshot['unscheduled_high'])} high-priority ones.")
+        st.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>Default buffer:</strong> {overview_settings['admin_buffer_minutes']} min<br /><strong>Focus window:</strong> {overview_settings['focus_window_minutes']} min<br /><strong>Recommended mode:</strong> {lens['label']}</div>",
+            unsafe_allow_html=True,
+        )
+        for task in next_scheduled:
+            scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
+            st.markdown(
+                f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
+                unsafe_allow_html=True,
+            )
+        if not next_scheduled:
+            st.markdown('<div class="empty-state">No scheduled blocks yet. Use the Schedule page to place work into the week.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with lower_right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Quick Capture</h3><span>Add a task without leaving the overview</span></div>', unsafe_allow_html=True)
+        with st.form(f"{panel_key}_quick_capture"):
+            quick_title = st.text_input("Task title")
+            quick_category = st.selectbox("Category", ["Personal", "Clinic"], index=0 if lens_choice == "Personal focus" else 1 if lens_choice in ("Clinic day", "Procedure Friday") else 0)
+            quick_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+            quick_due = st.date_input("Due date", value=date.today())
+            quick_submit = st.form_submit_button("Add quick task")
+        if quick_submit:
+            if not quick_title.strip():
+                st.warning("Add a task title first.")
+            else:
+                add_task(quick_title, "", quick_category, quick_priority, quick_due)
+                st.success("Quick task added.")
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+
 def render_add_task_panel(form_key, defaults, default_category=None):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Add Task</h3><span>Quick capture</span></div>', unsafe_allow_html=True)
@@ -1943,27 +2657,22 @@ if len(filtered_tasks) != len(tasks):
 
 if current_page == "Overview":
     render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")
-    render_metrics_row()
+    overview_settings = render_overview_tuning_panel(app_settings, panel_key="overview_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    left, right = st.columns([1.1, 1], gap="large")
-    with left:
-        render_add_task_panel("add_task_form_overview", app_settings)
-    with right:
-        render_task_list_panel("Today", "What needs attention now", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
-
-    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_task_list_panel("Upcoming Schedule", "Planned work blocks", scheduled_tasks, "overview_schedule", "No scheduled tasks yet.")
+    render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     cols = st.columns(2, gap="large")
     with cols[0]:
-        render_task_list_panel("Personal lane", "Active tasks", personal_tasks, "overview_personal", "No personal tasks yet.")
+        render_add_task_panel("add_task_form_overview", app_settings)
     with cols[1]:
-        render_task_list_panel("Clinic lane", "Active tasks", clinic_tasks, "overview_clinic", "No clinic tasks yet.")
+        render_task_list_panel("Due Today", "Only the highest attention work", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
 
 elif current_page == "Personal":
     render_page_banner("personal", "Personal Lane", "Private tasks, self-management, and low-friction planning.")
     render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="personal_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     left, right = st.columns([1, 1.2], gap="large")
     with left:
@@ -1975,6 +2684,8 @@ elif current_page == "Clinic":
     render_page_banner("clinic", "Clinic Lane", "Operational work, patient-facing tasks, and service flow.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     left, right = st.columns([1, 1.2], gap="large")
     with left:
         render_add_task_panel("add_task_form_clinic", app_settings, default_category="Clinic")
@@ -1984,6 +2695,8 @@ elif current_page == "Clinic":
 elif current_page == "Schedule":
     render_page_banner("schedule", "Schedule View", "A timeline-first view for blocking work into realistic chunks.")
     render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_timeline_panel(scheduled_tasks, timeline_days)
 
@@ -2007,6 +2720,13 @@ elif current_page == "AI":
 elif current_page == "Analytics":
     render_page_banner("analytics", "Analytics Board", "A quicker read on workload, execution, and bottlenecks.")
     render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    analytics_cols = st.columns(4)
+    analytics_cols[0].metric("Clinic active", len([task for task in active_tasks if task.get("category") == "Clinic"]))
+    analytics_cols[1].metric("Personal active", len([task for task in active_tasks if task.get("category") == "Personal"]))
+    analytics_cols[2].metric("Clinic overdue", len([task for task in overdue_tasks if task.get("category") == "Clinic"]))
+    analytics_cols[3].metric("High unscheduled", len([task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]))
+
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Analytics</h3><span>Snapshot of workload and execution</span></div>', unsafe_allow_html=True)
@@ -2067,6 +2787,12 @@ elif current_page == "Notifications":
     if not (overdue_all or blocked_all or unscheduled_high or due_tomorrow):
         st.success("No urgent alerts right now.")
 
+    alert_cols = st.columns(2)
+    with alert_cols[0]:
+        render_task_list_panel("Clinic Alerts", "Clinic overdue, blocked, and unscheduled items", [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"], "notif_clinic_alerts", "No clinic-specific alerts right now.")
+    with alert_cols[1]:
+        render_task_list_panel("Personal Alerts", "Personal overdue, blocked, and unscheduled items", [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"], "notif_personal_alerts", "No personal-specific alerts right now.")
+
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -2080,34 +2806,7 @@ elif current_page == "Daily Review":
     render_page_banner("review", "Daily Review", "Close the loop on today and draft the next move.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Daily Review</h3><span>End-of-day recap and tomorrow draft plan</span></div>', unsafe_allow_html=True)
-
-    review_notes = st.text_area(
-        "Context notes for today",
-        placeholder="Anything important from today? Wins, blockers, meetings, constraints...",
-        height=100,
-        key="daily_review_notes",
-    )
-
-    if st.button("Generate Daily Review", key="gen_daily_review"):
-        review_text, tomorrow_text, review_error = generate_daily_review(all_active_tasks, completed_today_all, review_notes)
-        st.session_state.daily_review_text = review_text
-        st.session_state.tomorrow_plan_text = tomorrow_text
-        st.session_state.daily_review_error = review_error
-
-    if st.session_state.daily_review_error:
-        st.warning(st.session_state.daily_review_error)
-    if st.session_state.daily_review_text:
-        st.markdown(st.session_state.daily_review_text)
-    if st.session_state.tomorrow_plan_text:
-        st.markdown(st.session_state.tomorrow_plan_text)
-
-    if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
-        st.markdown('<div class="empty-state">Generate a review to get your end-of-day summary and tomorrow draft plan.</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+    render_review_command_panel(all_active_tasks, completed_today_all, app_settings, panel_key="daily_review_page")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_task_list_panel("Completed Today", "What you finished", completed_today_all, "daily_completed", "No tasks completed today yet.")
@@ -2150,6 +2849,55 @@ elif current_page == "Settings":
         value=max(3, min(21, int(app_settings.get("timeline_days", 7)))),
     )
 
+    st.markdown("### Clinic Planning Defaults")
+    settings_surgeon_patient_target = st.slider(
+        "Surgeon clinic patient target",
+        min_value=15,
+        max_value=40,
+        value=safe_int(app_settings.get("surgeon_clinic_patient_target", 25), 25),
+    )
+    settings_general_patient_target = st.slider(
+        "General clinic patient target",
+        min_value=15,
+        max_value=40,
+        value=safe_int(app_settings.get("general_clinic_patient_target", 25), 25),
+    )
+    settings_procedure_target = st.slider(
+        "Procedure Friday target",
+        min_value=4,
+        max_value=16,
+        value=safe_int(app_settings.get("procedure_friday_procedure_target", 8), 8),
+    )
+    settings_visit_minutes = st.slider(
+        "Clinic visit minutes",
+        min_value=8,
+        max_value=20,
+        value=safe_int(app_settings.get("clinic_visit_minutes", 12), 12),
+    )
+    settings_admin_buffer = st.slider(
+        "Clinic admin buffer minutes",
+        min_value=30,
+        max_value=120,
+        value=safe_int(app_settings.get("clinic_admin_buffer_minutes", 60), 60),
+        step=15,
+    )
+    settings_procedure_block = st.slider(
+        "Procedure block minutes",
+        min_value=20,
+        max_value=60,
+        value=safe_int(app_settings.get("procedure_block_minutes", 30), 30),
+        step=5,
+    )
+
+    st.markdown("### Personal Planning Defaults")
+    settings_focus_minutes = st.slider(
+        "Personal focus sprint minutes",
+        min_value=30,
+        max_value=180,
+        value=safe_int(app_settings.get("personal_focus_minutes", 90), 90),
+        step=15,
+    )
+
     if st.button("Save Settings", type="primary"):
         app_settings = save_app_settings(
             {
@@ -2158,6 +2906,13 @@ elif current_page == "Settings":
                 "default_duration": int(settings_duration),
                 "default_schedule_time": settings_time.strftime("%H:%M"),
                 "timeline_days": int(settings_timeline_days),
+                "surgeon_clinic_patient_target": int(settings_surgeon_patient_target),
+                "general_clinic_patient_target": int(settings_general_patient_target),
+                "procedure_friday_procedure_target": int(settings_procedure_target),
+                "clinic_visit_minutes": int(settings_visit_minutes),
+                "clinic_admin_buffer_minutes": int(settings_admin_buffer),
+                "procedure_block_minutes": int(settings_procedure_block),
+                "personal_focus_minutes": int(settings_focus_minutes),
             }
         )
         st.success("Settings saved.")
