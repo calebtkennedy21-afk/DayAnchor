@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import calendar
 from datetime import date, time, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -35,6 +36,8 @@ if "tomorrow_plan_text" not in st.session_state:
     st.session_state.tomorrow_plan_text = ""
 if "daily_review_error" not in st.session_state:
     st.session_state.daily_review_error = ""
+if "surgical_cases" not in st.session_state:
+    st.session_state.surgical_cases = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -58,6 +61,13 @@ DEFAULT_APP_SETTINGS = {
     "overview_admin_buffer_minutes": 60,
     "overview_shift_minutes": 480,
     "overview_focus_window_minutes": 90,
+    "overview_clinic_weekdays": ["Monday", "Tuesday", "Thursday"],
+    "overview_admin_weekdays": ["Wednesday"],
+    "overview_procedure_friday_frequency_weeks": 2,
+    "overview_procedure_friday_cycle_offset": 0,
+    "or_fixed_weekday": "Friday",
+    "or_alternating_days": ["Monday", "Wednesday"],
+    "or_alternating_cycle_offset": 0,
 }
 
 
@@ -618,6 +628,20 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS surgical_cases (
+                            id BIGSERIAL PRIMARY KEY,
+                            case_date DATE NOT NULL,
+                            case_stream TEXT NOT NULL,
+                            procedure_name TEXT NOT NULL,
+                            anatomical_location TEXT NOT NULL DEFAULT '',
+                            status TEXT NOT NULL DEFAULT 'planned',
+                            notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -657,6 +681,203 @@ def load_tasks():
                 return cur.fetchall()
     except psycopg.Error:
         return st.session_state.tasks
+
+
+def load_surgical_cases():
+    if not db_enabled():
+        return st.session_state.surgical_cases
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        case_date,
+                        case_stream,
+                        procedure_name,
+                        anatomical_location,
+                        status,
+                        notes,
+                        created_date
+                    FROM surgical_cases
+                    ORDER BY case_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st.session_state.surgical_cases
+
+
+def add_surgical_case(case_date, case_stream, procedure_name, anatomical_location, status="planned", notes=""):
+    stream_value = case_stream.strip()
+    procedure_value = procedure_name.strip()
+    location_value = anatomical_location.strip()
+    notes_value = notes.strip()
+    if not stream_value or not procedure_value:
+        return
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO surgical_cases (
+                        case_date,
+                        case_stream,
+                        procedure_name,
+                        anatomical_location,
+                        status,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        case_date,
+                        stream_value,
+                        procedure_value,
+                        location_value,
+                        status,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+        return
+
+    next_id = max([item.get("id", 0) for item in st.session_state.surgical_cases], default=0) + 1
+    st.session_state.surgical_cases.append(
+        {
+            "id": next_id,
+            "case_date": case_date,
+            "case_stream": stream_value,
+            "procedure_name": procedure_value,
+            "anatomical_location": location_value,
+            "status": status,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+
+
+def update_surgical_case(case_id, **fields):
+    allowed_fields = {"case_date", "case_stream", "procedure_name", "anatomical_location", "status", "notes"}
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if db_enabled():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(case_id)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE surgical_cases SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    for item in st.session_state.surgical_cases:
+        if item.get("id") == case_id:
+            item.update(sanitized)
+            return
+
+
+def delete_surgical_case(case_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM surgical_cases WHERE id = %s", (case_id,))
+        return
+    st.session_state.surgical_cases = [item for item in st.session_state.surgical_cases if item.get("id") != case_id]
+
+
+def weekday_index_to_name(index):
+    return {
+        0: "Monday",
+        1: "Tuesday",
+        2: "Wednesday",
+        3: "Thursday",
+        4: "Friday",
+        5: "Saturday",
+        6: "Sunday",
+    }.get(index, "Monday")
+
+
+def weekday_name_to_index(name):
+    mapping = {
+        "Monday": 0,
+        "Tuesday": 1,
+        "Wednesday": 2,
+        "Thursday": 3,
+        "Friday": 4,
+        "Saturday": 5,
+        "Sunday": 6,
+    }
+    return mapping.get(name, 4)
+
+
+def predicted_or_days(app_settings, horizon_days=28):
+    fixed_weekday = weekday_name_to_index(app_settings.get("or_fixed_weekday", "Friday"))
+    alternating_days = app_settings.get("or_alternating_days") or ["Monday", "Wednesday"]
+    if len(alternating_days) < 2:
+        alternating_days = ["Monday", "Wednesday"]
+    alt_day_a = weekday_name_to_index(alternating_days[0])
+    alt_day_b = weekday_name_to_index(alternating_days[1])
+    cycle_offset = safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0)
+
+    out = []
+    for offset in range(horizon_days):
+        day = date.today() + timedelta(days=offset)
+        iso_week = day.isocalendar().week
+        weekday = day.weekday()
+        if weekday == fixed_weekday:
+            out.append((day, "OR day"))
+            continue
+        alternating_weekday = alt_day_a if ((iso_week + cycle_offset) % 2 == 0) else alt_day_b
+        if weekday == alternating_weekday:
+            out.append((day, "Alternating OR day"))
+    return out
+
+
+def render_or_calendar_compact(surgical_cases, predicted_labels, month_anchor, panel_key):
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdatescalendar(month_anchor.year, month_anchor.month)
+    cases_by_day = {}
+    for item in surgical_cases:
+        case_day = item.get("case_date")
+        if case_day:
+            cases_by_day.setdefault(case_day, []).append(item)
+
+    headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for week in weeks:
+        cells = []
+        for day in week:
+            if day.month != month_anchor.month:
+                cells.append(" ")
+                continue
+
+            day_cases = cases_by_day.get(day, [])
+            completed_count = len([item for item in day_cases if item.get("status") == "completed"])
+            main_or_count = len([item for item in day_cases if item.get("case_stream") == "Main OR"])
+            tenjet_count = len([item for item in day_cases if item.get("case_stream") == "TenJet"])
+
+            parts = [f"**{day.day}**"]
+            if predicted_labels.get(day):
+                parts.append("OR")
+            if day_cases:
+                parts.append(f"{len(day_cases)} case(s)")
+                parts.append(f"M{main_or_count}/T{tenjet_count}")
+            if completed_count:
+                parts.append(f"{completed_count} done")
+
+            cells.append("<br>".join(parts))
+
+        table_lines.append("| " + " | ".join(cells) + " |")
+
+    st.markdown("\n".join(table_lines), unsafe_allow_html=True)
 
 
 def db_health_status():
@@ -2093,6 +2314,126 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases"):
+    predicted_days = predicted_or_days(app_settings, horizon_days=120)
+    predicted_labels = {day: label for day, label in predicted_days}
+    upcoming_predicted = [item for item in predicted_days if item[0] >= date.today()]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
+    st.caption("Store procedure name, date, and anatomical location only. Do not enter patient identifiers.")
+
+    metrics = st.columns(4)
+    planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
+    completed_cases = [item for item in surgical_cases if item.get("status") == "completed"]
+    tenjet_cases = [item for item in surgical_cases if item.get("case_stream") == "TenJet"]
+    main_or_cases = [item for item in surgical_cases if item.get("case_stream") == "Main OR"]
+    metrics[0].metric("Planned", len(planned_cases))
+    metrics[1].metric("Completed", len(completed_cases))
+    metrics[2].metric("Main OR", len(main_or_cases))
+    metrics[3].metric("TenJet", len(tenjet_cases))
+
+    top_left, top_right = st.columns([1.1, 0.9], gap="large")
+    with top_left:
+        with st.form(f"{panel_key}_new_case_form"):
+            case_date = st.date_input("Case date", value=date.today())
+            case_stream = st.selectbox("Case stream", ["Main OR", "TenJet"])
+            procedure_name = st.text_input("Procedure performed")
+            anatomical_location = st.text_input("Anatomical location")
+            status = st.selectbox("Status", ["planned", "completed", "canceled"])
+            notes = st.text_area("Notes (non-PHI)", height=80)
+            submit_case = st.form_submit_button("Add surgical case", type="primary")
+
+        if submit_case:
+            if not procedure_name.strip():
+                st.warning("Add the procedure name before saving.")
+            else:
+                add_surgical_case(
+                    case_date=case_date,
+                    case_stream=case_stream,
+                    procedure_name=procedure_name,
+                    anatomical_location=anatomical_location,
+                    status=status,
+                    notes=notes,
+                )
+                st.success("Surgical case saved.")
+                st.rerun()
+
+    with top_right:
+        st.markdown('<div class="panel-title"><h3>Predicted OR Days</h3><span>Every Friday + alternating weekday pattern</span></div>', unsafe_allow_html=True)
+        if upcoming_predicted:
+            for day, label in upcoming_predicted[:10]:
+                st.markdown(f"- <strong>{day.strftime('%a %b %d')}</strong> · {label}", unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="empty-state">No OR days predicted for the selected cadence.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>OR Calendar</h3><span>Month view of OR cadence and logged cases</span></div>', unsafe_allow_html=True)
+    month_key = f"{panel_key}_month_anchor"
+    if month_key not in st.session_state:
+        st.session_state[month_key] = date.today().replace(day=1)
+
+    calendar_controls = st.columns([1, 2, 1])
+    with calendar_controls[0]:
+        if st.button("Prev month", key=f"{panel_key}_prev_month"):
+            current_anchor = st.session_state[month_key]
+            previous_month_end = current_anchor - timedelta(days=1)
+            st.session_state[month_key] = previous_month_end.replace(day=1)
+            st.rerun()
+    with calendar_controls[1]:
+        st.markdown(
+            f"<div style='text-align:center; font-weight:700; margin-top:0.4rem;'>{calendar.month_name[st.session_state[month_key].month]} {st.session_state[month_key].year}</div>",
+            unsafe_allow_html=True,
+        )
+    with calendar_controls[2]:
+        if st.button("Next month", key=f"{panel_key}_next_month"):
+            current_anchor = st.session_state[month_key]
+            next_month_start = (current_anchor.replace(day=28) + timedelta(days=4)).replace(day=1)
+            st.session_state[month_key] = next_month_start
+            st.rerun()
+
+    render_or_calendar_compact(surgical_cases, predicted_labels, st.session_state[month_key], panel_key)
+
+    st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Recent Cases</h3><span>Track what was scheduled and what was done</span></div>', unsafe_allow_html=True)
+    if surgical_cases:
+        for item in surgical_cases[:20]:
+            case_id = item.get("id")
+            case_date_value = item.get("case_date")
+            date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
+            or_hint = predicted_labels.get(case_date_value)
+            hint_suffix = f" · {or_hint}" if or_hint else ""
+            st.markdown(
+                f"<div class='task-card'><div class='task-title'>{item.get('procedure_name')}</div>"
+                f"<div class='task-meta'><span class='pill'>{date_label}{hint_suffix}</span><span class='pill pill-category'>{item.get('case_stream')}</span><span class='pill pill-status'>{str(item.get('status', 'planned')).title()}</span><span class='pill'>{item.get('anatomical_location') or 'Location not specified'}</span></div>"
+                f"<p style='margin-top:0.6rem;'>{item.get('notes') or ''}</p></div>",
+                unsafe_allow_html=True,
+            )
+            row_cols = st.columns([1, 1, 1])
+            with row_cols[0]:
+                new_status = st.selectbox(
+                    "Status",
+                    ["planned", "completed", "canceled"],
+                    index=["planned", "completed", "canceled"].index(item.get("status", "planned")) if item.get("status", "planned") in ["planned", "completed", "canceled"] else 0,
+                    key=f"{panel_key}_status_{case_id}",
+                    label_visibility="collapsed",
+                )
+            with row_cols[1]:
+                if st.button("Update", key=f"{panel_key}_update_{case_id}"):
+                    update_surgical_case(case_id, status=new_status)
+                    st.success("Case status updated.")
+                    st.rerun()
+            with row_cols[2]:
+                if st.button("Delete", key=f"{panel_key}_delete_{case_id}"):
+                    delete_surgical_case(case_id)
+                    st.success("Case deleted.")
+                    st.rerun()
+    else:
+        st.markdown('<div class="empty-state">No surgical cases logged yet.</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def overview_lens_options(app_settings):
     return [
         "Auto",
@@ -2554,7 +2895,7 @@ with st.sidebar:
     st.markdown("### Navigation")
     current_page = st.radio(
         "Go to",
-        ["Overview", "Personal", "Clinic", "Schedule", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
+        ["Overview", "Personal", "Clinic", "Cases", "Schedule", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
         label_visibility="collapsed",
     )
 
@@ -2608,6 +2949,7 @@ with st.sidebar:
 st.markdown('<p class="section-lead">Navigate by lane and workflow area from the sidebar.</p>', unsafe_allow_html=True)
 
 tasks = load_tasks()
+surgical_cases = load_surgical_cases()
 query = (search_query or "").strip().lower()
 all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
 all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
@@ -2691,6 +3033,10 @@ elif current_page == "Clinic":
         render_add_task_panel("add_task_form_clinic", app_settings, default_category="Clinic")
     with right:
         render_task_list_panel("Clinic Tasks", "Operational and patient-facing work", clinic_tasks, "clinic_page", "No clinic tasks match your filters.")
+
+elif current_page == "Cases":
+    render_page_banner("clinic", "Surgical Cases", "Track surgery and TenJet case scheduling without PHI.")
+    render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases_page")
 
 elif current_page == "Schedule":
     render_page_banner("schedule", "Schedule View", "A timeline-first view for blocking work into realistic chunks.")
@@ -2898,6 +3244,33 @@ elif current_page == "Settings":
         step=15,
     )
 
+    st.markdown("### OR Cadence Defaults")
+    settings_or_fixed_weekday = st.selectbox(
+        "Weekly fixed OR day",
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        index=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(app_settings.get("or_fixed_weekday", "Friday"))
+        if app_settings.get("or_fixed_weekday", "Friday") in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        else 4,
+    )
+    settings_or_alternating_days = st.multiselect(
+        "Alternating OR weekdays (choose two)",
+        ["Monday", "Tuesday", "Wednesday", "Thursday"],
+        default=app_settings.get("or_alternating_days", ["Monday", "Wednesday"]),
+    )
+    if len(settings_or_alternating_days) < 2:
+        settings_or_alternating_days = ["Monday", "Wednesday"]
+    elif len(settings_or_alternating_days) > 2:
+        settings_or_alternating_days = settings_or_alternating_days[:2]
+
+    settings_or_cycle_offset = st.selectbox(
+        "Alternating week starts with",
+        [0, 1],
+        index=[0, 1].index(safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0))
+        if safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0) in [0, 1]
+        else 0,
+        format_func=lambda value: settings_or_alternating_days[0] if value == 0 else settings_or_alternating_days[1],
+    )
+
     if st.button("Save Settings", type="primary"):
         app_settings = save_app_settings(
             {
@@ -2913,6 +3286,9 @@ elif current_page == "Settings":
                 "clinic_admin_buffer_minutes": int(settings_admin_buffer),
                 "procedure_block_minutes": int(settings_procedure_block),
                 "personal_focus_minutes": int(settings_focus_minutes),
+                "or_fixed_weekday": settings_or_fixed_weekday,
+                "or_alternating_days": settings_or_alternating_days,
+                "or_alternating_cycle_offset": int(settings_or_cycle_offset),
             }
         )
         st.success("Settings saved.")
