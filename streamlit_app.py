@@ -880,6 +880,85 @@ def render_or_calendar_compact(surgical_cases, predicted_labels, month_anchor, p
     st.markdown("\n".join(table_lines), unsafe_allow_html=True)
 
 
+def render_task_calendar_compact(tasks, month_anchor):
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdatescalendar(month_anchor.year, month_anchor.month)
+
+    due_by_day = {}
+    scheduled_by_day = {}
+    completed_by_day = {}
+    for item in tasks:
+        due_day = item.get("due_date")
+        scheduled_day = item.get("scheduled_date")
+        completed_day = item.get("completed_date")
+        if due_day:
+            due_by_day[due_day] = due_by_day.get(due_day, 0) + 1
+        if scheduled_day:
+            scheduled_by_day[scheduled_day] = scheduled_by_day.get(scheduled_day, 0) + 1
+        if completed_day:
+            completed_by_day[completed_day] = completed_by_day.get(completed_day, 0) + 1
+
+    headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for week in weeks:
+        cells = []
+        for day in week:
+            if day.month != month_anchor.month:
+                cells.append(" ")
+                continue
+
+            due_count = due_by_day.get(day, 0)
+            scheduled_count = scheduled_by_day.get(day, 0)
+            completed_count = completed_by_day.get(day, 0)
+            parts = [f"**{day.day}**"]
+            if scheduled_count:
+                parts.append(f"S{scheduled_count}")
+            if due_count:
+                parts.append(f"D{due_count}")
+            if completed_count:
+                parts.append(f"C{completed_count}")
+
+            cells.append("<br>".join(parts))
+
+        table_lines.append("| " + " | ".join(cells) + " |")
+
+    st.markdown("\n".join(table_lines), unsafe_allow_html=True)
+
+
+def render_task_calendar_panel(tasks, panel_key, title, subtitle):
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
+    st.caption("Legend: S = scheduled tasks, D = tasks due, C = tasks completed")
+
+    month_key = f"{panel_key}_month_anchor"
+    if month_key not in st.session_state:
+        st.session_state[month_key] = date.today().replace(day=1)
+
+    controls = st.columns([1, 2, 1])
+    with controls[0]:
+        if st.button("Prev month", key=f"{panel_key}_prev"):
+            current = st.session_state[month_key]
+            previous_month_end = current - timedelta(days=1)
+            st.session_state[month_key] = previous_month_end.replace(day=1)
+            st.rerun()
+    with controls[1]:
+        anchor = st.session_state[month_key]
+        st.markdown(
+            f"<div style='text-align:center; font-weight:700; margin-top:0.4rem;'>{calendar.month_name[anchor.month]} {anchor.year}</div>",
+            unsafe_allow_html=True,
+        )
+    with controls[2]:
+        if st.button("Next month", key=f"{panel_key}_next"):
+            current = st.session_state[month_key]
+            next_month_start = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+            st.session_state[month_key] = next_month_start
+            st.rerun()
+
+    render_task_calendar_compact(tasks, st.session_state[month_key])
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def db_health_status():
     if not database_url_candidates():
         return "missing", "No database URL configured."
@@ -3011,6 +3090,9 @@ if current_page == "Overview":
         render_task_list_panel("Due Today", "Only the highest attention work", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_calendar_panel(filtered_tasks, "overview_tasks_calendar", "Overview Calendar", "Month view for due, scheduled, and completed tasks")
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_overview_tuning_panel(app_settings, panel_key="overview_page")
 
 elif current_page == "Personal":
@@ -3048,6 +3130,9 @@ elif current_page == "Schedule":
     render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_timeline_panel(scheduled_tasks, timeline_days)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_calendar_panel(filtered_tasks, "schedule_tasks_calendar", "Schedule Calendar", "Month view for workload timing and follow-through")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     unscheduled_tasks = [task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]
