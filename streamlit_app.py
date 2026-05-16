@@ -2999,7 +2999,7 @@ if len(filtered_tasks) != len(tasks):
 
 if current_page == "Overview":
     render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")
-    overview_settings = render_overview_tuning_panel(app_settings, panel_key="overview_page")
+    overview_settings = st.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
 
@@ -3009,6 +3009,9 @@ if current_page == "Overview":
         render_add_task_panel("add_task_form_overview", app_settings)
     with cols[1]:
         render_task_list_panel("Due Today", "Only the highest attention work", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_overview_tuning_panel(app_settings, panel_key="overview_page")
 
 elif current_page == "Personal":
     render_page_banner("personal", "Personal Lane", "Private tasks, self-management, and low-friction planning.")
