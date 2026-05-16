@@ -38,6 +38,8 @@ if "daily_review_error" not in st.session_state:
     st.session_state.daily_review_error = ""
 if "surgical_cases" not in st.session_state:
     st.session_state.surgical_cases = []
+if "protocol_documents" not in st.session_state:
+    st.session_state.protocol_documents = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -68,6 +70,7 @@ DEFAULT_APP_SETTINGS = {
     "or_fixed_weekday": "Friday",
     "or_alternating_days": ["Monday", "Wednesday"],
     "or_alternating_cycle_offset": 0,
+    "default_surgeon_label": "Dr. Braden Boyer (BB)",
 }
 
 
@@ -638,6 +641,24 @@ def initialize_database():
                             anatomical_location TEXT NOT NULL DEFAULT '',
                             status TEXT NOT NULL DEFAULT 'planned',
                             notes TEXT NOT NULL DEFAULT '',
+                            education_url TEXT,
+                            education_notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_url TEXT")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_notes TEXT NOT NULL DEFAULT ''")
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS protocol_documents (
+                            id BIGSERIAL PRIMARY KEY,
+                            surgeon_label TEXT NOT NULL,
+                            protocol_name TEXT NOT NULL,
+                            file_name TEXT NOT NULL,
+                            file_mime TEXT,
+                            file_bytes BYTEA NOT NULL,
+                            notes TEXT NOT NULL DEFAULT '',
                             created_date DATE NOT NULL
                         )
                         """
@@ -699,6 +720,8 @@ def load_surgical_cases():
                         anatomical_location,
                         status,
                         notes,
+                        education_url,
+                        education_notes,
                         created_date
                     FROM surgical_cases
                     ORDER BY case_date DESC, id DESC
@@ -709,11 +732,22 @@ def load_surgical_cases():
         return st.session_state.surgical_cases
 
 
-def add_surgical_case(case_date, case_stream, procedure_name, anatomical_location, status="planned", notes=""):
+def add_surgical_case(
+    case_date,
+    case_stream,
+    procedure_name,
+    anatomical_location,
+    status="planned",
+    notes="",
+    education_url="",
+    education_notes="",
+):
     stream_value = case_stream.strip()
     procedure_value = procedure_name.strip()
     location_value = anatomical_location.strip()
     notes_value = notes.strip()
+    education_url_value = education_url.strip()
+    education_notes_value = education_notes.strip()
     if not stream_value or not procedure_value:
         return
 
@@ -729,8 +763,10 @@ def add_surgical_case(case_date, case_stream, procedure_name, anatomical_locatio
                         anatomical_location,
                         status,
                         notes,
+                        education_url,
+                        education_notes,
                         created_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         case_date,
@@ -739,6 +775,8 @@ def add_surgical_case(case_date, case_stream, procedure_name, anatomical_locatio
                         location_value,
                         status,
                         notes_value,
+                        education_url_value,
+                        education_notes_value,
                         date.today(),
                     ),
                 )
@@ -754,13 +792,24 @@ def add_surgical_case(case_date, case_stream, procedure_name, anatomical_locatio
             "anatomical_location": location_value,
             "status": status,
             "notes": notes_value,
+            "education_url": education_url_value,
+            "education_notes": education_notes_value,
             "created_date": date.today(),
         }
     )
 
 
 def update_surgical_case(case_id, **fields):
-    allowed_fields = {"case_date", "case_stream", "procedure_name", "anatomical_location", "status", "notes"}
+    allowed_fields = {
+        "case_date",
+        "case_stream",
+        "procedure_name",
+        "anatomical_location",
+        "status",
+        "notes",
+        "education_url",
+        "education_notes",
+    }
     sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
     if not sanitized:
         return
@@ -790,6 +839,219 @@ def delete_surgical_case(case_id):
                 cur.execute("DELETE FROM surgical_cases WHERE id = %s", (case_id,))
         return
     st.session_state.surgical_cases = [item for item in st.session_state.surgical_cases if item.get("id") != case_id]
+
+
+def load_protocol_documents():
+    if not db_enabled():
+        return st.session_state.protocol_documents
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        surgeon_label,
+                        protocol_name,
+                        file_name,
+                        file_mime,
+                        file_bytes,
+                        notes,
+                        created_date
+                    FROM protocol_documents
+                    ORDER BY created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st.session_state.protocol_documents
+
+
+def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime, upload_bytes, notes=""):
+    surgeon_value = surgeon_label.strip() or "Dr. Braden Boyer (BB)"
+    protocol_value = protocol_name.strip() or upload_name
+    notes_value = notes.strip()
+    if not upload_bytes:
+        return
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO protocol_documents (
+                        surgeon_label,
+                        protocol_name,
+                        file_name,
+                        file_mime,
+                        file_bytes,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        surgeon_value,
+                        protocol_value,
+                        upload_name,
+                        upload_mime,
+                        upload_bytes,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+        return
+
+    next_id = max([item.get("id", 0) for item in st.session_state.protocol_documents], default=0) + 1
+    st.session_state.protocol_documents.append(
+        {
+            "id": next_id,
+            "surgeon_label": surgeon_value,
+            "protocol_name": protocol_value,
+            "file_name": upload_name,
+            "file_mime": upload_mime,
+            "file_bytes": upload_bytes,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+
+
+def delete_protocol_document(doc_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM protocol_documents WHERE id = %s", (doc_id,))
+        return
+    st.session_state.protocol_documents = [item for item in st.session_state.protocol_documents if item.get("id") != doc_id]
+
+
+def text_keywords(value):
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", (value or "").lower())
+    tokens = [item for item in cleaned.split() if len(item) > 2]
+    stop_words = {
+        "and",
+        "the",
+        "for",
+        "with",
+        "from",
+        "into",
+        "procedure",
+        "protocol",
+        "case",
+        "notes",
+        "day",
+        "dr",
+        "bb",
+    }
+    return [item for item in tokens if item not in stop_words]
+
+
+def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
+    case_text = " ".join(
+        [
+            str(case_item.get("procedure_name") or ""),
+            str(case_item.get("anatomical_location") or ""),
+            str(case_item.get("education_notes") or ""),
+            str(case_item.get("notes") or ""),
+        ]
+    )
+    case_terms = set(text_keywords(case_text))
+    if not case_terms:
+        return []
+
+    ranked = []
+    for doc in protocol_documents:
+        doc_text = " ".join(
+            [
+                str(doc.get("protocol_name") or ""),
+                str(doc.get("file_name") or ""),
+                str(doc.get("notes") or ""),
+            ]
+        )
+        doc_terms = set(text_keywords(doc_text))
+        overlap = case_terms.intersection(doc_terms)
+        if not overlap:
+            continue
+        score = len(overlap)
+        ranked.append((score, sorted(list(overlap))[:6], doc))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[:max_items]
+
+
+def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_documents, max_items=4):
+    topic_set = set(text_keywords(" ".join(topic_terms)))
+
+    case_ranked = []
+    for item in surgical_cases:
+        case_text = " ".join(
+            [
+                str(item.get("procedure_name") or ""),
+                str(item.get("anatomical_location") or ""),
+                str(item.get("education_notes") or ""),
+                str(item.get("notes") or ""),
+            ]
+        )
+        case_terms = set(text_keywords(case_text))
+        overlap = sorted(list(case_terms.intersection(topic_set)))
+        if overlap:
+            case_ranked.append((len(overlap), overlap[:6], item))
+    case_ranked.sort(key=lambda item: item[0], reverse=True)
+
+    protocol_ranked = []
+    for doc in protocol_documents:
+        doc_text = " ".join(
+            [
+                str(doc.get("protocol_name") or ""),
+                str(doc.get("file_name") or ""),
+                str(doc.get("notes") or ""),
+            ]
+        )
+        doc_terms = set(text_keywords(doc_text))
+        overlap = sorted(list(doc_terms.intersection(topic_set)))
+        if overlap:
+            protocol_ranked.append((len(overlap), overlap[:6], doc))
+    protocol_ranked.sort(key=lambda item: item[0], reverse=True)
+
+    return case_ranked[:max_items], protocol_ranked[:max_items]
+
+
+def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, protocol_documents, panel_key):
+    case_matches, protocol_matches = anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_documents, max_items=4)
+    st.markdown(f"#### Related {topic_name} Cases & Protocols")
+    if not case_matches and not protocol_matches:
+        st.markdown('<div class="empty-state">No related cases or protocols found yet. Add case anatomy terms and protocol notes to improve matching.</div>', unsafe_allow_html=True)
+        return
+
+    if case_matches:
+        st.markdown("**Cases**")
+        for score, overlap_terms, item in case_matches:
+            case_date_value = item.get("case_date")
+            case_date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
+            st.markdown(
+                f"- **{item.get('procedure_name')}** · {item.get('case_stream')} · {case_date_label} · match {score} ({', '.join(overlap_terms)})",
+                unsafe_allow_html=True,
+            )
+
+    if protocol_matches:
+        st.markdown("**Protocols**")
+        for score, overlap_terms, doc in protocol_matches:
+            doc_id = doc.get("id")
+            doc_bytes = doc.get("file_bytes")
+            if isinstance(doc_bytes, memoryview):
+                doc_bytes = bytes(doc_bytes)
+            st.markdown(
+                f"- **{doc.get('protocol_name')}** · match {score} ({', '.join(overlap_terms)})",
+                unsafe_allow_html=True,
+            )
+            if doc_bytes:
+                st.download_button(
+                    label=f"Download {doc.get('file_name')}",
+                    data=doc_bytes,
+                    file_name=doc.get("file_name") or "protocol.pdf",
+                    mime=doc.get("file_mime") or "application/octet-stream",
+                    key=f"{panel_key}_anatomy_protocol_download_{doc_id}_{topic_name.lower()}",
+                )
 
 
 def weekday_index_to_name(index):
@@ -2408,7 +2670,128 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases"):
+def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
+    st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
+
+    foot_tab, ankle_tab, knee_tab = st.tabs(["Foot", "Ankle", "Knee"])
+
+    with foot_tab:
+        st.markdown("### Osteology")
+        st.markdown(
+            "- Tarsals: talus, calcaneus, navicular, cuboid, and cuneiform complex (medial/intermediate/lateral).\n"
+            "- Metatarsals I-V: base, shaft, and head morphology with functional load transfer through rays.\n"
+            "- Phalanges: hallux with proximal/distal phalanges; lesser toes with proximal/middle/distal segments."
+        )
+        st.markdown("### Soft Tissue and Functional Anatomy")
+        st.markdown(
+            "- Plantar fascia (plantar aponeurosis): key longitudinal arch tension structure via windlass mechanism.\n"
+            "- Intrinsic musculature: lumbricals, interossei, flexor digitorum brevis, abductor hallucis, quadratus plantae.\n"
+            "- Long tendons crossing the foot: tibialis posterior/anterior, peroneus longus/brevis, flexor hallucis longus, flexor digitorum longus."
+        )
+        st.markdown("### Clinical Orientation")
+        st.markdown(
+            "- Medial column stabilization: talonavicular and naviculocuneiform mechanics.\n"
+            "- Lateral column support: calcaneocuboid articulation and peroneal tendon contribution.\n"
+            "- Forefoot loading: first MTP complex and sesamoid apparatus in push-off."
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/9/9d/Gray264.png",
+            caption="Dorsum of foot anatomy (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/8/8d/Gray430.png",
+            caption="Plantar structures and tendon relationships (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        render_anatomy_related_widget(
+            "Foot",
+            ["foot", "plantar", "metatarsal", "hallux", "sesamoid", "fascia", "ray", "midfoot", "forefoot"],
+            surgical_cases,
+            protocol_documents,
+            panel_key=f"{panel_key}_foot",
+        )
+
+    with ankle_tab:
+        st.markdown("### Articulation and Stability")
+        st.markdown(
+            "- Talocrural joint: tibial plafond with talar dome, primary sagittal-plane motion (dorsiflexion/plantarflexion).\n"
+            "- Subtalar joint: talocalcaneal articulation influencing inversion/eversion coupling and hindfoot alignment.\n"
+            "- Distal tibiofibular syndesmosis: AITFL, PITFL, interosseous ligament complex for mortise integrity."
+        )
+        st.markdown("### Ligament Complexes")
+        st.markdown(
+            "- Lateral complex: ATFL, CFL, PTFL.\n"
+            "- Medial (deltoid) complex: superficial and deep components spanning tibionavicular/tibiocalcaneal/tibiotalar fibers.\n"
+            "- Spring ligament (plantar calcaneonavicular): critical for talar head support and medial arch continuity."
+        )
+        st.markdown("### Tendon Compartments")
+        st.markdown(
+            "- Anterior: tibialis anterior, extensor hallucis longus, extensor digitorum longus.\n"
+            "- Medial: tibialis posterior, FDL, FHL (\"Tom, Dick, and Harry\").\n"
+            "- Lateral: peroneus longus and brevis; posterior: Achilles tendon complex."
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/1/18/Gray343.png",
+            caption="Ankle and tarsal region ligament anatomy (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/4/4d/Gray348.png",
+            caption="Ankle tendon pathways and retinacula (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        render_anatomy_related_widget(
+            "Ankle",
+            ["ankle", "achilles", "peroneal", "atfl", "cfl", "deltoid", "syndesmosis", "talocrural", "subtalar"],
+            surgical_cases,
+            protocol_documents,
+            panel_key=f"{panel_key}_ankle",
+        )
+
+    with knee_tab:
+        st.markdown("### Osseous and Articular Anatomy")
+        st.markdown(
+            "- Tibiofemoral articulation: medial/lateral femoral condyles with tibial plateaus.\n"
+            "- Patellofemoral articulation: patellar facets with femoral trochlear groove.\n"
+            "- Menisci: fibrocartilaginous load-sharing and stability structures (medial and lateral menisci)."
+        )
+        st.markdown("### Ligament and Capsular Stabilizers")
+        st.markdown(
+            "- Cruciate ligaments: ACL and PCL for anteroposterior and rotational control.\n"
+            "- Collateral ligaments: MCL and LCL for coronal-plane restraint.\n"
+            "- Posterolateral and posteromedial corner structures for complex rotational stability."
+        )
+        st.markdown("### Myotendinous and Functional Tracks")
+        st.markdown(
+            "- Extensor mechanism: quadriceps tendon, patella, patellar tendon, tibial tubercle.\n"
+            "- Flexor contributors: hamstring group with semimembranosus/ semitendinosus/biceps femoris function.\n"
+            "- Iliotibial band and pes anserinus as key lateral and anteromedial dynamic influences."
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/7/7f/Gray349.png",
+            caption="Knee joint capsule and ligament relationships (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/3/3d/Gray261.png",
+            caption="Anterior knee and extensor mechanism anatomy (public-domain Gray's anatomy plate)",
+            use_container_width=True,
+        )
+        render_anatomy_related_widget(
+            "Knee",
+            ["knee", "acl", "pcl", "meniscus", "mcl", "lcl", "patella", "patellar", "tibiofemoral", "patellofemoral"],
+            surgical_cases,
+            protocol_documents,
+            panel_key=f"{panel_key}_knee",
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases"):
     predicted_days = predicted_or_days(app_settings, horizon_days=120)
     predicted_labels = {day: label for day, label in predicted_days}
     upcoming_predicted = [item for item in predicted_days if item[0] >= date.today()]
@@ -2416,6 +2799,70 @@ def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases")
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
     st.caption("Store procedure name, date, and anatomical location only. Do not enter patient identifiers.")
+
+    st.markdown('<div class="panel-title" style="margin-top:0.5rem;"><h3>Protocol Library</h3><span>Upload and reference BB protocols</span></div>', unsafe_allow_html=True)
+    with st.form(f"{panel_key}_protocol_upload_form"):
+        protocol_surgeon_label = st.text_input("Surgeon label", value=app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"))
+        protocol_name = st.text_input("Protocol title")
+        protocol_notes = st.text_area("Protocol notes", height=80, placeholder="Key steps, pearls, contraindications, follow-up details...")
+        protocol_file = st.file_uploader(
+            "Protocol file",
+            type=["pdf", "doc", "docx", "txt", "md"],
+            key=f"{panel_key}_protocol_file",
+            help="Upload non-PHI protocol documents only.",
+        )
+        protocol_submit = st.form_submit_button("Upload protocol", type="secondary")
+
+    if protocol_submit:
+        if not protocol_file:
+            st.warning("Select a protocol file to upload.")
+        else:
+            file_bytes = protocol_file.getvalue()
+            if len(file_bytes) > 12 * 1024 * 1024:
+                st.warning("File is too large. Keep uploads under 12 MB.")
+            else:
+                add_protocol_document(
+                    surgeon_label=protocol_surgeon_label,
+                    protocol_name=protocol_name,
+                    upload_name=protocol_file.name,
+                    upload_mime=getattr(protocol_file, "type", None),
+                    upload_bytes=file_bytes,
+                    notes=protocol_notes,
+                )
+                st.success("Protocol uploaded.")
+                st.rerun()
+
+    if protocol_documents:
+        for doc in protocol_documents[:12]:
+            doc_id = doc.get("id")
+            doc_bytes = doc.get("file_bytes")
+            if isinstance(doc_bytes, memoryview):
+                doc_bytes = bytes(doc_bytes)
+            st.markdown(
+                f"- <strong>{doc.get('protocol_name')}</strong> · {doc.get('surgeon_label')} · {doc.get('file_name')}",
+                unsafe_allow_html=True,
+            )
+            if doc.get("notes"):
+                st.caption(doc.get("notes"))
+            doc_cols = st.columns([1, 1, 1])
+            with doc_cols[0]:
+                if doc_bytes:
+                    st.download_button(
+                        label="Download",
+                        data=doc_bytes,
+                        file_name=doc.get("file_name") or "protocol.pdf",
+                        mime=doc.get("file_mime") or "application/octet-stream",
+                        key=f"{panel_key}_protocol_download_{doc_id}",
+                    )
+            with doc_cols[1]:
+                if st.button("Delete", key=f"{panel_key}_protocol_delete_{doc_id}"):
+                    delete_protocol_document(doc_id)
+                    st.success("Protocol deleted.")
+                    st.rerun()
+    else:
+        st.markdown('<div class="empty-state">No protocols uploaded yet. Add BB protocols to reference during case prep.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
 
     metrics = st.columns(4)
     planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
@@ -2436,6 +2883,8 @@ def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases")
             anatomical_location = st.text_input("Anatomical location")
             status = st.selectbox("Status", ["planned", "completed", "canceled"])
             notes = st.text_area("Notes (non-PHI)", height=80)
+            education_url = st.text_input("Education link (optional)", placeholder="https://...")
+            education_notes = st.text_area("Educational description", height=90, placeholder="What the case is, key anatomy, technical pearls, postop points...")
             submit_case = st.form_submit_button("Add surgical case", type="primary")
 
         if submit_case:
@@ -2449,6 +2898,8 @@ def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases")
                     anatomical_location=anatomical_location,
                     status=status,
                     notes=notes,
+                    education_url=education_url,
+                    education_notes=education_notes,
                 )
                 st.success("Surgical case saved.")
                 st.rerun()
@@ -2503,6 +2954,32 @@ def render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases")
                 f"<p style='margin-top:0.6rem;'>{item.get('notes') or ''}</p></div>",
                 unsafe_allow_html=True,
             )
+            if item.get("education_url"):
+                st.markdown(f"[Case Education Link]({item.get('education_url')})")
+            if item.get("education_notes"):
+                with st.expander("Educational Description", expanded=False):
+                    st.write(item.get("education_notes"))
+
+            suggestions = suggest_protocols_for_case(item, protocol_documents, max_items=3)
+            if suggestions:
+                st.markdown("**Suggested Protocols**")
+                for score, overlap_terms, doc in suggestions:
+                    doc_id = doc.get("id")
+                    doc_bytes = doc.get("file_bytes")
+                    if isinstance(doc_bytes, memoryview):
+                        doc_bytes = bytes(doc_bytes)
+                    st.markdown(
+                        f"- **{doc.get('protocol_name')}** (match score: {score}) · keywords: {', '.join(overlap_terms)}",
+                        unsafe_allow_html=True,
+                    )
+                    if doc_bytes:
+                        st.download_button(
+                            label=f"Download {doc.get('file_name')}",
+                            data=doc_bytes,
+                            file_name=doc.get("file_name") or "protocol.pdf",
+                            mime=doc.get("file_mime") or "application/octet-stream",
+                            key=f"{panel_key}_case_suggested_download_{case_id}_{doc_id}",
+                        )
             row_cols = st.columns([1, 1, 1])
             with row_cols[0]:
                 new_status = st.selectbox(
@@ -2989,7 +3466,7 @@ with st.sidebar:
     st.markdown("### Navigation")
     current_page = st.radio(
         "Go to",
-        ["Overview", "Personal", "Clinic", "Cases", "Schedule", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
+        ["Overview", "Personal", "Clinic", "Cases", "Schedule", "Anatomy", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
         label_visibility="collapsed",
     )
 
@@ -3044,6 +3521,7 @@ st.markdown('<p class="section-lead">Navigate by lane and workflow area from the
 
 tasks = load_tasks()
 surgical_cases = load_surgical_cases()
+protocol_documents = load_protocol_documents()
 query = (search_query or "").strip().lower()
 all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
 all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
@@ -3136,7 +3614,7 @@ elif current_page == "Clinic":
 
 elif current_page == "Cases":
     render_page_banner("clinic", "Surgical Cases", "Track surgery and TenJet case scheduling without PHI.")
-    render_surgical_cases_panel(surgical_cases, app_settings, panel_key="cases_page")
+    render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases_page")
 
 elif current_page == "Schedule":
     render_page_banner("schedule", "Schedule View", "A timeline-first view for blocking work into realistic chunks.")
@@ -3156,6 +3634,10 @@ elif current_page == "Schedule":
         render_task_list_panel("Scheduled Blocks", "Chronological", scheduled_tasks, "schedule_page", "No scheduled tasks yet.")
     with cols[1]:
         render_task_list_panel("Unscheduled Tasks", "Good candidates for AI auto-schedule", unscheduled_tasks, "unscheduled_page", "Everything is scheduled.")
+
+elif current_page == "Anatomy":
+    render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
+    render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy_page")
 
 elif current_page == "AI":
     render_page_banner("ai", "AI Workbench", "Plan, schedule, and review from one dedicated command center.")
@@ -3348,6 +3830,10 @@ elif current_page == "Settings":
     )
 
     st.markdown("### OR Cadence Defaults")
+    settings_default_surgeon_label = st.text_input(
+        "Default surgeon label",
+        value=app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"),
+    )
     settings_or_fixed_weekday = st.selectbox(
         "Weekly fixed OR day",
         ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
@@ -3389,6 +3875,7 @@ elif current_page == "Settings":
                 "clinic_admin_buffer_minutes": int(settings_admin_buffer),
                 "procedure_block_minutes": int(settings_procedure_block),
                 "personal_focus_minutes": int(settings_focus_minutes),
+                "default_surgeon_label": settings_default_surgeon_label.strip() or "Dr. Braden Boyer (BB)",
                 "or_fixed_weekday": settings_or_fixed_weekday,
                 "or_alternating_days": settings_or_alternating_days,
                 "or_alternating_cycle_offset": int(settings_or_cycle_offset),
