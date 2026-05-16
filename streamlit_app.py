@@ -1065,6 +1065,35 @@ def inject_styles():
             border-radius: 999px;
             background: linear-gradient(135deg, #0f766e, #155eef);
         }
+
+        .page-banner {
+            border-radius: 22px;
+            padding: 1rem 1.15rem;
+            margin: 0 0 1rem;
+            border: 1px solid rgba(18, 33, 45, 0.08);
+            background: rgba(255, 255, 255, 0.58);
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
+        }
+
+        .page-banner h2 {
+            margin: 0;
+            font-size: 1.12rem;
+        }
+
+        .page-banner p {
+            margin: 0.35rem 0 0;
+            color: var(--muted);
+        }
+
+        .page-banner-overview { border-left: 5px solid #0f766e; }
+        .page-banner-personal { border-left: 5px solid #2563eb; }
+        .page-banner-clinic { border-left: 5px solid #7c3aed; }
+        .page-banner-schedule { border-left: 5px solid #d97706; }
+        .page-banner-ai { border-left: 5px solid #155eef; }
+        .page-banner-analytics { border-left: 5px solid #0f172a; }
+        .page-banner-notifications { border-left: 5px solid #dc2626; }
+        .page-banner-review { border-left: 5px solid #db2777; }
+        .page-banner-settings { border-left: 5px solid #475569; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1077,6 +1106,18 @@ def render_hero():
         <div class="hero">
             <h1>DayAnchor</h1>
             <p>A focused task board for personal and clinic work, with optional AI planning and Postgres persistence.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_page_banner(page_key, title, subtitle):
+    st.markdown(
+        f"""
+        <div class="page-banner page-banner-{page_key}">
+            <h2>{title}</h2>
+            <p>{subtitle}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1658,48 +1699,83 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
                 unsafe_allow_html=True,
             )
 
-    if generate_plan_clicked:
-        result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
-        st.session_state.ai_response = result
-        st.session_state.ai_error = error
-        st.session_state.ai_suggestions = suggestions
+    planner_tab, scheduler_tab, review_tab = st.tabs(["Planner", "Scheduler", "Review"])
 
-    if auto_schedule_clicked:
-        schedule_text, schedule_error, schedule_updates = generate_ai_schedule(active_tasks, ai_prompt)
-        st.session_state.ai_schedule_error = schedule_error
-        st.session_state.ai_schedule_updates = schedule_updates
-        if schedule_text:
-            st.session_state.ai_response = schedule_text
+    with planner_tab:
+        st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Plan Builder</h3><span>Ask for a focused day plan or a task rescue plan</span></div>', unsafe_allow_html=True)
+        if generate_plan_clicked:
+            result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
+            st.session_state.ai_response = result
+            st.session_state.ai_error = error
+            st.session_state.ai_suggestions = suggestions
+        if st.session_state.ai_error:
+            st.warning(st.session_state.ai_error)
+        if st.session_state.ai_response:
+            st.markdown(st.session_state.ai_response)
+        if st.session_state.ai_suggestions:
+            st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
+            if st.button("Add Suggested Tasks", type="primary", key=f"{panel_key}_apply_suggested"):
+                apply_ai_suggestions(st.session_state.ai_suggestions)
+                added_count = len(st.session_state.ai_suggestions)
+                st.session_state.ai_suggestions = []
+                st.success(f"Added {added_count} suggested task(s).")
+                st.rerun()
+        if not st.session_state.ai_response and not st.session_state.ai_error:
+            st.markdown('<div class="empty-state">Generate a plan to turn the task board into a sequence of actions.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    with scheduler_tab:
+        st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Scheduler</h3><span>Auto-place work into realistic blocks</span></div>', unsafe_allow_html=True)
+        if auto_schedule_clicked:
+            schedule_text, schedule_error, schedule_updates = generate_ai_schedule(active_tasks, ai_prompt)
+            st.session_state.ai_schedule_error = schedule_error
+            st.session_state.ai_schedule_updates = schedule_updates
+            if schedule_text:
+                st.session_state.ai_response = schedule_text
+        if st.session_state.ai_schedule_error:
+            st.warning(st.session_state.ai_schedule_error)
+        if st.session_state.ai_response:
+            st.markdown(st.session_state.ai_response)
+        if st.session_state.ai_schedule_updates:
+            st.caption(f"Schedule updates detected: {len(st.session_state.ai_schedule_updates)}")
+            if st.button("Apply Auto-Schedule", type="secondary", key=f"{panel_key}_apply_schedule"):
+                apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
+                applied_count = len(st.session_state.ai_schedule_updates)
+                st.session_state.ai_schedule_updates = []
+                st.success(f"Applied {applied_count} schedule update(s).")
+                st.rerun()
+        if st.session_state.ai_schedule_updates:
+            st.markdown("<div class='empty-state' style='text-align:left;'>AI generated schedule updates are ready to apply.</div>", unsafe_allow_html=True)
+        elif not st.session_state.ai_schedule_error:
+            st.markdown('<div class="empty-state">Run auto-schedule to slot tasks into the week.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>AI Output</h3><span>Generated guidance and extracted actions</span></div>', unsafe_allow_html=True)
-    if st.session_state.ai_error:
-        st.warning(st.session_state.ai_error)
-    if st.session_state.ai_schedule_error:
-        st.warning(st.session_state.ai_schedule_error)
-    if st.session_state.ai_response:
-        st.markdown(st.session_state.ai_response)
-    if st.session_state.ai_suggestions:
-        st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
-        if st.button("Add Suggested Tasks", type="primary", key=f"{panel_key}_apply_suggested"):
-            apply_ai_suggestions(st.session_state.ai_suggestions)
-            added_count = len(st.session_state.ai_suggestions)
-            st.session_state.ai_suggestions = []
-            st.success(f"Added {added_count} suggested task(s).")
-            st.rerun()
-    if st.session_state.ai_schedule_updates:
-        st.caption(f"Schedule updates detected: {len(st.session_state.ai_schedule_updates)}")
-        if st.button("Apply Auto-Schedule", type="secondary", key=f"{panel_key}_apply_schedule"):
-            apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
-            applied_count = len(st.session_state.ai_schedule_updates)
-            st.session_state.ai_schedule_updates = []
-            st.success(f"Applied {applied_count} schedule update(s).")
-            st.rerun()
-    if not st.session_state.ai_response and not st.session_state.ai_error:
-        st.markdown('<div class="empty-state">AI planner is ready when you are. Pick a prompt preset or write a custom brief.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with review_tab:
+        st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Review Lens</h3><span>Use AI as a fast retrospective and tomorrow planner</span></div>', unsafe_allow_html=True)
+        review_input = st.text_area(
+            "Review notes",
+            value="Highlight what slipped today, what got done, and what should happen first tomorrow.",
+            height=100,
+            key=f"{panel_key}_review_prompt",
+        )
+        if st.button("Generate Review Summary", key=f"{panel_key}_gen_review", type="primary"):
+            completed_today_tasks = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == date.today()]
+            review_text, tomorrow_text, review_error = generate_daily_review(active_tasks, completed_today_tasks, review_input)
+            st.session_state.daily_review_text = review_text
+            st.session_state.tomorrow_plan_text = tomorrow_text
+            st.session_state.daily_review_error = review_error
+        if st.session_state.daily_review_error:
+            st.warning(st.session_state.daily_review_error)
+        if st.session_state.daily_review_text:
+            st.markdown(st.session_state.daily_review_text)
+        if st.session_state.tomorrow_plan_text:
+            st.markdown(st.session_state.tomorrow_plan_text)
+        if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
+            st.markdown('<div class="empty-state">Use the review tab to close out the day and draft tomorrow.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1866,6 +1942,7 @@ if len(filtered_tasks) != len(tasks):
     st.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
 if current_page == "Overview":
+    render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     left, right = st.columns([1.1, 1], gap="large")
@@ -1885,6 +1962,7 @@ if current_page == "Overview":
         render_task_list_panel("Clinic lane", "Active tasks", clinic_tasks, "overview_clinic", "No clinic tasks yet.")
 
 elif current_page == "Personal":
+    render_page_banner("personal", "Personal Lane", "Private tasks, self-management, and low-friction planning.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     left, right = st.columns([1, 1.2], gap="large")
@@ -1894,6 +1972,7 @@ elif current_page == "Personal":
         render_task_list_panel("Personal Tasks", "Your personal workflow", personal_tasks, "personal_page", "No personal tasks match your filters.")
 
 elif current_page == "Clinic":
+    render_page_banner("clinic", "Clinic Lane", "Operational work, patient-facing tasks, and service flow.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     left, right = st.columns([1, 1.2], gap="large")
@@ -1903,6 +1982,7 @@ elif current_page == "Clinic":
         render_task_list_panel("Clinic Tasks", "Operational and patient-facing work", clinic_tasks, "clinic_page", "No clinic tasks match your filters.")
 
 elif current_page == "Schedule":
+    render_page_banner("schedule", "Schedule View", "A timeline-first view for blocking work into realistic chunks.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_timeline_panel(scheduled_tasks, timeline_days)
@@ -1916,6 +1996,7 @@ elif current_page == "Schedule":
         render_task_list_panel("Unscheduled Tasks", "Good candidates for AI auto-schedule", unscheduled_tasks, "unscheduled_page", "Everything is scheduled.")
 
 elif current_page == "AI":
+    render_page_banner("ai", "AI Workbench", "Plan, schedule, and review from one dedicated command center.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_ai_panel(filtered_tasks, active_tasks, panel_key="ai_page")
@@ -1924,6 +2005,7 @@ elif current_page == "AI":
     render_task_list_panel("Blocked Tasks", "AI can help unblock these", [task for task in active_tasks if task.get("status") == "blocked"], "ai_blocked", "No blocked tasks right now.")
 
 elif current_page == "Analytics":
+    render_page_banner("analytics", "Analytics Board", "A quicker read on workload, execution, and bottlenecks.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -1958,6 +2040,7 @@ elif current_page == "Analytics":
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif current_page == "Notifications":
+    render_page_banner("notifications", "Alerts", "A focused triage board for overdue, blocked, and unscheduled work.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
@@ -1994,6 +2077,7 @@ elif current_page == "Notifications":
         render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
 
 elif current_page == "Daily Review":
+    render_page_banner("review", "Daily Review", "Close the loop on today and draft the next move.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
@@ -2029,6 +2113,7 @@ elif current_page == "Daily Review":
     render_task_list_panel("Completed Today", "What you finished", completed_today_all, "daily_completed", "No tasks completed today yet.")
 
 elif current_page == "Settings":
+    render_page_banner("settings", "Settings", "Tune the defaults that shape capture, scheduling, and timelines.")
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
