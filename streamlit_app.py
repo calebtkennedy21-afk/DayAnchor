@@ -911,13 +911,28 @@ def render_task_calendar_compact(tasks, month_anchor):
             due_count = due_by_day.get(day, 0)
             scheduled_count = scheduled_by_day.get(day, 0)
             completed_count = completed_by_day.get(day, 0)
-            parts = [f"**{day.day}**"]
+            load_score = due_count + scheduled_count
+            if load_score >= 6:
+                day_bg = "rgba(185, 28, 28, 0.14)"
+            elif load_score >= 4:
+                day_bg = "rgba(217, 119, 6, 0.16)"
+            elif load_score >= 2:
+                day_bg = "rgba(37, 99, 235, 0.12)"
+            else:
+                day_bg = "rgba(148, 163, 184, 0.08)"
+
+            parts = [
+                f"<span style='display:inline-block; font-weight:700; padding:0.1rem 0.4rem; border-radius:999px; background:{day_bg};'>{day.day}</span>"
+            ]
             if scheduled_count:
-                parts.append(f"S{scheduled_count}")
+                sched_bg = "#dbeafe" if scheduled_count < 3 else "#93c5fd"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{sched_bg}; color:#1e3a8a; font-size:0.76rem;'>S{scheduled_count}</span>")
             if due_count:
-                parts.append(f"D{due_count}")
+                due_bg = "#fee2e2" if due_count < 3 else "#fca5a5"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{due_bg}; color:#991b1b; font-size:0.76rem;'>D{due_count}</span>")
             if completed_count:
-                parts.append(f"C{completed_count}")
+                done_bg = "#dcfce7" if completed_count < 3 else "#86efac"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{done_bg}; color:#166534; font-size:0.76rem;'>C{completed_count}</span>")
 
             cells.append("<br>".join(parts))
 
@@ -929,7 +944,7 @@ def render_task_calendar_compact(tasks, month_anchor):
 def render_task_calendar_panel(tasks, panel_key, title, subtitle):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
-    st.caption("Legend: S = scheduled tasks, D = tasks due, C = tasks completed")
+    st.caption("Legend: S = scheduled tasks, D = tasks due, C = tasks completed. Darker day badges indicate heavier total load.")
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st.session_state:
