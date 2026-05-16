@@ -348,8 +348,8 @@ def generate_ai_plan(tasks, user_prompt):
                 {
                     "role": "system",
                     "content": (
-                        "You are DayAnchor AI planner. Create practical, concise planning guidance "
-                        "using the provided tasks. Focus on priority, due dates, and schedule blocks."
+                        "You are DayAnchor AI planner. Build an execution-focused plan that feels like a senior ops assistant. "
+                        "Prioritize concrete next actions, realistic sequencing, and risk management. Avoid generic motivation."
                     ),
                 },
                 {
@@ -358,11 +358,13 @@ def generate_ai_plan(tasks, user_prompt):
                         f"User request: {user_prompt}\n\n"
                         "Current tasks:\n"
                         f"{task_snapshot}\n\n"
-                        "Return:\n"
-                        "1) A short prioritized plan for today\n"
-                        "2) Scheduling adjustments if needed\n"
-                        "3) Any blockers or risks\n"
-                        "4) A JSON code block with this exact shape:\n"
+                        "Return a structured response with these sections exactly:\n"
+                        "## Executive Summary\n"
+                        "## Focus Blocks for Today\n"
+                        "## Risks and Blockers\n"
+                        "## Suggested Task Additions\n"
+                        "## JSON Payload\n"
+                        "The JSON block must use this exact shape:\n"
                         "```json\n"
                         "{\n"
                         "  \"suggested_tasks\": [\n"
@@ -379,7 +381,7 @@ def generate_ai_plan(tasks, user_prompt):
                         "  ]\n"
                         "}\n"
                         "```\n"
-                        "Keep suggested_tasks to at most 3 items."
+                        "Keep suggested_tasks to at most 3 items and make them realistic follow-up tasks, not duplicates of the existing board."
                     ),
                 },
             ],
@@ -425,8 +427,8 @@ def generate_ai_schedule(tasks, user_prompt):
                 {
                     "role": "system",
                     "content": (
-                        "You are a precise scheduling assistant. Create realistic schedule blocks "
-                        "for active tasks and return strict JSON."
+                        "You are a precise scheduling assistant. Build a realistic day plan around the existing board "
+                        "without overbooking or ignoring priority order. Return concise rationale plus strict JSON."
                     ),
                 },
                 {
@@ -448,7 +450,7 @@ def generate_ai_schedule(tasks, user_prompt):
                         "  ]\n"
                         "}\n"
                         "```\n"
-                        "Do not include completed tasks."
+                        "Do not include completed tasks. Favor the most important unscheduled or overdue work first."
                     ),
                 },
             ],
@@ -962,6 +964,107 @@ def inject_styles():
             color: var(--muted);
             text-align: center;
         }
+
+        .ai-shell {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .ai-hero {
+            background:
+                radial-gradient(circle at top right, rgba(255, 255, 255, 0.22), transparent 24%),
+                linear-gradient(135deg, rgba(15, 118, 110, 0.98), rgba(21, 94, 239, 0.96));
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .ai-hero .panel-title h3,
+        .ai-hero .panel-title span,
+        .ai-hero p,
+        .ai-hero li,
+        .ai-hero label {
+            color: white !important;
+        }
+
+        .ai-stat-card {
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        }
+
+        .ai-stat-label {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            opacity: 0.84;
+        }
+
+        .ai-stat-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.55rem;
+            font-weight: 700;
+            margin-top: 0.2rem;
+        }
+
+        .ai-stat-note {
+            margin-top: 0.25rem;
+            font-size: 0.86rem;
+            opacity: 0.9;
+        }
+
+        .ai-command {
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(18, 33, 45, 0.08);
+        }
+
+        .ai-chip-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin: 0.3rem 0 0.8rem;
+        }
+
+        .ai-chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.35rem 0.7rem;
+            background: rgba(15, 23, 42, 0.06);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            color: #12212d;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .ai-response-card {
+            background: rgba(255, 255, 255, 0.86);
+            border: 1px solid rgba(18, 33, 45, 0.08);
+        }
+
+        .ai-list {
+            list-style: none;
+            margin: 0.55rem 0 0;
+            padding: 0;
+        }
+
+        .ai-list li {
+            margin-bottom: 0.55rem;
+            padding-left: 0.9rem;
+            position: relative;
+        }
+
+        .ai-list li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.55rem;
+            width: 0.45rem;
+            height: 0.45rem;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #0f766e, #155eef);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1348,6 +1451,60 @@ def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_t
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def ai_workbench_summary(tasks, active_tasks):
+    today = date.today()
+    soon = today + timedelta(days=3)
+    overdue = [task for task in active_tasks if task.get("due_date") and task["due_date"] < today]
+    due_today = [task for task in active_tasks if task.get("due_date") == today]
+    due_soon = [task for task in active_tasks if task.get("due_date") and today <= task["due_date"] <= soon]
+    blocked = [task for task in active_tasks if task.get("status") == "blocked"]
+    unscheduled_high = [
+        task
+        for task in active_tasks
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
+    ]
+    in_progress = [task for task in active_tasks if task.get("status") == "in_progress"]
+    completed_today = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == today]
+
+    if overdue:
+        recommended = sorted(overdue, key=lambda task: (task.get("due_date") or date.min, priority_rank(task.get("priority"))))[0]
+        focus_label = f"Overdue: {recommended.get('title')}"
+    elif due_today:
+        recommended = sorted(due_today, key=lambda task: (priority_rank(task.get("priority")), task.get("scheduled_time") or time(23, 59)))[0]
+        focus_label = f"Due today: {recommended.get('title')}"
+    elif unscheduled_high:
+        recommended = sorted(unscheduled_high, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        focus_label = f"High priority and unscheduled: {recommended.get('title')}"
+    elif blocked:
+        recommended = sorted(blocked, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        focus_label = f"Blocked first: {recommended.get('title')}"
+    elif in_progress:
+        recommended = sorted(in_progress, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        focus_label = f"Keep moving: {recommended.get('title')}"
+    elif active_tasks:
+        recommended = sorted(active_tasks, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        focus_label = f"Best next task: {recommended.get('title')}"
+    else:
+        recommended = None
+        focus_label = "No active tasks right now."
+
+    return {
+        "active_count": len(active_tasks),
+        "overdue_count": len(overdue),
+        "due_today_count": len(due_today),
+        "due_soon_count": len(due_soon),
+        "blocked_count": len(blocked),
+        "unscheduled_high_count": len(unscheduled_high),
+        "completed_today_count": len(completed_today),
+        "focus_label": focus_label,
+        "recommended_task": recommended,
+        "overdue": overdue[:3],
+        "due_soon": due_soon[:3],
+        "blocked": blocked[:3],
+        "unscheduled_high": unscheduled_high[:3],
+    }
+
+
 def render_add_task_panel(form_key, defaults, default_category=None):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Add Task</h3><span>Quick capture</span></div>', unsafe_allow_html=True)
@@ -1423,15 +1580,83 @@ def render_add_task_panel(form_key, defaults, default_category=None):
 
 
 def render_ai_panel(tasks, active_tasks, panel_key="main"):
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>AI Planner</h3><span>Task-aware guidance</span></div>', unsafe_allow_html=True)
-    default_prompt = "Give me a focused plan for today."
-    ai_prompt = st.text_area("Ask AI", value=default_prompt, height=90, key=f"{panel_key}_ai_prompt")
-    action_cols = st.columns(2)
-    with action_cols[0]:
-        generate_plan_clicked = st.button("Generate AI Plan", key=f"{panel_key}_gen")
-    with action_cols[1]:
-        auto_schedule_clicked = st.button("Auto-Schedule Tasks", key=f"{panel_key}_auto")
+    summary = ai_workbench_summary(tasks, active_tasks)
+    prompt_key = f"{panel_key}_ai_prompt"
+    default_prompt = "Build a focused plan for today and call out the first two actions I should take."
+    if prompt_key not in st.session_state:
+        st.session_state[prompt_key] = default_prompt
+
+    st.markdown('<div class="ai-shell">', unsafe_allow_html=True)
+    st.markdown(
+        "<div class='panel ai-hero'>"
+        "<div class='panel-title'><h3>AI Workbench</h3><span>Planning, scheduling, and review in one command center</span></div>"
+        f"<p>AI sees {summary['active_count']} active tasks, {summary['overdue_count']} overdue items, and {summary['unscheduled_high_count']} high-priority tasks still waiting for a slot.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    stat_cols = st.columns(4)
+    stat_payload = [
+        ("Active", summary["active_count"], summary["focus_label"]),
+        ("Due today", summary["due_today_count"], "Use this for immediate triage."),
+        ("Overdue", summary["overdue_count"], "These should dominate the plan."),
+        ("Completed today", summary["completed_today_count"], "Useful for closing the loop."),
+    ]
+    for col, (label, value, note) in zip(stat_cols, stat_payload):
+        with col:
+            st.markdown(
+                f"<div class='ai-stat-card'><div class='ai-stat-label'>{label}</div><div class='ai-stat-value'>{value}</div><div class='ai-stat-note'>{note}</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('<div class="panel ai-command">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Prompt Studio</h3><span>Shape the output before you generate it</span></div>', unsafe_allow_html=True)
+    command_col, insight_col = st.columns([1.35, 1], gap="large")
+    presets = [
+        ("Today focus", "Build a focused plan for today, sorted by urgency and energy cost."),
+        ("Rescue mode", "I need help recovering from a messy day. Prioritize overdue, blocked, and unscheduled high-priority work."),
+        ("Clinic shift", "Organize this like a clinic operations block with practical sequencing and low-friction tasks first."),
+        ("Schedule pass", "Reschedule the active tasks into realistic blocks and flag anything that should be deferred."),
+    ]
+    with command_col:
+        preset_cols = st.columns(2)
+        for idx, (label, prompt) in enumerate(presets):
+            if preset_cols[idx % 2].button(label, key=f"{panel_key}_preset_{idx}"):
+                st.session_state[prompt_key] = prompt
+                st.rerun()
+        ai_prompt = st.text_area("Ask AI", height=120, key=prompt_key)
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            generate_plan_clicked = st.button("Generate AI Plan", key=f"{panel_key}_gen", type="primary")
+        with action_cols[1]:
+            auto_schedule_clicked = st.button("Auto-Schedule Tasks", key=f"{panel_key}_auto")
+
+    with insight_col:
+        st.markdown('<div class="panel-title"><h3>What AI sees</h3><span>Operational signals used for planning</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<div class='ai-chip-grid'>"
+            f"<span class='ai-chip'>Due soon: {summary['due_soon_count']}</span>"
+            f"<span class='ai-chip'>Blocked: {summary['blocked_count']}</span>"
+            f"<span class='ai-chip'>High priority unscheduled: {summary['unscheduled_high_count']}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        insight_lines = [
+            f"Best next move: {summary['focus_label']}",
+            f"Due soon (3 days): {summary['due_soon_count']}",
+            f"Blocked tasks: {summary['blocked_count']}",
+            f"High-priority unscheduled: {summary['unscheduled_high_count']}",
+        ]
+        st.markdown("<ul class='ai-list'>" + "".join(f"<li>{line}</li>" for line in insight_lines) + "</ul>", unsafe_allow_html=True)
+        if summary["recommended_task"]:
+            recommended = summary["recommended_task"]
+            st.markdown(
+                "<div class='empty-state' style='text-align:left; margin-top:0.85rem;'>"
+                f"<strong>Recommended task:</strong> {recommended.get('title')}<br />"
+                f"{recommended.get('priority', '').title()} priority, due {format_due(recommended)}, status {status_label(recommended.get('status', 'todo'))}."
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
     if generate_plan_clicked:
         result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
@@ -1446,6 +1671,10 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
         if schedule_text:
             st.session_state.ai_response = schedule_text
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>AI Output</h3><span>Generated guidance and extracted actions</span></div>', unsafe_allow_html=True)
     if st.session_state.ai_error:
         st.warning(st.session_state.ai_error)
     if st.session_state.ai_schedule_error:
@@ -1469,7 +1698,9 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
             st.success(f"Applied {applied_count} schedule update(s).")
             st.rerun()
     if not st.session_state.ai_response and not st.session_state.ai_error:
-        st.markdown('<div class="empty-state">AI planner is ready when you are.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state">AI planner is ready when you are. Pick a prompt preset or write a custom brief.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
