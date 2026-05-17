@@ -3202,6 +3202,48 @@ def render_settings_panel(app_settings, panel_key="settings"):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="analytics"):
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    analytics_cols = st.columns(4)
+    analytics_cols[0].metric("Clinic active", len([task for task in active_tasks if task.get("category") == "Clinic"]))
+    analytics_cols[1].metric("Personal active", len([task for task in active_tasks if task.get("category") == "Personal"]))
+    analytics_cols[2].metric("Clinic overdue", len([task for task in overdue_tasks if task.get("category") == "Clinic"]))
+    analytics_cols[3].metric("High unscheduled", len([task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]))
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Analytics</h3><span>Snapshot of workload and execution</span></div>', unsafe_allow_html=True)
+
+    status_counts = {
+        "Todo": len([task for task in tasks if task.get("status") == "todo"]),
+        "In Progress": len([task for task in tasks if task.get("status") == "in_progress"]),
+        "Blocked": len([task for task in tasks if task.get("status") == "blocked"]),
+        "Completed": len([task for task in tasks if task.get("status") == "completed"]),
+    }
+    category_counts = {
+        "Personal": len([task for task in tasks if task.get("category") == "Personal"]),
+        "Clinic": len([task for task in tasks if task.get("category") == "Clinic"]),
+    }
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("By Status")
+        st.bar_chart(status_counts)
+    with col_b:
+        st.subheader("By Category")
+        st.bar_chart(category_counts)
+
+    upcoming_3_days = len([task for task in active_tasks if task.get("due_date") and task["due_date"] <= (date.today() + timedelta(days=3))])
+    recurring_count = len([task for task in active_tasks if task.get("recurrence_rule") in ("daily", "weekly")])
+    insight_cols = st.columns(3)
+    insight_cols[0].metric("Overdue", len(overdue_tasks))
+    insight_cols[1].metric("Due in 3 Days", upcoming_3_days)
+    insight_cols[2].metric("Recurring Active", recurring_count)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
