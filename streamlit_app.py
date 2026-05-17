@@ -3974,7 +3974,29 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             st.rerun()
 
     st.markdown('<div class="panel-title" style="margin-top:0.75rem;"><h3>Week Planner</h3><span>Move tasks into the week one day at a time</span></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel-title" style="margin-top:0.5rem;"><h3>Week Calendar</h3><span>Persistent 7-day view of what is already scheduled</span></div>', unsafe_allow_html=True)
+    planner_cols = st.columns(7)
+    for index, day in enumerate(week_days):
+        with planner_cols[index]:
+            st.markdown(
+                f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span></div>",
+                unsafe_allow_html=True,
+            )
+            if scheduled_by_day[day]:
+                for task in scheduled_by_day[day][:3]:
+                    scheduled_time = task.get("scheduled_time")
+                    time_label = scheduled_time.strftime("%I:%M %p").lstrip("0") if scheduled_time else "Any time"
+                    span_label = f"{task['title']} · {time_label}" if scheduled_span_position(task, day) == "start" else None
+                    st.markdown(render_span_block(task, day, label_text=span_label, compact=True), unsafe_allow_html=True)
+                if len(scheduled_by_day[day]) > 3:
+                    st.caption(f"+ {len(scheduled_by_day[day]) - 3} more")
+            else:
+                st.caption("No blocks yet.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
     if ranked_tasks:
+        st.markdown('<div class="panel-title" style="margin-top:0.75rem;"><h3>Placement Controls</h3><span>Pin an unscheduled task into the week calendar</span></div>', unsafe_allow_html=True)
         selected_task_id = st.selectbox(
             "Task to place",
             [task["id"] for task in ranked_tasks],
@@ -3989,24 +4011,9 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             ),
         )
         st.caption("Use the buttons below to pin the selected task into a day, then fine-tune it in the list panel.")
-        planner_cols = st.columns(7)
+        placement_cols = st.columns(7)
         for index, day in enumerate(week_days):
-            with planner_cols[index]:
-                st.markdown(
-                    f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span></div>",
-                    unsafe_allow_html=True,
-                )
-                if scheduled_by_day[day]:
-                    for task in scheduled_by_day[day][:3]:
-                        scheduled_time = task.get("scheduled_time")
-                        time_label = scheduled_time.strftime("%I:%M %p").lstrip("0") if scheduled_time else "Any time"
-                        span_label = f"{task['title']} · {time_label}" if scheduled_span_position(task, day) == "start" else None
-                        st.markdown(render_span_block(task, day, label_text=span_label, compact=True), unsafe_allow_html=True)
-                    if len(scheduled_by_day[day]) > 3:
-                        st.caption(f"+ {len(scheduled_by_day[day]) - 3} more")
-                else:
-                    st.caption("No blocks yet.")
-
+            with placement_cols[index]:
                 place_label = "Place here"
                 if st.button(place_label, key=f"{panel_key}_place_day_{day.isoformat()}", disabled=not ranked_tasks):
                     target = next((task for task in ranked_tasks if task["id"] == selected_task_id), None)
@@ -4019,7 +4026,6 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                         )
                         st.success(f"Placed '{target['title']}' on {day.strftime('%a %b %d')}.")
                         st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="empty-state">No unscheduled tasks are waiting for placement this week.</div>', unsafe_allow_html=True)
 
