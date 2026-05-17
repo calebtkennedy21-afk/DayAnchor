@@ -52,6 +52,10 @@ if "surgical_cases" not in st.session_state:
     st.session_state.surgical_cases = []
 if "protocol_documents" not in st.session_state:
     st.session_state.protocol_documents = []
+if "personal_goals" not in st.session_state:
+    st.session_state.personal_goals = []
+if "personal_goal_checkins" not in st.session_state:
+    st.session_state.personal_goal_checkins = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -640,6 +644,33 @@ def initialize_database():
                             id INTEGER PRIMARY KEY,
                             payload TEXT NOT NULL,
                             updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS personal_goals (
+                            id BIGSERIAL PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            target_frequency INTEGER NOT NULL DEFAULT 3,
+                            notes TEXT NOT NULL DEFAULT '',
+                            reminder_days TEXT NOT NULL DEFAULT '[]',
+                            status TEXT NOT NULL DEFAULT 'active',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute("ALTER TABLE personal_goals ADD COLUMN IF NOT EXISTS reminder_days TEXT NOT NULL DEFAULT '[]'")
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS personal_goal_checkins (
+                            id BIGSERIAL PRIMARY KEY,
+                            goal_id BIGINT NOT NULL REFERENCES personal_goals(id) ON DELETE CASCADE,
+                            checked_in_date DATE NOT NULL,
+                            note TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL,
+                            UNIQUE(goal_id, checked_in_date)
                         )
                         """
                     )
@@ -2173,6 +2204,309 @@ def delete_task(task_id):
     st.session_state.tasks = [task for task in st.session_state.tasks if task["id"] != task_id]
 
 
+def personal_goal_week_start(reference_date=None):
+    anchor = reference_date or date.today()
+    return anchor - timedelta(days=anchor.weekday())
+
+
+PERSONAL_GOAL_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def personal_goal_normalize_reminder_days(raw_days):
+    if not raw_days:
+        return []
+    if isinstance(raw_days, str):
+        candidate = raw_days.strip()
+        if not candidate:
+            return []
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                raw_days = parsed
+            else:
+                raw_days = [candidate]
+        except json.JSONDecodeError:
+            raw_days = [part.strip() for part in candidate.split(",") if part.strip()]
+    normalized = []
+    for day in raw_days:
+        if day in PERSONAL_GOAL_WEEKDAY_NAMES and day not in normalized:
+            normalized.append(day)
+    return normalized
+
+
+def personal_goal_reminder_days_label(reminder_days):
+    normalized = personal_goal_normalize_reminder_days(reminder_days)
+    return ", ".join(day[:3] for day in normalized) if normalized else "No reminders"
+
+
+def _enrich_personal_goals(goals, checkins):
+    week_start = personal_goal_week_start()
+    checkins_by_goal = {}
+    for checkin in checkins:
+        goal_id = checkin.get("goal_id")
+        if goal_id is None:
+            continue
+        checkins_by_goal.setdefault(goal_id, []).append(checkin)
+
+    enriched_goals = []
+    for goal in goals:
+        goal_checkins = checkins_by_goal.get(goal.get("id"), [])
+        goal_checkin_dates = sorted({item.get("checked_in_date") for item in goal_checkins if item.get("checked_in_date")})
+        week_checkins = [item for item in goal_checkins if item.get("checked_in_date") and item["checked_in_date"] >= week_start]
+        last_check_in_date = max([item.get("checked_in_date") for item in goal_checkins if item.get("checked_in_date")], default=None)
+        reminder_days = personal_goal_normalize_reminder_days(goal.get("reminder_days"))
+        reminder_today = date.today().strftime("%A") in reminder_days
+        current_streak = 0
+        if goal_checkin_dates:
+            cursor = goal_checkin_dates[-1]
+            current_streak = 1
+            while (cursor - timedelta(days=1)) in goal_checkin_dates:
+                cursor -= timedelta(days=1)
+                current_streak += 1
+        best_streak = 0
+        run_length = 0
+        previous_day = None
+        for checkin_day in goal_checkin_dates:
+            if previous_day and checkin_day == previous_day + timedelta(days=1):
+                run_length += 1
+            else:
+                run_length = 1
+            best_streak = max(best_streak, run_length)
+            previous_day = checkin_day
+        enriched_goal = dict(goal)
+        enriched_goal["total_checkins"] = len(goal_checkins)
+        enriched_goal["week_checkins"] = len(week_checkins)
+        enriched_goal["last_check_in_date"] = last_check_in_date
+        enriched_goal["today_checked_in"] = any(item.get("checked_in_date") == date.today() for item in goal_checkins)
+        enriched_goal["current_streak"] = current_streak
+        enriched_goal["best_streak"] = best_streak
+        enriched_goal["reminder_days"] = reminder_days
+        enriched_goal["reminder_days_label"] = personal_goal_reminder_days_label(reminder_days)
+        enriched_goal["reminder_today"] = reminder_today
+        enriched_goals.append(enriched_goal)
+    return enriched_goals
+
+
+def personal_goal_dashboard_summary(personal_goals):
+    active_goals = [goal for goal in personal_goals if goal.get("status", "active") == "active"]
+    on_track_goals = [goal for goal in active_goals if int(goal.get("week_checkins") or 0) >= int(goal.get("target_frequency") or 1)]
+    attention_goals = [goal for goal in active_goals if int(goal.get("week_checkins") or 0) < int(goal.get("target_frequency") or 1)]
+    streak_leader = max(
+        active_goals,
+        key=lambda goal: (
+            int(goal.get("current_streak") or 0),
+            int(goal.get("week_checkins") or 0),
+            int(goal.get("total_checkins") or 0),
+        ),
+    ) if active_goals else None
+    reminder_goals = sorted(
+        attention_goals,
+        key=lambda goal: (
+            bool(goal.get("today_checked_in")),
+            int(goal.get("target_frequency") or 1) - int(goal.get("week_checkins") or 0),
+            -int(goal.get("current_streak") or 0),
+        ),
+    )
+    return {
+        "active_goals": active_goals,
+        "on_track_goals": on_track_goals,
+        "attention_goals": attention_goals,
+        "reminder_goals": reminder_goals,
+        "streak_leader": streak_leader,
+        "week_checkins": sum(int(goal.get("week_checkins") or 0) for goal in active_goals),
+        "total_checkins": sum(int(goal.get("total_checkins") or 0) for goal in active_goals),
+    }
+
+
+def load_personal_goals():
+    if not db_enabled():
+        return _enrich_personal_goals(st.session_state.personal_goals, st.session_state.personal_goal_checkins)
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        title,
+                        category,
+                        target_frequency,
+                        notes,
+                        reminder_days,
+                        status,
+                        created_date
+                    FROM personal_goals
+                    ORDER BY created_date DESC, id DESC
+                    """
+                )
+                goals = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        goal_id,
+                        checked_in_date,
+                        note,
+                        created_date
+                    FROM personal_goal_checkins
+                    ORDER BY checked_in_date DESC, id DESC
+                    """
+                )
+                checkins = cur.fetchall()
+                return _enrich_personal_goals(goals, checkins)
+    except psycopg.Error:
+        return _enrich_personal_goals(st.session_state.personal_goals, st.session_state.personal_goal_checkins)
+
+
+def load_personal_goal_checkins():
+    if not db_enabled():
+        return list(st.session_state.personal_goal_checkins)
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        goal_id,
+                        checked_in_date,
+                        note,
+                        created_date
+                    FROM personal_goal_checkins
+                    ORDER BY checked_in_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st.session_state.personal_goal_checkins)
+
+
+def add_personal_goal(title, category, target_frequency, notes="", reminder_days=None):
+    title_value = title.strip()
+    category_value = category.strip()
+    notes_value = notes.strip()
+    target_value = max(1, int(target_frequency or 1))
+    reminder_days_value = personal_goal_normalize_reminder_days(reminder_days)
+    if not title_value or not category_value:
+        return
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO personal_goals (
+                        title,
+                        category,
+                        target_frequency,
+                        notes,
+                        reminder_days,
+                        status,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, 'active', %s)
+                    """,
+                    (
+                        title_value,
+                        category_value,
+                        target_value,
+                        notes_value,
+                        json.dumps(reminder_days_value),
+                        date.today(),
+                    ),
+                )
+        return
+
+    st.session_state.personal_goals.append(
+        {
+            "id": len(st.session_state.personal_goals) + 1,
+            "title": title_value,
+            "category": category_value,
+            "target_frequency": target_value,
+            "notes": notes_value,
+            "reminder_days": reminder_days_value,
+            "status": "active",
+            "created_date": date.today(),
+        }
+    )
+
+
+def update_personal_goal(goal_id, **fields):
+    allowed_fields = {"title", "category", "target_frequency", "notes", "status", "reminder_days"}
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if "target_frequency" in sanitized:
+        sanitized["target_frequency"] = max(1, int(sanitized["target_frequency"] or 1))
+    if "reminder_days" in sanitized:
+        sanitized["reminder_days"] = json.dumps(personal_goal_normalize_reminder_days(sanitized["reminder_days"]))
+
+    if db_enabled():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(goal_id)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE personal_goals SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    for goal in st.session_state.personal_goals:
+        if goal.get("id") == goal_id:
+            if "reminder_days" in sanitized:
+                sanitized["reminder_days"] = personal_goal_normalize_reminder_days(sanitized["reminder_days"])
+            goal.update(sanitized)
+            return
+
+
+def delete_personal_goal(goal_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM personal_goals WHERE id = %s", (goal_id,))
+        return
+    st.session_state.personal_goals = [goal for goal in st.session_state.personal_goals if goal.get("id") != goal_id]
+    st.session_state.personal_goal_checkins = [checkin for checkin in st.session_state.personal_goal_checkins if checkin.get("goal_id") != goal_id]
+
+
+def log_personal_goal_checkin(goal_id, note=""):
+    checkin_date = date.today()
+    note_value = note.strip()
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO personal_goal_checkins (
+                        goal_id,
+                        checked_in_date,
+                        note,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (goal_id, checked_in_date) DO NOTHING
+                    """,
+                    (goal_id, checkin_date, note_value, date.today()),
+                )
+        return
+
+    if any(checkin.get("goal_id") == goal_id and checkin.get("checked_in_date") == checkin_date for checkin in st.session_state.personal_goal_checkins):
+        return
+    st.session_state.personal_goal_checkins.append(
+        {
+            "id": len(st.session_state.personal_goal_checkins) + 1,
+            "goal_id": goal_id,
+            "checked_in_date": checkin_date,
+            "note": note_value,
+            "created_date": date.today(),
+        }
+    )
+
+
 def get_task_by_id(task_id):
     if db_enabled():
         with get_connection() as conn:
@@ -2991,6 +3325,224 @@ def render_personal_one_thing(personal_tasks, panel_key):
                 '<div class="empty-state">No personal tasks ready to pin. Capture one above.</div>',
                 unsafe_allow_html=True,
             )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_personal_goal_reminders_panel(personal_goals, panel_key="personal_goal_reminders"):
+    summary = personal_goal_dashboard_summary(personal_goals)
+    reminder_goals = summary["reminder_goals"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Goal Reminders</h3><span>What needs attention before the week closes</span></div>', unsafe_allow_html=True)
+    if reminder_goals:
+        for goal in reminder_goals[:5]:
+            missing = max(0, int(goal.get("target_frequency") or 1) - int(goal.get("week_checkins") or 0))
+            reminder_text = "Check in today" if goal.get("reminder_today") and not goal.get("today_checked_in") else "Already checked in today" if goal.get("today_checked_in") else "Scheduled reminder this week"
+            st.markdown(
+                f"<div class='task-card' style='margin-bottom:0.75rem;'><div class='task-title' style='font-size:1rem;'>{goal.get('title')}</div>"
+                f"<div class='task-meta'><span class='pill pill-category'>{goal.get('category')}</span><span class='pill'>Need {missing} more this week</span><span class='pill'>Current streak: {int(goal.get('current_streak') or 0)}</span><span class='pill'>Remind: {goal.get('reminder_days_label') or 'None'}</span></div>"
+                f"<div style='margin-top:0.4rem; color:#475467;'>{reminder_text}</div></div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown('<div class="empty-state">No reminders right now. Your active goals are on pace for the week.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_personal_goal_review_panel(personal_goals, panel_key="personal_goal_review"):
+    summary = personal_goal_dashboard_summary(personal_goals)
+    active_goals = summary["active_goals"]
+    streak_leader = summary["streak_leader"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Weekly Review</h3><span>Track progress across fitness, reading, journaling, and more</span></div>', unsafe_allow_html=True)
+    review_cols = st.columns(4)
+    review_cols[0].metric("Active goals", len(active_goals))
+    review_cols[1].metric("On track", len(summary["on_track_goals"]))
+    review_cols[2].metric("Needs attention", len(summary["attention_goals"]))
+    review_cols[3].metric("This week", summary["week_checkins"])
+
+    if active_goals:
+        best_streak_text = "No streaks yet"
+        if streak_leader:
+            best_streak_text = f"{streak_leader.get('title')} · {int(streak_leader.get('current_streak') or 0)} day streak"
+        st.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>Summary:</strong> You logged {summary['week_checkins']} goal check-ins this week across {len(active_goals)} active goals.<br /><strong>Leader:</strong> {best_streak_text}<br /><strong>Focus:</strong> {len(summary['attention_goals'])} goal(s) still need check-ins to hit weekly targets.</div>",
+            unsafe_allow_html=True,
+        )
+        if summary["on_track_goals"]:
+            st.markdown(
+                "<div class='panel-title' style='margin-top:0.75rem;'><h3>On Track</h3><span>Goals already meeting the weekly target</span></div>",
+                unsafe_allow_html=True,
+            )
+            for goal in summary["on_track_goals"][:4]:
+                st.markdown(f"- <strong>{goal['title']}</strong> · {goal.get('category')} · {int(goal.get('week_checkins') or 0)}/{int(goal.get('target_frequency') or 1)}", unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="empty-state">Add a few goals to get a weekly review here.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history"):
+    goals_by_id = {goal.get("id"): goal for goal in personal_goals}
+    checkins = load_personal_goal_checkins()
+
+    month_key = f"{panel_key}_month_anchor"
+    if month_key not in st.session_state:
+        st.session_state[month_key] = date.today().replace(day=1)
+
+    month_anchor = st.session_state[month_key]
+    month_start = month_anchor.replace(day=1)
+    next_month_start = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = next_month_start - timedelta(days=1)
+    month_checkins = [item for item in checkins if item.get("checked_in_date") and month_start <= item["checked_in_date"] <= month_end]
+    checkins_by_day = {}
+    for item in month_checkins:
+        checkins_by_day.setdefault(item["checked_in_date"], []).append(item)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Monthly Goal History</h3><span>See how your goal check-ins land across the month</span></div>', unsafe_allow_html=True)
+    controls = st.columns([1, 2, 1])
+    with controls[0]:
+        if st.button("Prev month", key=f"{panel_key}_prev"):
+            st.session_state[month_key] = (month_start - timedelta(days=1)).replace(day=1)
+            st.rerun()
+    with controls[1]:
+        st.markdown(f"<div style='text-align:center; font-weight:700; margin-top:0.4rem;'>{month_start.strftime('%B %Y')}</div>", unsafe_allow_html=True)
+    with controls[2]:
+        if st.button("Next month", key=f"{panel_key}_next"):
+            st.session_state[month_key] = next_month_start
+            st.rerun()
+
+    history_cols = st.columns(4)
+    history_cols[0].metric("Check-ins", len(month_checkins))
+    history_cols[1].metric("Active goals", len([goal for goal in personal_goals if goal.get("status") == "active"]))
+    history_cols[2].metric("Days with progress", len(checkins_by_day))
+    history_cols[3].metric("Best streak", max([int(goal.get("current_streak") or 0) for goal in personal_goals], default=0))
+
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdatescalendar(month_start.year, month_start.month)
+    headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+    for week in weeks:
+        cells = []
+        for day in week:
+            if day.month != month_start.month:
+                cells.append(" ")
+                continue
+            day_items = checkins_by_day.get(day, [])
+            if not day_items:
+                cells.append(f"**{day.day}**")
+                continue
+            goal_names = []
+            for item in day_items[:3]:
+                goal = goals_by_id.get(item.get("goal_id"))
+                if goal:
+                    goal_names.append(goal.get("title", "Goal"))
+            remaining = len(day_items) - len(goal_names)
+            label_text = "<br>".join([f"**{day.day}**", f"{len(day_items)} log(s)"] + goal_names + ([f"+{remaining} more"] if remaining > 0 else []))
+            cells.append(label_text)
+        table_lines.append("| " + " | ".join(cells) + " |")
+    st.markdown("\n".join(table_lines), unsafe_allow_html=True)
+
+    if month_checkins:
+        st.markdown('<div class="panel-title" style="margin-top:0.75rem;"><h3>Recent Check-ins</h3><span>Newest goal activity</span></div>', unsafe_allow_html=True)
+        for item in month_checkins[:10]:
+            goal = goals_by_id.get(item.get("goal_id"))
+            goal_title = goal.get("title") if goal else f"Goal #{item.get('goal_id')}"
+            note_text = item.get("note") or ""
+            date_label = item["checked_in_date"].strftime("%b %d") if hasattr(item["checked_in_date"], "strftime") else str(item.get("checked_in_date"))
+            st.markdown(f"- <strong>{date_label}</strong> · {goal_title}{(' · ' + note_text) if note_text else ''}", unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="empty-state">No goal check-ins in this month yet.</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_personal_goals_panel(personal_goals, panel_key="personal_goals"):
+    summary = personal_goal_dashboard_summary(personal_goals)
+    active_goals = summary["active_goals"]
+    week_checkins = summary["week_checkins"]
+    on_track_count = len(summary["on_track_goals"])
+    total_checkins = summary["total_checkins"]
+    best_streak = summary["streak_leader"]["current_streak"] if summary["streak_leader"] else 0
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Personal Goals</h3><span>Build and track fitness, reading, journaling, and other repeat goals</span></div>', unsafe_allow_html=True)
+    goal_cols = st.columns(4)
+    goal_cols[0].metric("Active goals", len(active_goals))
+    goal_cols[1].metric("Check-ins this week", week_checkins)
+    goal_cols[2].metric("On track", on_track_count)
+    goal_cols[3].metric("Best streak", best_streak)
+
+    st.caption(f"Total logs across active goals: {total_checkins}")
+
+    with st.form(f"{panel_key}_add_goal"):
+        goal_title = st.text_input("Goal title", placeholder="Fitness, reading, journaling, etc.")
+        goal_category = st.selectbox("Goal category", ["Fitness", "Reading", "Journaling", "Custom"])
+        goal_target = st.slider("Target check-ins per week", min_value=1, max_value=14, value=3, step=1)
+        goal_reminder_days = st.multiselect("Reminder days", PERSONAL_GOAL_WEEKDAY_NAMES, default=[date.today().strftime("%A")])
+        goal_notes = st.text_area("Notes", height=80, placeholder="How you want to approach this goal, reminders, and what success looks like.")
+        goal_submit = st.form_submit_button("Add goal", type="primary")
+
+    if goal_submit:
+        if not goal_title.strip():
+            st.warning("Add a goal title first.")
+        else:
+            add_personal_goal(goal_title, goal_category, goal_target, goal_notes, reminder_days=goal_reminder_days)
+            st.success("Personal goal added.")
+            st.rerun()
+
+    if personal_goals:
+        for goal in personal_goals:
+            goal_id = goal.get("id")
+            target_frequency = max(1, int(goal.get("target_frequency") or 1))
+            week_progress = int(goal.get("week_checkins") or 0)
+            progress_ratio = min(1.0, week_progress / target_frequency)
+            last_check_in = goal.get("last_check_in_date")
+            last_check_in_label = last_check_in.strftime("%b %d") if hasattr(last_check_in, "strftime") else "Never"
+            goal_status = goal.get("status", "active")
+            current_streak = int(goal.get("current_streak") or 0)
+            best_goal_streak = int(goal.get("best_streak") or 0)
+            reminder_days_label = goal.get("reminder_days_label") or personal_goal_reminder_days_label(goal.get("reminder_days"))
+
+            st.markdown('<div class="task-card">', unsafe_allow_html=True)
+            st.markdown(f'<div class="task-title">{goal.get("title")}</div>', unsafe_allow_html=True)
+            if goal.get("notes"):
+                st.caption(goal.get("notes"))
+            st.markdown(
+                f"<div class='task-meta'><span class='pill pill-category'>{goal.get('category')}</span><span class='pill'>This week: {week_progress}/{target_frequency}</span><span class='pill'>Streak: {current_streak}</span><span class='pill'>Best: {best_goal_streak}</span><span class='pill'>Last check-in: {last_check_in_label}</span><span class='pill'>Remind: {reminder_days_label}</span><span class='pill pill-status pill-status-{goal_status}'>{goal_status.title()}</span></div>",
+                unsafe_allow_html=True,
+            )
+            st.progress(int(progress_ratio * 100))
+            st.caption(f"{week_progress}/{target_frequency} check-ins this week. Keep the streak alive with one small step today.")
+
+            action_cols = st.columns([1, 1, 1, 2])
+            with action_cols[0]:
+                if st.button("Log today", key=f"{panel_key}_log_{goal_id}", type="primary", disabled=bool(goal.get("today_checked_in"))):
+                    log_personal_goal_checkin(goal_id)
+                    st.success(f"Logged progress for '{goal.get('title')}'.")
+                    st.rerun()
+            with action_cols[1]:
+                if st.button("Toggle status", key=f"{panel_key}_toggle_{goal_id}"):
+                    new_status = "completed" if goal_status == "active" else "active"
+                    update_personal_goal(goal_id, status=new_status)
+                    st.rerun()
+            with action_cols[2]:
+                if st.button("Delete", key=f"{panel_key}_delete_{goal_id}"):
+                    delete_personal_goal(goal_id)
+                    st.success("Goal deleted.")
+                    st.rerun()
+            with action_cols[3]:
+                if goal.get("today_checked_in"):
+                    st.caption("Already checked in today.")
+                elif progress_ratio >= 1.0:
+                    st.caption("Weekly target reached. Keep the streak going or raise the bar.")
+                else:
+                    st.caption("Use Log today to record a workout, chapter, journal entry, or other completed step.")
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="empty-state">Add goals like fitness, reading, or journaling to start tracking them here.</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -4363,6 +4915,8 @@ app_bootstrap.run_app(
         "DB_CANDIDATE_SOURCE": DB_CANDIDATE_SOURCE,
         "DB_ERROR": DB_ERROR,
         "load_tasks": load_tasks,
+        "load_personal_goals": load_personal_goals,
+        "personal_goal_dashboard_summary": personal_goal_dashboard_summary,
         "load_surgical_cases": load_surgical_cases,
         "load_protocol_documents": load_protocol_documents,
         "priority_rank": priority_rank,
@@ -4373,6 +4927,10 @@ app_bootstrap.run_app(
         "render_overview_control_tower": render_overview_control_tower,
         "render_add_task_panel": render_add_task_panel,
         "render_personal_focus_panel": render_personal_focus_panel,
+        "render_personal_goals_panel": render_personal_goals_panel,
+        "render_personal_goal_reminders_panel": render_personal_goal_reminders_panel,
+        "render_personal_goal_review_panel": render_personal_goal_review_panel,
+        "render_personal_goal_history_panel": render_personal_goal_history_panel,
         "render_clinic_command_center": render_clinic_command_center,
         "render_surgical_cases_panel": render_surgical_cases_panel,
         "render_task_calendar_panel": render_task_calendar_panel,

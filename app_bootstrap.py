@@ -14,6 +14,8 @@ def run_app(context, st_module=st):
     ai_model_name = context["ai_model_name"]
     seed_sample_tasks = context["seed_sample_tasks"]
     load_tasks = context["load_tasks"]
+    load_personal_goals = context["load_personal_goals"]
+    personal_goal_dashboard_summary = context["personal_goal_dashboard_summary"]
     load_surgical_cases = context["load_surgical_cases"]
     load_protocol_documents = context["load_protocol_documents"]
     priority_rank = context["priority_rank"]
@@ -24,6 +26,10 @@ def run_app(context, st_module=st):
     render_overview_control_tower = context["render_overview_control_tower"]
     render_add_task_panel = context["render_add_task_panel"]
     render_personal_focus_panel = context["render_personal_focus_panel"]
+    render_personal_goals_panel = context["render_personal_goals_panel"]
+    render_personal_goal_reminders_panel = context["render_personal_goal_reminders_panel"]
+    render_personal_goal_review_panel = context["render_personal_goal_review_panel"]
+    render_personal_goal_history_panel = context["render_personal_goal_history_panel"]
     render_clinic_command_center = context["render_clinic_command_center"]
     render_surgical_cases_panel = context["render_surgical_cases_panel"]
     render_task_calendar_panel = context["render_task_calendar_panel"]
@@ -48,6 +54,9 @@ def run_app(context, st_module=st):
     inject_styles()
     render_hero()
 
+    personal_goals = load_personal_goals()
+    personal_goal_summary = personal_goal_dashboard_summary(personal_goals)
+
     with st_module.sidebar:
         st_module.markdown(
             """
@@ -68,6 +77,19 @@ def run_app(context, st_module=st):
         else:
             st_module.caption("No DATABASE_URL or DATABASE_PUBLIC_URL found.")
             st_module.caption("Running in session-only fallback mode.")
+
+        if personal_goal_summary["streak_leader"]:
+            leader = personal_goal_summary["streak_leader"]
+            st_module.markdown(
+                f"<div style='margin:0.9rem 0; padding:0.8rem 0.9rem; border-radius:16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);'>"
+                f"<div style='color: rgba(248,250,252,0.7); font-size:0.78rem; text-transform: uppercase; letter-spacing:0.08em;'>Personal streak</div>"
+                f"<div style='color: white; font-weight:700; font-size:1rem; margin-top:0.15rem;'>{leader.get('title')}</div>"
+                f"<div style='color: rgba(248,250,252,0.82); font-size:0.88rem;'>Current: {int(leader.get('current_streak') or 0)} days · This week: {personal_goal_summary['week_checkins']} check-ins</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st_module.caption("No active personal streak yet.")
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
@@ -181,6 +203,16 @@ def run_app(context, st_module=st):
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_quick_capture("personal_quick_capture", app_settings)
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_personal_goals_panel(personal_goals, panel_key="personal_goals")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        personal_goal_cols = st_module.columns(2, gap="large")
+        with personal_goal_cols[0]:
+            render_personal_goal_reminders_panel(personal_goals, panel_key="personal_goal_reminders")
+        with personal_goal_cols[1]:
+            render_personal_goal_review_panel(personal_goals, panel_key="personal_goal_review")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
