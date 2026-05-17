@@ -2432,6 +2432,94 @@ def clinic_day_profiles(app_settings):
     }
 
 
+def clinic_visit_templates():
+    return {
+        "blank": {
+            "label": "Blank clinic capture",
+            "title": "",
+            "description": "",
+            "priority": "medium",
+            "schedule_enabled": False,
+            "scheduled_time": time(9, 0),
+            "scheduled_minutes": 30,
+        },
+        "new_consult": {
+            "label": "New consult",
+            "title": "Clinic consult block",
+            "description": "Initial evaluation, exam, imaging review, and plan discussion.",
+            "priority": "high",
+            "schedule_enabled": True,
+            "scheduled_time": time(8, 30),
+            "scheduled_minutes": 45,
+        },
+        "post_op_follow_up": {
+            "label": "Post-op follow-up",
+            "title": "Post-op follow-up",
+            "description": "Wound check, symptom review, restrictions, and next-step planning.",
+            "priority": "medium",
+            "schedule_enabled": True,
+            "scheduled_time": time(9, 15),
+            "scheduled_minutes": 20,
+        },
+        "imaging_review": {
+            "label": "Imaging review",
+            "title": "Imaging review visit",
+            "description": "Review studies, confirm the working diagnosis, and define the next step.",
+            "priority": "medium",
+            "schedule_enabled": True,
+            "scheduled_time": time(10, 0),
+            "scheduled_minutes": 20,
+        },
+        "procedure_checkin": {
+            "label": "Procedure check-in",
+            "title": "Procedure planning visit",
+            "description": "Procedure discussion, consent prep, and day-of logistics.",
+            "priority": "high",
+            "schedule_enabled": True,
+            "scheduled_time": time(11, 0),
+            "scheduled_minutes": 30,
+        },
+        "phone_follow_up": {
+            "label": "Phone follow-up",
+            "title": "Phone follow-up",
+            "description": "Brief check-in, results review, and next steps without an in-person slot.",
+            "priority": "low",
+            "schedule_enabled": False,
+            "scheduled_time": time(9, 0),
+            "scheduled_minutes": 15,
+        },
+        "urgent_add_on": {
+            "label": "Urgent add-on",
+            "title": "Urgent add-on visit",
+            "description": "High-priority add-on with focused assessment and rapid decision-making.",
+            "priority": "high",
+            "schedule_enabled": True,
+            "scheduled_time": time(13, 0),
+            "scheduled_minutes": 20,
+        },
+    }
+
+
+def apply_clinic_visit_template(form_key, template_key, st_module=st):
+    templates = clinic_visit_templates()
+    template = templates.get(template_key, templates["blank"])
+    st_module.session_state[f"{form_key}_title"] = template["title"]
+    st_module.session_state[f"{form_key}_description"] = template["description"]
+    st_module.session_state[f"{form_key}_category"] = "Clinic"
+    st_module.session_state[f"{form_key}_priority"] = template["priority"]
+    st_module.session_state[f"{form_key}_due_date"] = date.today()
+    st_module.session_state[f"{form_key}_schedule_enabled"] = template["schedule_enabled"]
+    st_module.session_state[f"{form_key}_scheduled_date"] = date.today()
+    st_module.session_state[f"{form_key}_scheduled_time"] = template["scheduled_time"]
+    st_module.session_state[f"{form_key}_scheduled_minutes"] = template["scheduled_minutes"]
+    st_module.session_state[f"{form_key}_recurrence_rule"] = "none"
+    st_module.session_state[f"{form_key}_recurrence_interval"] = 1
+
+
+def apply_clinic_visit_template_from_state(form_key, template_state_key, st_module=st):
+    apply_clinic_visit_template(form_key, st_module.session_state.get(template_state_key, "blank"), st_module=st_module)
+
+
 def build_time_blocks(profile):
     total_minutes = 8 * 60
     core_minutes = max(120, total_minutes - profile["prep_minutes"] - profile["admin_buffer_minutes"])
@@ -3478,29 +3566,51 @@ def render_overview_control_tower(tasks, active_tasks, completed_today_all, pers
 
 
 def render_add_task_panel(form_key, defaults, default_category=None):
+    templates = clinic_visit_templates() if default_category == "Clinic" else None
+    template_key = f"{form_key}_template"
+    selected_template = "blank"
+    if templates:
+        template_labels = [(key, template["label"]) for key, template in templates.items()]
+        if template_key not in st.session_state:
+            st.session_state[template_key] = "blank"
+        selected_template = st.selectbox(
+            "Clinic visit template",
+            [key for key, _ in template_labels],
+            key=template_key,
+            format_func=lambda key: dict(template_labels)[key],
+            on_change=apply_clinic_visit_template_from_state,
+            args=(form_key, template_key),
+        )
+        if selected_template == "blank":
+            st.caption("Pick a common visit type to prefill the capture form with a standard clinic pattern.")
+        else:
+            template = templates[selected_template]
+            st.caption(f"Prefill: {template['title']} · {template['scheduled_minutes']} min · {template['priority']} priority")
+
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Add Task</h3><span>Quick capture</span></div>', unsafe_allow_html=True)
     with st.form(form_key):
-        title = st.text_input("Task title")
-        description = st.text_area("Description", height=100)
+        title = st.text_input("Task title", key=f"{form_key}_title")
+        description = st.text_area("Description", height=100, key=f"{form_key}_description")
         category_options = ["Personal", "Clinic"]
         resolved_default_category = default_category or defaults.get("default_category", "Personal")
         category_index = category_options.index(resolved_default_category) if resolved_default_category in category_options else 0
-        category = st.selectbox("Category", category_options, index=category_index)
+        category = st.selectbox("Category", category_options, index=category_index, key=f"{form_key}_category")
         priority_options = ["high", "medium", "low"]
         default_priority = defaults.get("default_priority", "medium")
         priority_index = priority_options.index(default_priority) if default_priority in priority_options else 1
-        priority = st.selectbox("Priority", priority_options, index=priority_index)
-        due_date = st.date_input("Due date", value=date.today())
-        schedule_enabled = st.checkbox("Schedule this task")
+        priority = st.selectbox("Priority", priority_options, index=priority_index, key=f"{form_key}_priority")
+        due_date = st.date_input("Due date", value=date.today(), key=f"{form_key}_due_date")
+        schedule_enabled = st.checkbox("Schedule this task", key=f"{form_key}_schedule_enabled")
         schedule_cols = st.columns(3)
         with schedule_cols[0]:
-            scheduled_date = st.date_input("Scheduled date", value=date.today(), disabled=not schedule_enabled)
+            scheduled_date = st.date_input("Scheduled date", value=date.today(), disabled=not schedule_enabled, key=f"{form_key}_scheduled_date")
         with schedule_cols[1]:
             scheduled_time = st.time_input(
                 "Scheduled time",
                 value=parse_time_value(defaults.get("default_schedule_time")) or time(9, 0),
                 disabled=not schedule_enabled,
+                key=f"{form_key}_scheduled_time",
             )
         with schedule_cols[2]:
             duration_options = [15, 30, 45, 60, 90, 120]
@@ -3511,6 +3621,7 @@ def render_add_task_panel(form_key, defaults, default_category=None):
                 duration_options,
                 index=duration_index,
                 disabled=not schedule_enabled,
+                key=f"{form_key}_scheduled_minutes",
             )
         recurrence_cols = st.columns(2)
         with recurrence_cols[0]:
@@ -3518,6 +3629,7 @@ def render_add_task_panel(form_key, defaults, default_category=None):
                 "Recurrence",
                 ["none", "daily", "weekly"],
                 format_func=lambda value: "None" if value == "none" else value.title(),
+                key=f"{form_key}_recurrence_rule",
             )
         with recurrence_cols[1]:
             recurrence_interval = st.number_input(
@@ -3527,6 +3639,7 @@ def render_add_task_panel(form_key, defaults, default_category=None):
                 value=1,
                 step=1,
                 disabled=recurrence_rule == "none",
+                key=f"{form_key}_recurrence_interval",
             )
         submitted = st.form_submit_button("Add task")
 

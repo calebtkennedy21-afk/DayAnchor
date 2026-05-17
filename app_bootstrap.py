@@ -183,6 +183,8 @@ def run_app(context, st_module=st):
         render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.")
     elif current_page == "Clinic":
         render_page_banner("clinic", "Clinic Command Center", "Track outpatient load, follow-up flow, and clinic-first work.")
+        render_add_task_panel("clinic_add_task", app_settings, default_category="Clinic")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
     elif current_page == "Cases":
         render_page_banner("clinic", "Surgical Cases", "Non-PHI case tracking with protocol support and OR cadence.")
