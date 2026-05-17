@@ -225,7 +225,7 @@ def render_surgical_cases_panel(
     with top_left:
         with st_module.form(f"{panel_key}_new_case_form"):
             case_date = st_module.date_input("Case date", value=date.today())
-            case_stream = st_module.selectbox("Case stream", ["Main OR", "TenJet"])
+            case_stream = st_module.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"])
             procedure_name = st_module.text_input("Procedure performed")
             anatomical_location = st_module.text_input("Anatomical location")
             status = st_module.selectbox("Status", ["planned", "completed", "canceled"])
