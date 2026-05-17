@@ -17,8 +17,10 @@ from clinical_reference import (
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
 import ai_workflows
+import app_bootstrap
 import data_access
 import page_renderers
+import page_sections
 
 try:
     from openai import OpenAI
@@ -1392,6 +1394,11 @@ def save_app_settings(settings):
                         """,
                         (payload_text,),
                     )
+        except psycopg.Error:
+            pass
+
+    st.session_state["app_settings"] = merged
+    return merged
 
 
 def render_anatomy_structure_spotlight(region_name, structures, panel_key):
@@ -3750,6 +3757,74 @@ generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_f
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
 render_task_calendar_panel = partial(page_renderers.render_task_calendar_panel, render_task_calendar_compact_fn=render_task_calendar_compact, st_module=st)
+
+page_shared_deps = {
+    "overview_lens_options": overview_lens_options,
+    "resolve_overview_lens": resolve_overview_lens,
+    "resolve_overview_day_context": resolve_overview_day_context,
+    "priority_rank": priority_rank,
+    "clinic_day_summary": clinic_day_summary,
+    "schedule_workload_snapshot": schedule_workload_snapshot,
+    "format_due": format_due,
+    "add_task": add_task,
+    "predicted_or_days": predicted_or_days,
+    "render_or_calendar_compact": render_or_calendar_compact,
+    "suggest_protocols_for_case": ref_suggest_protocols_for_case,
+    "status_label": status_label,
+    "generate_ai_plan": generate_ai_plan,
+    "generate_ai_schedule": generate_ai_schedule,
+    "generate_daily_review": generate_daily_review,
+    "apply_ai_suggestions": apply_ai_suggestions,
+    "apply_ai_schedule_updates": apply_ai_schedule_updates,
+    "ai_workbench_summary": ai_workbench_summary,
+}
+
+render_overview_control_tower = partial(page_sections.render_overview_control_tower, deps=page_shared_deps, st_module=st)
+render_surgical_cases_panel = partial(page_sections.render_surgical_cases_panel, deps={**page_shared_deps, "add_surgical_case": add_surgical_case, "update_surgical_case": update_surgical_case, "delete_surgical_case": delete_surgical_case, "add_protocol_document": add_protocol_document, "delete_protocol_document": delete_protocol_document}, st_module=st)
+render_ai_panel = partial(page_sections.render_ai_panel, deps=page_shared_deps, st_module=st)
+
+app_bootstrap.run_app(
+    {
+        "initialize_database": initialize_database,
+        "load_app_settings": load_app_settings,
+        "inject_styles": inject_styles,
+        "render_hero": render_hero,
+        "db_health_status": db_health_status,
+        "configured_database_env_names": configured_database_env_names,
+        "ai_enabled": ai_enabled,
+        "ai_model_name": ai_model_name,
+        "seed_sample_tasks": seed_sample_tasks,
+        "db_enabled": db_enabled,
+        "DB_CANDIDATE_SOURCE": DB_CANDIDATE_SOURCE,
+        "DB_ERROR": DB_ERROR,
+        "load_tasks": load_tasks,
+        "load_surgical_cases": load_surgical_cases,
+        "load_protocol_documents": load_protocol_documents,
+        "priority_rank": priority_rank,
+        "format_due": format_due,
+        "status_label": status_label,
+        "render_page_banner": render_page_banner,
+        "overview_runtime_settings": overview_runtime_settings,
+        "render_overview_control_tower": render_overview_control_tower,
+        "render_add_task_panel": render_add_task_panel,
+        "render_personal_focus_panel": render_personal_focus_panel,
+        "render_clinic_command_center": render_clinic_command_center,
+        "render_surgical_cases_panel": render_surgical_cases_panel,
+        "render_task_calendar_panel": render_task_calendar_panel,
+        "render_schedule_builder_panel": render_schedule_builder_panel,
+        "render_task_list_panel": render_task_list_panel,
+        "render_ai_panel": render_ai_panel,
+        "render_review_command_panel": render_review_command_panel,
+        "render_notifications_panel": render_notifications_panel,
+        "render_settings_panel": render_settings_panel,
+        "render_analytics_panel": render_analytics_panel,
+        "render_daily_review_panel": render_daily_review_panel,
+        "render_page_footer": render_page_footer,
+        "render_msk_anatomy_panel": render_msk_anatomy_panel,
+    }
+)
+
+st.stop()
 
 initialize_database()
 
