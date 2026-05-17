@@ -73,6 +73,8 @@ DEFAULT_APP_SETTINGS = {
     "clinic_admin_buffer_minutes": 60,
     "procedure_block_minutes": 30,
     "personal_focus_minutes": 90,
+    "schedule_daily_capacity_minutes": 480,
+    "schedule_capacity_days_per_week": 5,
     "overview_day_mode": "Auto",
     "overview_role_label": "Medical Assistant",
     "overview_site_label": "MOA (Mercy Orthopedic Associates)",
@@ -3305,6 +3307,82 @@ def schedule_workload_snapshot(active_tasks):
     }
 
 
+def scheduled_minutes_on_day(task, day):
+    if day not in scheduled_date_range(task):
+        return 0
+    try:
+        return max(0, int(task.get("scheduled_minutes") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_week_rebalance_moves(upcoming_tasks, week_days, daily_capacity_minutes):
+    scheduled_by_day = {day: [] for day in week_days}
+    scheduled_minutes_by_day = {day: 0 for day in week_days}
+
+    for task in upcoming_tasks:
+        for task_day in scheduled_date_range(task):
+            if task_day in scheduled_by_day:
+                scheduled_by_day[task_day].append(task)
+                scheduled_minutes_by_day[task_day] += scheduled_minutes_on_day(task, task_day)
+
+    moves = []
+    moved_task_ids = set()
+    overloaded_days = [day for day in week_days if scheduled_minutes_by_day[day] > daily_capacity_minutes]
+
+    for source_day in overloaded_days:
+        if scheduled_minutes_by_day[source_day] <= daily_capacity_minutes:
+            continue
+
+        # Rebalance only low-priority single-day blocks so the action is safe and predictable.
+        candidates = [
+            task
+            for task in scheduled_by_day[source_day]
+            if task.get("id") not in moved_task_ids
+            and task.get("priority") == "low"
+            and task.get("scheduled_date") == source_day
+            and (task.get("scheduled_end_date") is None or task.get("scheduled_end_date") == source_day)
+            and task.get("scheduled_time")
+            and scheduled_minutes_on_day(task, source_day) > 0
+        ]
+        candidates.sort(
+            key=lambda task: (
+                task.get("due_date") or date.max,
+                task.get("scheduled_time") or time(23, 59),
+            ),
+            reverse=True,
+        )
+
+        for task in candidates:
+            if scheduled_minutes_by_day[source_day] <= daily_capacity_minutes:
+                break
+
+            task_minutes = scheduled_minutes_on_day(task, source_day)
+            if task_minutes <= 0:
+                continue
+
+            target_day = None
+            search_days = [day for day in week_days if day > source_day] + [day for day in week_days if day < source_day]
+            for candidate_day in search_days:
+                if scheduled_minutes_by_day[candidate_day] + task_minutes > daily_capacity_minutes:
+                    continue
+                due_date = task.get("due_date")
+                if due_date and candidate_day > due_date:
+                    continue
+                target_day = candidate_day
+                break
+
+            if not target_day:
+                continue
+
+            moves.append({"task": task, "source_day": source_day, "target_day": target_day, "minutes": task_minutes})
+            moved_task_ids.add(task.get("id"))
+            scheduled_minutes_by_day[source_day] -= task_minutes
+            scheduled_minutes_by_day[target_day] += task_minutes
+
+    return moves
+
+
 def overview_runtime_settings(app_settings):
     return {
         "day_mode": app_settings.get("overview_day_mode", "Auto"),
@@ -3957,13 +4035,22 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
 
     week_start = st.session_state[week_key]
     week_days = [week_start + timedelta(days=offset) for offset in range(7)]
+    daily_capacity_minutes = max(60, safe_int(app_settings.get("schedule_daily_capacity_minutes", 480), 480))
+    capacity_days_per_week = max(1, min(7, safe_int(app_settings.get("schedule_capacity_days_per_week", 5), 5)))
+    weekly_capacity_minutes = daily_capacity_minutes * capacity_days_per_week
     scheduled_by_day = {day: [] for day in week_days}
+    scheduled_minutes_by_day = {day: 0 for day in week_days}
     for task in snapshot["upcoming"]:
         for task_day in scheduled_date_range(task):
             if task_day in scheduled_by_day:
                 scheduled_by_day[task_day].append(task)
+                scheduled_minutes_by_day[task_day] += scheduled_minutes_on_day(task, task_day)
     for day_tasks in scheduled_by_day.values():
         day_tasks.sort(key=lambda task: (task.get("scheduled_time") or time(23, 59), priority_rank(task["priority"]), task["title"]))
+
+    week_planned_minutes = sum(scheduled_minutes_by_day.values())
+    overloaded_days = [day for day in week_days if scheduled_minutes_by_day[day] > daily_capacity_minutes]
+    remaining_week_capacity = weekly_capacity_minutes - week_planned_minutes
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Schedule Builder</h3><span>Plan work, pin personal blocks, and move tasks into real time</span></div>', unsafe_allow_html=True)
@@ -3972,6 +4059,48 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     metric_cols[1].metric("Unscheduled", len(snapshot["unscheduled"]))
     metric_cols[2].metric("High-priority unscheduled", len(snapshot["unscheduled_high"]))
     metric_cols[3].metric("Capacity gap", max(0, snapshot["capacity_gap"]))
+
+    guardrail_cols = st.columns(4)
+    guardrail_cols[0].metric("Planned this week", f"{week_planned_minutes} min")
+    guardrail_cols[1].metric("Weekly capacity", f"{weekly_capacity_minutes} min")
+    guardrail_cols[2].metric("Remaining", f"{remaining_week_capacity} min")
+    guardrail_cols[3].metric("Overloaded days", len(overloaded_days))
+
+    if remaining_week_capacity < 0:
+        st.error(
+            f"Weekly plan is over capacity by {abs(remaining_week_capacity)} minutes. "
+            "Move or shorten blocks to protect realistic execution."
+        )
+    elif remaining_week_capacity <= daily_capacity_minutes // 2:
+        st.warning("Weekly capacity is nearly full. Reserve some buffer for overrun and handoffs.")
+    else:
+        st.success("Weekly load is within configured capacity.")
+
+    if overloaded_days:
+        overloaded_labels = ", ".join(day.strftime("%a %b %d") for day in overloaded_days[:4])
+        more_count = len(overloaded_days) - 4
+        if more_count > 0:
+            overloaded_labels = f"{overloaded_labels}, +{more_count} more"
+        st.warning(
+            f"Daily overload detected on: {overloaded_labels}. "
+            f"Target per day is {daily_capacity_minutes} minutes."
+        )
+        if st.button("Rebalance this week", key=f"{panel_key}_rebalance_week", type="secondary"):
+            proposed_moves = build_week_rebalance_moves(snapshot["upcoming"], week_days, daily_capacity_minutes)
+            if not proposed_moves:
+                st.info("No safe low-priority moves were found inside this week.")
+            else:
+                for move in proposed_moves:
+                    task = move["task"]
+                    update_task(
+                        task["id"],
+                        scheduled_date=move["target_day"],
+                        scheduled_end_date=move["target_day"],
+                        scheduled_time=task.get("scheduled_time"),
+                        scheduled_minutes=task.get("scheduled_minutes"),
+                    )
+                st.success(f"Rebalanced {len(proposed_moves)} low-priority block(s) across this week.")
+                st.rerun()
 
     week_controls = st.columns([1, 2, 1])
     with week_controls[0]:
@@ -4021,7 +4150,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     for index, day in enumerate(week_days):
         with planner_cols[index]:
             st.markdown(
-                f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span></div>",
+                f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span><span class='pill'>{scheduled_minutes_by_day[day]} / {daily_capacity_minutes} min</span></div>",
                 unsafe_allow_html=True,
             )
             if scheduled_by_day[day]:
@@ -4474,6 +4603,22 @@ def render_settings_panel(app_settings, panel_key="settings"):
         step=15,
     )
 
+    st.markdown("### Schedule Capacity Guardrails")
+    settings_daily_capacity_minutes = st.slider(
+        "Daily planning capacity (minutes)",
+        min_value=180,
+        max_value=720,
+        value=safe_int(app_settings.get("schedule_daily_capacity_minutes", 480), 480),
+        step=30,
+    )
+    settings_capacity_days_per_week = st.slider(
+        "Capacity days per week",
+        min_value=1,
+        max_value=7,
+        value=safe_int(app_settings.get("schedule_capacity_days_per_week", 5), 5),
+        step=1,
+    )
+
     st.markdown("### OR Cadence Defaults")
     settings_default_surgeon_label = st.text_input(
         "Default surgeon label",
@@ -4520,6 +4665,8 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "clinic_admin_buffer_minutes": int(settings_admin_buffer),
                 "procedure_block_minutes": int(settings_procedure_block),
                 "personal_focus_minutes": int(settings_focus_minutes),
+                "schedule_daily_capacity_minutes": int(settings_daily_capacity_minutes),
+                "schedule_capacity_days_per_week": int(settings_capacity_days_per_week),
                 "default_surgeon_label": settings_default_surgeon_label.strip() or "Dr. Braden Boyer (BB)",
                 "or_fixed_weekday": settings_or_fixed_weekday,
                 "or_alternating_days": settings_or_alternating_days,
