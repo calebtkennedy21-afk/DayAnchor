@@ -254,6 +254,7 @@ def parse_ai_suggestions(text):
 
         due_date = parse_date_value(item.get("due_date")) or date.today()
         scheduled_date = parse_date_value(item.get("scheduled_date"))
+        scheduled_end_date = parse_date_value(item.get("scheduled_end_date")) or scheduled_date
         scheduled_time = parse_time_value(item.get("scheduled_time"))
 
         raw_minutes = item.get("scheduled_minutes")
@@ -270,6 +271,7 @@ def parse_ai_suggestions(text):
                 "priority": priority,
                 "due_date": due_date,
                 "scheduled_date": scheduled_date,
+                "scheduled_end_date": scheduled_end_date,
                 "scheduled_time": scheduled_time,
                 "scheduled_minutes": scheduled_minutes,
             }
@@ -307,6 +309,7 @@ def parse_ai_schedule_updates(text):
             {
                 "task_id": task_id,
                 "scheduled_date": parse_date_value(item.get("scheduled_date")),
+                "scheduled_end_date": parse_date_value(item.get("scheduled_end_date")),
                 "scheduled_time": parse_time_value(item.get("scheduled_time")),
                 "scheduled_minutes": scheduled_minutes,
             }
@@ -630,6 +633,7 @@ def initialize_database():
                             created_date DATE NOT NULL,
                             due_date DATE,
                             scheduled_date DATE,
+                            scheduled_end_date DATE,
                             scheduled_time TIME,
                             scheduled_minutes INTEGER,
                             recurrence_rule TEXT,
@@ -640,6 +644,7 @@ def initialize_database():
                     )
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_rule TEXT")
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER")
+                    cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_end_date DATE")
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS app_settings (
@@ -736,6 +741,7 @@ def load_tasks():
                         created_date,
                         due_date,
                         scheduled_date,
+                        scheduled_end_date,
                         scheduled_time,
                         scheduled_minutes,
                         recurrence_rule,
@@ -1302,11 +1308,10 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
     completed_by_day = {}
     for item in tasks:
         due_day = item.get("due_date")
-        scheduled_day = item.get("scheduled_date")
         completed_day = item.get("completed_date")
         if due_day:
             due_by_day[due_day] = due_by_day.get(due_day, 0) + 1
-        if scheduled_day:
+        for scheduled_day in scheduled_date_range(item):
             scheduled_by_day[scheduled_day] = scheduled_by_day.get(scheduled_day, 0) + 1
         if completed_day:
             completed_by_day[completed_day] = completed_by_day.get(completed_day, 0) + 1
@@ -1357,6 +1362,10 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
                 parts.append(
                     f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{bg}; color:{fg}; font-size:0.76rem;'>{label}</span>"
                 )
+            day_spans = [item for item in tasks if scheduled_span_position(item, day) and scheduled_span_position(item, day) != "single"]
+            for item in day_spans[:2]:
+                span_label = item.get("title") if scheduled_span_position(item, day) != "start" else f"{item['title']}"
+                parts.append(render_span_block(item, day, label_text=span_label, compact=True))
             if scheduled_count:
                 sched_bg = "#dbeafe" if scheduled_count < 3 else "#93c5fd"
                 parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{sched_bg}; color:#1e3a8a; font-size:0.76rem;'>S{scheduled_count}</span>")
@@ -2083,9 +2092,74 @@ def format_due(task):
 def format_schedule(task):
     scheduled_date = task.get("scheduled_date")
     scheduled_time = task.get("scheduled_time")
-    if not scheduled_date or not scheduled_time:
+    scheduled_end_date = task.get("scheduled_end_date")
+    if not scheduled_date:
         return "Unscheduled"
+    if scheduled_end_date and scheduled_end_date != scheduled_date:
+        if scheduled_time:
+            return f'{scheduled_date.strftime("%b %d")} - {scheduled_end_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
+        return f'{scheduled_date.strftime("%b %d")} - {scheduled_end_date.strftime("%b %d")}'
+    if not scheduled_time:
+        return scheduled_date.strftime("%b %d")
     return f'{scheduled_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
+
+
+def scheduled_date_range(task):
+    scheduled_date = task.get("scheduled_date")
+    if not scheduled_date:
+        return []
+    scheduled_end_date = task.get("scheduled_end_date") or scheduled_date
+    if scheduled_end_date < scheduled_date:
+        scheduled_end_date = scheduled_date
+    span = (scheduled_end_date - scheduled_date).days
+    return [scheduled_date + timedelta(days=offset) for offset in range(span + 1)]
+
+
+def scheduled_span_position(task, day):
+    dates = scheduled_date_range(task)
+    if not dates or day not in dates:
+        return None
+    if len(dates) == 1:
+        return "single"
+    if day == dates[0]:
+        return "start"
+    if day == dates[-1]:
+        return "end"
+    return "middle"
+
+
+def render_span_block(task, day, label_text=None, compact=False):
+    position = scheduled_span_position(task, day)
+    if not position:
+        return ""
+
+    if task.get("category") == "Personal" and task.get("scheduled_end_date") and task.get("scheduled_end_date") != task.get("scheduled_date"):
+        bg = "linear-gradient(90deg, rgba(37,99,235,0.18), rgba(29,78,216,0.28))"
+        fg = "#1e3a8a"
+        border = "#2563eb"
+    else:
+        bg = "rgba(224, 231, 255, 0.92)"
+        fg = "#3730a3"
+        border = "#6366f1"
+
+    border_radius = {
+        "single": "999px",
+        "start": "999px 0 0 999px",
+        "middle": "0",
+        "end": "0 999px 999px 0",
+    }.get(position, "999px")
+    min_height = "1.45rem" if compact else "1.65rem"
+    text = label_text or task["title"]
+    if position != "start" and position != "single":
+        text = ""
+
+    return (
+        f"<div style='width:100%; box-sizing:border-box; margin:0.22rem 0 0; padding:0.18rem 0.45rem; min-height:{min_height}; "
+        f"border:1px solid {border}; border-radius:{border_radius}; background:{bg}; color:{fg}; "
+        f"font-size:0.75rem; font-weight:700; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;'>"
+        f"{text}"
+        f"</div>"
+    )
 
 
 def task_matches(task, lane):
@@ -2099,6 +2173,7 @@ def add_task(
     priority,
     due_date,
     scheduled_date=None,
+    scheduled_end_date=None,
     scheduled_time=None,
     scheduled_minutes=None,
     recurrence_rule=None,
@@ -2118,12 +2193,13 @@ def add_task(
                         created_date,
                         due_date,
                         scheduled_date,
+                        scheduled_end_date,
                         scheduled_time,
                         scheduled_minutes,
                         recurrence_rule,
                         recurrence_interval,
                         completed_date
-                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         title.strip(),
@@ -2133,6 +2209,7 @@ def add_task(
                         date.today(),
                         due_date,
                         scheduled_date,
+                        scheduled_end_date,
                         scheduled_time,
                         scheduled_minutes,
                         recurrence_rule,
@@ -2153,6 +2230,7 @@ def add_task(
             "created_date": date.today(),
             "due_date": due_date,
             "scheduled_date": scheduled_date,
+            "scheduled_end_date": scheduled_end_date,
             "scheduled_time": scheduled_time,
             "scheduled_minutes": scheduled_minutes,
             "recurrence_rule": recurrence_rule,
@@ -2171,6 +2249,7 @@ def update_task(task_id, **fields):
         "status",
         "due_date",
         "scheduled_date",
+        "scheduled_end_date",
         "scheduled_time",
         "scheduled_minutes",
         "recurrence_rule",
@@ -2659,6 +2738,11 @@ def render_task_card(task, key_prefix="task"):
             value=has_schedule,
             key=f"{key_prefix}_edit_has_schedule_{task['id']}",
         )
+        edit_multi_day = st.checkbox(
+            "Block multiple days",
+            value=bool(task.get("scheduled_end_date") and task.get("scheduled_end_date") != task.get("scheduled_date")),
+            key=f"{key_prefix}_edit_multi_day_{task['id']}",
+        )
         sched_cols = st.columns(3)
         with sched_cols[0]:
             edit_sched_date = st.date_input(
@@ -2685,6 +2769,16 @@ def render_task_card(task, key_prefix="task"):
                 disabled=not edit_has_schedule,
                 key=f"{key_prefix}_edit_sched_minutes_{task['id']}",
             )
+        if edit_multi_day:
+            edit_sched_end = st.date_input(
+                "Scheduled end date",
+                value=task.get("scheduled_end_date") or task.get("scheduled_date") or date.today(),
+                min_value=edit_sched_date,
+                disabled=not edit_has_schedule,
+                key=f"{key_prefix}_edit_sched_end_{task['id']}",
+            )
+        else:
+            edit_sched_end = edit_sched_date
 
         recurrence_options = ["none", "daily", "weekly"]
         current_rule = task.get("recurrence_rule") or "none"
@@ -2719,6 +2813,7 @@ def render_task_card(task, key_prefix="task"):
                 priority=edit_priority,
                 due_date=edit_due,
                 scheduled_date=edit_sched_date if edit_has_schedule else None,
+                scheduled_end_date=edit_sched_end if edit_has_schedule else None,
                 scheduled_time=edit_sched_time if edit_has_schedule else None,
                 scheduled_minutes=edit_sched_minutes if edit_has_schedule else None,
                 recurrence_rule=None if edit_recurrence_rule == "none" else edit_recurrence_rule,
@@ -2980,12 +3075,13 @@ def personal_schedule_templates():
         },
         "vacation": {
             "label": "Vacation / trip",
-            "title": "Vacation day",
+            "title": "Vacation block",
             "description": "All-day personal block for a trip, day off, or protected downtime.",
             "priority": "low",
             "scheduled_time": time(8, 0),
             "scheduled_minutes": 480,
             "all_day": True,
+            "scheduled_end_offset_days": 4,
         },
     }
 
@@ -3000,6 +3096,7 @@ def apply_personal_schedule_template(form_key, template_key, st_module=st):
     st_module.session_state[f"{form_key}_scheduled_time"] = template["scheduled_time"]
     st_module.session_state[f"{form_key}_scheduled_minutes"] = template["scheduled_minutes"]
     st_module.session_state[f"{form_key}_all_day"] = template["all_day"]
+    st_module.session_state[f"{form_key}_scheduled_end_date"] = date.today() + timedelta(days=int(template.get("scheduled_end_offset_days", 0)))
 
 
 def apply_personal_schedule_template_from_state(form_key, template_state_key, st_module=st):
@@ -3734,9 +3831,9 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     week_days = [week_start + timedelta(days=offset) for offset in range(7)]
     scheduled_by_day = {day: [] for day in week_days}
     for task in snapshot["upcoming"]:
-        task_day = task.get("scheduled_date")
-        if task_day in scheduled_by_day:
-            scheduled_by_day[task_day].append(task)
+        for task_day in scheduled_date_range(task):
+            if task_day in scheduled_by_day:
+                scheduled_by_day[task_day].append(task)
     for day_tasks in scheduled_by_day.values():
         day_tasks.sort(key=lambda task: (task.get("scheduled_time") or time(23, 59), priority_rank(task["priority"]), task["title"]))
 
@@ -3790,10 +3887,8 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                     for task in scheduled_by_day[day][:3]:
                         scheduled_time = task.get("scheduled_time")
                         time_label = scheduled_time.strftime("%I:%M %p").lstrip("0") if scheduled_time else "Any time"
-                        st.markdown(
-                            f"<div style='margin:0.45rem 0 0.35rem; padding:0.45rem 0.55rem; border-radius:0.8rem; background:rgba(148,163,184,0.10);'><strong>{task['title']}</strong><br /><span style='font-size:0.8rem; opacity:0.8;'>{task['category']} · {time_label} · {task.get('scheduled_minutes') or '-'} min</span></div>",
-                            unsafe_allow_html=True,
-                        )
+                        span_label = f"{task['title']} · {time_label}" if scheduled_span_position(task, day) == "start" else None
+                        st.markdown(render_span_block(task, day, label_text=span_label, compact=True), unsafe_allow_html=True)
                     if len(scheduled_by_day[day]) > 3:
                         st.caption(f"+ {len(scheduled_by_day[day]) - 3} more")
                 else:
@@ -3907,6 +4002,11 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             personal_description = st.text_area("Notes", height=90, key=f"{panel_key}_personal_capture_description")
             personal_date = st.date_input("Date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
             personal_all_day = st.checkbox("Treat as all-day block", key=f"{panel_key}_personal_capture_all_day")
+            personal_multi_day = st.checkbox(
+                "Block multiple days",
+                value=st.session_state.get(personal_template_key) == "vacation" or bool(st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date")),
+                key=f"{panel_key}_personal_capture_multi_day",
+            )
             personal_time = st.time_input(
                 "Start time",
                 value=personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_time"],
@@ -3929,6 +4029,15 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 format_func=lambda value: value.title(),
                 key=f"{panel_key}_personal_capture_priority",
             )
+            if personal_multi_day:
+                personal_end_date = st.date_input(
+                    "End date",
+                    value=st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date", personal_date),
+                    min_value=personal_date,
+                    key=f"{panel_key}_personal_capture_scheduled_end_date",
+                )
+            else:
+                personal_end_date = personal_date
             personal_submit = st.form_submit_button("Add personal block", type="primary")
 
         if personal_submit:
@@ -3944,6 +4053,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                     personal_priority,
                     personal_date,
                     scheduled_date=personal_date,
+                    scheduled_end_date=personal_end_date if personal_multi_day else personal_date,
                     scheduled_time=scheduled_time,
                     scheduled_minutes=scheduled_minutes,
                     recurrence_rule=None,
