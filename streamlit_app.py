@@ -3003,6 +3003,21 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="review"):
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_review_command_panel(active_tasks, completed_today_all, app_settings, panel_key=panel_key)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    render_task_list_panel(
+        "Completed Today",
+        "What you finished",
+        completed_today_all,
+        f"{panel_key}_completed",
+        "No tasks completed today yet.",
+    )
+
+
 def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
