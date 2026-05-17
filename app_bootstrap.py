@@ -222,9 +222,11 @@ def run_app(context, st_module=st):
         st_module.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
     if current_page == "Overview":
-        render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")        if render_morning_digest_panel and news_articles:
+        render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day's most important work.")
+        if render_morning_digest_panel and news_articles:
             render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
-            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)        overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
