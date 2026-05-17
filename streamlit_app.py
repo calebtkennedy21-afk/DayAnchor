@@ -3372,6 +3372,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
 def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="analytics"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
     analytics_cols = st.columns(4)
     analytics_cols[0].metric("Clinic active", len([task for task in active_tasks if task.get("category") == "Clinic"]))
     analytics_cols[1].metric("Personal active", len([task for task in active_tasks if task.get("category") == "Personal"]))
