@@ -202,6 +202,8 @@ def run_app(context, st_module=st):
         render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
+        render_personal_one_thing(personal_tasks, "personal_one_thing")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_personal_quick_capture("personal_quick_capture", app_settings)
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_personal_goals_panel(personal_goals, panel_key="personal_goals")
@@ -213,8 +215,6 @@ def run_app(context, st_module=st):
             render_personal_goal_review_panel(personal_goals, panel_key="personal_goal_review")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.")
     elif current_page == "Clinic":
