@@ -3018,6 +3018,13 @@ def render_daily_review_panel(tasks, active_tasks, completed_today_all, app_sett
     )
 
 
+def render_page_footer():
+    st.markdown(
+        "<div style='margin-top: 2.5rem; padding: 1rem 0; text-align: center; opacity: 0.45; font-size: 0.8rem;'>DayAnchor · personal and clinic task capture · optional AI planning</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
