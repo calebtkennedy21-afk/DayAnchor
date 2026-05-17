@@ -8,6 +8,17 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import psycopg
 from psycopg.rows import dict_row
 import streamlit as st
+from functools import partial
+
+from clinical_reference import (
+    anatomy_structure_map as ref_anatomy_structure_map,
+    render_anatomy_related_widget as ref_render_anatomy_related_widget,
+    render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
+    suggest_protocols_for_case as ref_suggest_protocols_for_case,
+)
+import ai_workflows
+import data_access
+import page_renderers
 
 try:
     from openai import OpenAI
@@ -2905,7 +2916,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     foot_tab, ankle_tab, lower_leg_tab, knee_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee"])
 
     with foot_tab:
-        render_anatomy_structure_spotlight("Foot", anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
+        ref_render_anatomy_structure_spotlight("Foot", ref_anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
         st.markdown("### Osteology and Surface Anatomy")
         st.markdown(
             "- Tarsals: talus, calcaneus, navicular, cuboid, and the three cuneiforms form the hindfoot/midfoot scaffold.\n"
@@ -2924,7 +2935,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Ultrasound is useful for plantar fascia, peroneal tendons, and focal soft-tissue pain.\n"
             "- Medial column procedures usually orient around the talonavicular, naviculocuneiform, and first TMT complexes."
         )
-        render_anatomy_related_widget(
+        ref_render_anatomy_related_widget(
             "Foot",
             ["foot", "plantar", "metatarsal", "hallux", "sesamoid", "fascia", "ray", "midfoot", "forefoot"],
             surgical_cases,
@@ -2933,7 +2944,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with ankle_tab:
-        render_anatomy_structure_spotlight("Ankle", anatomy_structure_map("Ankle"), panel_key=f"{panel_key}_ankle_spotlight")
+        ref_render_anatomy_structure_spotlight("Ankle", ref_anatomy_structure_map("Ankle"), panel_key=f"{panel_key}_ankle_spotlight")
         st.markdown("### Articulation, Stability, and Motion")
         st.markdown(
             "- The talocrural joint is a true hinge: dorsiflexion closes the mortise, plantarflexion relaxes it.\n"
@@ -2952,7 +2963,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Weight-bearing radiographs and stress views are useful for mortise widening and talar tilt.\n"
             "- MRI highlights ligament continuity, osteochondral lesions, and peroneal tendon pathology."
         )
-        render_anatomy_related_widget(
+        ref_render_anatomy_related_widget(
             "Ankle",
             ["ankle", "achilles", "peroneal", "atfl", "cfl", "deltoid", "syndesmosis", "talocrural", "subtalar"],
             surgical_cases,
@@ -2961,7 +2972,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with lower_leg_tab:
-        render_anatomy_structure_spotlight("Lower Leg", anatomy_structure_map("Lower Leg"), panel_key=f"{panel_key}_lower_leg_spotlight")
+        ref_render_anatomy_structure_spotlight("Lower Leg", ref_anatomy_structure_map("Lower Leg"), panel_key=f"{panel_key}_lower_leg_spotlight")
         st.markdown("### Compartment Anatomy")
         st.markdown(
             "- Anterior compartment: tibialis anterior, extensor hallucis longus, extensor digitorum longus, and peroneus tertius.\n"
@@ -2980,7 +2991,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Compartment anatomy matters for swelling, overuse syndromes, and postoperative incision planning.\n"
             "- Ultrasound can evaluate Achilles continuity and dynamic tendon motion; MRI is better for deeper compartment and insertional detail."
         )
-        render_anatomy_related_widget(
+        ref_render_anatomy_related_widget(
             "Lower Leg",
             ["calf", "lower leg", "gastrocnemius", "soleus", "achilles", "peroneal", "fibula", "tibia", "compartment"],
             surgical_cases,
@@ -2989,7 +3000,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with knee_tab:
-        render_anatomy_structure_spotlight("Knee", anatomy_structure_map("Knee"), panel_key=f"{panel_key}_knee_spotlight")
+        ref_render_anatomy_structure_spotlight("Knee", ref_anatomy_structure_map("Knee"), panel_key=f"{panel_key}_knee_spotlight")
         st.markdown("### Osseous and Articular Anatomy")
         st.markdown(
             "- Tibiofemoral articulation is a bicondylar hinge with roll-and-glide mechanics across flexion arcs.\n"
@@ -3008,7 +3019,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- X-ray alignment and MRI anatomy are most useful for meniscus, cruciate, cartilage, and extensor mechanism detail.\n"
             "- Surgical planning often references the anteromedial and anterolateral portals, tibial tubercle, and posteromedial corner."
         )
-        render_anatomy_related_widget(
+        ref_render_anatomy_related_widget(
             "Knee",
             ["knee", "acl", "pcl", "meniscus", "mcl", "lcl", "patella", "patellar", "tibiofemoral", "patellofemoral"],
             surgical_cases,
@@ -3247,7 +3258,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
                 with st.expander("Educational Description", expanded=False):
                     st.write(item.get("education_notes"))
 
-            suggestions = suggest_protocols_for_case(item, protocol_documents, max_items=3)
+            suggestions = ref_suggest_protocols_for_case(item, protocol_documents, max_items=3)
             if suggestions:
                 st.markdown("**Suggested Protocols**")
                 for score, overlap_terms, doc in suggestions:
@@ -3720,6 +3731,25 @@ def render_timeline_panel(scheduled_tasks, timeline_days):
         st.markdown('<div class="empty-state">No scheduled tasks in this timeline window.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+
+load_tasks = partial(data_access.load_tasks, db_enabled, get_connection, st_module=st)
+load_surgical_cases = partial(data_access.load_surgical_cases, db_enabled, get_connection, st_module=st)
+add_surgical_case = partial(data_access.add_surgical_case, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_surgical_case = partial(data_access.update_surgical_case, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+delete_surgical_case = partial(data_access.delete_surgical_case, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_protocol_documents = partial(data_access.load_protocol_documents, db_enabled, get_connection, st_module=st)
+add_protocol_document = partial(data_access.add_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+delete_protocol_document = partial(data_access.delete_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+
+parse_ai_suggestions = ai_workflows.parse_ai_suggestions
+parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
+task_snapshot_for_ai = ai_workflows.task_snapshot_for_ai
+generate_ai_plan = partial(ai_workflows.generate_ai_plan, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+
+render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
+render_task_calendar_panel = partial(page_renderers.render_task_calendar_panel, render_task_calendar_compact_fn=render_task_calendar_compact, st_module=st)
 
 initialize_database()
 
