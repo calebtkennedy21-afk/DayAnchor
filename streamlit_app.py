@@ -13,6 +13,7 @@ from functools import partial
 from clinical_reference import (
     anatomy_structure_map as ref_anatomy_structure_map,
     anatomy_bones_map as ref_anatomy_bones_map,
+    anatomy_fractures_map as ref_anatomy_fractures_map,
     render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
@@ -4011,7 +4012,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee", "Bones"])
+    foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee", "Bones", "Fractures"])
 
     with foot_tab:
         ref_render_anatomy_structure_spotlight("Foot", ref_anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
@@ -4157,6 +4158,38 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 if "pearls" in bone_info:
                     st.markdown("**Pearls**")
                     for pearl in bone_info["pearls"]:
+                        st.markdown(f"- {pearl}")
+
+    with fractures_tab:
+        st.markdown("### Fracture Types and Locations")
+        st.markdown("Common fracture patterns by anatomical region, with mechanisms, imaging, and clinical significance.")
+        
+        fracture_region = st.radio(
+            "Select region:",
+            ["Foot Fractures", "Ankle Fractures", "Lower Leg Fractures", "Knee Fractures"],
+            key=f"{panel_key}_fractures_region",
+            horizontal=True,
+        )
+        
+        if fracture_region == "Foot Fractures":
+            fractures_data = ref_anatomy_fractures_map("Foot")
+        elif fracture_region == "Ankle Fractures":
+            fractures_data = ref_anatomy_fractures_map("Ankle")
+        elif fracture_region == "Lower Leg Fractures":
+            fractures_data = ref_anatomy_fractures_map("Lower Leg")
+        else:
+            fractures_data = ref_anatomy_fractures_map("Knee")
+        
+        for fracture_name, fracture_info in fractures_data.items():
+            with st.expander(f"**{fracture_name}**", expanded=False):
+                for key in ["location", "mechanism", "types", "clinical", "imaging", "treatment", "complications"]:
+                    if key in fracture_info:
+                        label = key.replace("_", " ").title()
+                        st.markdown(f"**{label}:** {fracture_info[key]}")
+                
+                if "pearls" in fracture_info:
+                    st.markdown("**Pearls**")
+                    for pearl in fracture_info["pearls"]:
                         st.markdown(f"- {pearl}")
 
     st.markdown('</div>', unsafe_allow_html=True)
