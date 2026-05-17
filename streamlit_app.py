@@ -3003,6 +3003,61 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    overdue_all = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    blocked_all = [task for task in active_tasks if task.get("status") == "blocked"]
+    unscheduled_high = [
+        task
+        for task in active_tasks
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
+    ]
+    due_tomorrow = [task for task in active_tasks if task.get("due_date") == (date.today() + timedelta(days=1))]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Alerts</h3><span>Actionable items that need attention</span></div>', unsafe_allow_html=True)
+
+    if overdue_all:
+        st.error(f"{len(overdue_all)} overdue task(s) need triage.")
+    if blocked_all:
+        st.warning(f"{len(blocked_all)} blocked task(s) are waiting on unblock actions.")
+    if unscheduled_high:
+        st.warning(f"{len(unscheduled_high)} high-priority task(s) are unscheduled.")
+    if due_tomorrow:
+        st.info(f"{len(due_tomorrow)} task(s) are due tomorrow.")
+    if not (overdue_all or blocked_all or unscheduled_high or due_tomorrow):
+        st.success("No urgent alerts right now.")
+
+    alert_cols = st.columns(2)
+    with alert_cols[0]:
+        render_task_list_panel(
+            "Clinic Alerts",
+            "Clinic overdue, blocked, and unscheduled items",
+            [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"],
+            "notif_clinic_alerts",
+            "No clinic-specific alerts right now.",
+        )
+    with alert_cols[1]:
+        render_task_list_panel(
+            "Personal Alerts",
+            "Personal overdue, blocked, and unscheduled items",
+            [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"],
+            "notif_personal_alerts",
+            "No personal-specific alerts right now.",
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    cols = st.columns(2, gap="large")
+    with cols[0]:
+        render_task_list_panel("Overdue Tasks", "Highest urgency", overdue_all, "notif_overdue", "No overdue tasks.")
+    with cols[1]:
+        render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
+
+
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
