@@ -4,21 +4,11 @@ import calendar
 import streamlit as st
 
 
-def build_today_plan(active_tasks, scheduled_tasks, priority_rank_fn):
+def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
     today = date.today()
 
     def sort_key(task):
-        due_date = task.get("due_date") or date.max
-        scheduled_date = task.get("scheduled_date") or date.max
-        scheduled_time = task.get("scheduled_time") or time(23, 59)
-        priority = priority_rank_fn(task["priority"])
-        if task.get("due_date") and task["due_date"] <= today:
-            return (0, task["due_date"], priority, scheduled_time)
-        if task.get("scheduled_date") == today:
-            return (1, scheduled_time, priority, due_date)
-        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time")):
-            return (2, due_date, priority, scheduled_time)
-        return (3, due_date, priority, scheduled_date, scheduled_time)
+        return attention_sort_key_fn(task, today)
 
     ordered = []
     seen_ids = set()
@@ -82,12 +72,12 @@ def render_overview_control_tower(
     if not site_display_label:
         site_display_label = overview_settings["site_label"]
 
-    today_plan = build_today_plan(active_tasks, scheduled_tasks, deps["priority_rank"])
+    today_plan = build_today_plan(active_tasks, scheduled_tasks, deps["task_attention_sort_key"])
     focus_key = f"{panel_key}_focus_task_id"
     pinned_focus = next((task for task in today_plan["ordered"] if task.get("id") == st_module.session_state.get(focus_key)), None)
     focus_task = pinned_focus or today_plan["primary"]
 
-    overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == date.today() else 1 if task.get("due_date") else 2, deps["priority_rank"](task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
+    overview_focus = sorted(active_tasks, key=lambda task: deps["task_attention_sort_key"](task, date.today()))[:4]
     next_scheduled = scheduled_tasks[:4]
     clinic_summary = deps["clinic_day_summary"](clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = deps["schedule_workload_snapshot"](active_tasks)
@@ -114,8 +104,9 @@ def render_overview_control_tower(
         if overview_focus:
             st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Next actions</h3><span>What should move first</span></div>', unsafe_allow_html=True)
             for task in overview_focus:
+                attention = deps["task_attention_signal"](task, date.today())
                 st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
+                    f"- <strong>{task['title']}</strong> · {attention['label']} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
                     unsafe_allow_html=True,
                 )
         else:
@@ -174,14 +165,8 @@ def render_overview_control_tower(
         if today_plan["ordered"]:
             st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Execution queue</h3><span>Ordered by urgency and priority</span></div>', unsafe_allow_html=True)
             for task in today_plan["ordered"][:4]:
-                if task in today_plan["urgent_due"]:
-                    tag = "Overdue"
-                elif task in today_plan["scheduled_today"]:
-                    tag = "Today"
-                elif task in today_plan["unscheduled_high"]:
-                    tag = "High priority"
-                else:
-                    tag = "Queued"
+                attention = deps["task_attention_signal"](task, date.today())
+                tag = attention["label"]
                 st_module.markdown(
                     f"- <strong>{task['title']}</strong> · {tag} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
                     unsafe_allow_html=True,

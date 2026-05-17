@@ -336,6 +336,7 @@ def task_snapshot_for_ai(tasks, max_items=20):
                     f"title={task.get('title', '')}",
                     f"category={task.get('category', '')}",
                     f"priority={task.get('priority', '')}",
+                    f"attention={task_attention_signal(task).get('label')}",
                     f"status={task.get('status', '')}",
                     f"due_date={task.get('due_date') or 'none'}",
                     f"scheduled_date={task.get('scheduled_date') or 'none'}",
@@ -2082,6 +2083,84 @@ def priority_rank(priority):
     return {"high": 0, "medium": 1, "low": 2}.get(priority, 1)
 
 
+def task_attention_signal(task, reference_date=None):
+    today = reference_date or date.today()
+    due_date = task.get("due_date")
+    created_date = task.get("created_date")
+    scheduled_date = task.get("scheduled_date")
+    scheduled_time = task.get("scheduled_time")
+
+    age_days = max(0, (today - created_date).days) if hasattr(created_date, "toordinal") else 0
+    overdue_days = max(0, (today - due_date).days) if hasattr(due_date, "toordinal") else 0
+    due_in_days = (due_date - today).days if hasattr(due_date, "toordinal") else None
+    has_schedule = bool(scheduled_date and scheduled_time)
+    high_unscheduled = task.get("priority") == "high" and not has_schedule
+
+    if overdue_days > 0:
+        return {
+            "tier": 0,
+            "sort_key": (0, -overdue_days, priority_rank(task.get("priority")), due_date or date.min),
+            "label": f"Overdue by {overdue_days}d",
+            "detail": f"{overdue_days} day(s) overdue",
+            "age_days": age_days,
+            "overdue_days": overdue_days,
+            "due_in_days": due_in_days,
+            "high_unscheduled": high_unscheduled,
+        }
+
+    if due_date == today:
+        return {
+            "tier": 1,
+            "sort_key": (1, priority_rank(task.get("priority")), scheduled_time or time(23, 59), -age_days),
+            "label": "Due today",
+            "detail": "Due today",
+            "age_days": age_days,
+            "overdue_days": 0,
+            "due_in_days": 0,
+            "high_unscheduled": high_unscheduled,
+        }
+
+    if high_unscheduled:
+        attention_label = f"Aging {age_days}d" if age_days else "High priority"
+        return {
+            "tier": 2,
+            "sort_key": (2, -age_days, priority_rank(task.get("priority")), due_date or date.max),
+            "label": attention_label,
+            "detail": "High-priority task waiting for a slot",
+            "age_days": age_days,
+            "overdue_days": 0,
+            "due_in_days": due_in_days,
+            "high_unscheduled": True,
+        }
+
+    if due_in_days is not None and due_in_days <= 3:
+        return {
+            "tier": 3,
+            "sort_key": (3, due_in_days, priority_rank(task.get("priority")), -age_days),
+            "label": f"Due in {due_in_days}d",
+            "detail": "Due soon",
+            "age_days": age_days,
+            "overdue_days": 0,
+            "due_in_days": due_in_days,
+            "high_unscheduled": False,
+        }
+
+    return {
+        "tier": 4,
+        "sort_key": (4, due_date or date.max, priority_rank(task.get("priority")), -age_days),
+        "label": f"Age {age_days}d" if age_days >= 7 else "Routine",
+        "detail": "Routine",
+        "age_days": age_days,
+        "overdue_days": 0,
+        "due_in_days": due_in_days,
+        "high_unscheduled": False,
+    }
+
+
+def task_attention_sort_key(task, reference_date=None):
+    return task_attention_signal(task, reference_date).get("sort_key")
+
+
 def format_due(task):
     due_date = task.get("due_date")
     if not due_date:
@@ -2667,15 +2746,18 @@ def set_task_status(task_id, new_status):
 
 
 def render_task_card(task, key_prefix="task"):
+    attention = task_attention_signal(task)
     st.markdown('<div class="task-card">', unsafe_allow_html=True)
     st.markdown(f'<div class="task-title">{task["title"]}</div>', unsafe_allow_html=True)
     if task.get("description"):
         st.write(task["description"])
+    attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     st.markdown(
         f'''<div class="task-meta">
             <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
             <span class="pill pill-category">{task["category"]}</span>
             <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
+            {attention_pill}
             <span class="pill">Due: {format_due(task)}</span>
             <span class="pill">Schedule: {format_schedule(task)}</span>
             <span class="pill">Repeat: {recurrence_label(task.get("recurrence_rule"), task.get("recurrence_interval") or 1)}</span>
@@ -2850,26 +2932,27 @@ def ai_workbench_summary(tasks, active_tasks):
         for task in active_tasks
         if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
     ]
+    aging_high = sorted(unscheduled_high, key=lambda task: task_attention_sort_key(task, today))
     in_progress = [task for task in active_tasks if task.get("status") == "in_progress"]
     completed_today = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == today]
 
     if overdue:
-        recommended = sorted(overdue, key=lambda task: (task.get("due_date") or date.min, priority_rank(task.get("priority"))))[0]
+        recommended = sorted(overdue, key=lambda task: task_attention_sort_key(task, today))[0]
         focus_label = f"Overdue: {recommended.get('title')}"
     elif due_today:
-        recommended = sorted(due_today, key=lambda task: (priority_rank(task.get("priority")), task.get("scheduled_time") or time(23, 59)))[0]
+        recommended = sorted(due_today, key=lambda task: task_attention_sort_key(task, today))[0]
         focus_label = f"Due today: {recommended.get('title')}"
     elif unscheduled_high:
-        recommended = sorted(unscheduled_high, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        recommended = aging_high[0]
         focus_label = f"High priority and unscheduled: {recommended.get('title')}"
     elif blocked:
-        recommended = sorted(blocked, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        recommended = sorted(blocked, key=lambda task: task_attention_sort_key(task, today))[0]
         focus_label = f"Blocked first: {recommended.get('title')}"
     elif in_progress:
-        recommended = sorted(in_progress, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        recommended = sorted(in_progress, key=lambda task: task_attention_sort_key(task, today))[0]
         focus_label = f"Keep moving: {recommended.get('title')}"
     elif active_tasks:
-        recommended = sorted(active_tasks, key=lambda task: (task.get("due_date") or date.max, priority_rank(task.get("priority"))))[0]
+        recommended = sorted(active_tasks, key=lambda task: task_attention_sort_key(task, today))[0]
         focus_label = f"Best next task: {recommended.get('title')}"
     else:
         recommended = None
@@ -2882,13 +2965,14 @@ def ai_workbench_summary(tasks, active_tasks):
         "due_soon_count": len(due_soon),
         "blocked_count": len(blocked),
         "unscheduled_high_count": len(unscheduled_high),
+        "aging_high_count": len(aging_high),
         "completed_today_count": len(completed_today),
         "focus_label": focus_label,
         "recommended_task": recommended,
         "overdue": overdue[:3],
         "due_soon": due_soon[:3],
         "blocked": blocked[:3],
-        "unscheduled_high": unscheduled_high[:3],
+        "unscheduled_high": aging_high[:3],
     }
 
 
@@ -4178,13 +4262,15 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
-    overdue_all = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    overdue_all = sorted(
+        [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()],
+        key=lambda task: task_attention_sort_key(task, date.today()),
+    )
     blocked_all = [task for task in active_tasks if task.get("status") == "blocked"]
-    unscheduled_high = [
-        task
-        for task in active_tasks
-        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
-    ]
+    unscheduled_high = sorted(
+        [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))],
+        key=lambda task: task_attention_sort_key(task, date.today()),
+    )
     due_tomorrow = [task for task in active_tasks if task.get("due_date") == (date.today() + timedelta(days=1))]
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -4206,7 +4292,7 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel(
             "Clinic Alerts",
             "Clinic overdue, blocked, and unscheduled items",
-            [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"],
+            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"], key=lambda task: task_attention_sort_key(task, date.today())),
             "notif_clinic_alerts",
             "No clinic-specific alerts right now.",
         )
@@ -4214,7 +4300,7 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel(
             "Personal Alerts",
             "Personal overdue, blocked, and unscheduled items",
-            [task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"],
+            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"], key=lambda task: task_attention_sort_key(task, date.today())),
             "notif_personal_alerts",
             "No personal-specific alerts right now.",
         )
@@ -5559,6 +5645,8 @@ page_shared_deps = {
     "resolve_overview_lens": resolve_overview_lens,
     "resolve_overview_day_context": resolve_overview_day_context,
     "priority_rank": priority_rank,
+    "task_attention_signal": task_attention_signal,
+    "task_attention_sort_key": task_attention_sort_key,
     "clinic_day_summary": clinic_day_summary,
     "schedule_workload_snapshot": schedule_workload_snapshot,
     "format_due": format_due,
@@ -5748,13 +5836,13 @@ def task_matches_filters(task):
 filtered_tasks = [task for task in tasks if task_matches_filters(task)]
 active_tasks = [task for task in filtered_tasks if task["status"] != "completed"]
 completed_tasks = [task for task in filtered_tasks if task["status"] == "completed"]
-personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
-clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
-due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
-overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: task_attention_sort_key(task, date.today()))
+clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: task_attention_sort_key(task, date.today()))
+due_today = sorted([task for task in active_tasks if task.get("due_date") == date.today()], key=lambda task: task_attention_sort_key(task, date.today()))
+overdue_tasks = sorted([task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()], key=lambda task: task_attention_sort_key(task, date.today()))
 scheduled_tasks = sorted(
     [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
-    key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
+    key=lambda task: (task["scheduled_date"], task["scheduled_time"], task_attention_sort_key(task, date.today())),
 )
 
 
@@ -5772,7 +5860,7 @@ if current_page == "Overview":
     with cols[0]:
         render_add_task_panel("add_task_form_overview", app_settings)
     with cols[1]:
-        render_task_list_panel("Due Today", "Only the highest attention work", sorted(due_today, key=lambda item: priority_rank(item["priority"])), "today", "No tasks due today.")
+        render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_task_calendar_panel(filtered_tasks, "overview_tasks_calendar", "Overview Calendar", "Month view for due, scheduled, and completed tasks")
