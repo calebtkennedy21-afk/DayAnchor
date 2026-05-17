@@ -2168,6 +2168,17 @@ def format_due(task):
     return due_date.strftime("%b %d, %Y") if hasattr(due_date, "strftime") else str(due_date)
 
 
+def format_due_badge(task):
+    due_date = task.get("due_date")
+    if not due_date:
+        return "No due"
+    if not hasattr(due_date, "strftime"):
+        return str(due_date)
+    if due_date.year == date.today().year:
+        return due_date.strftime("%b %d")
+    return due_date.strftime("%b %d, %Y")
+
+
 def format_schedule(task):
     scheduled_date = task.get("scheduled_date")
     scheduled_time = task.get("scheduled_time")
@@ -2181,6 +2192,36 @@ def format_schedule(task):
     if not scheduled_time:
         return scheduled_date.strftime("%b %d")
     return f'{scheduled_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
+
+
+def format_schedule_badge(task):
+    scheduled_date = task.get("scheduled_date")
+    scheduled_time = task.get("scheduled_time")
+    scheduled_end_date = task.get("scheduled_end_date")
+    if not scheduled_date:
+        return "Unscheduled"
+    if scheduled_end_date and scheduled_end_date != scheduled_date:
+        if scheduled_date.year == date.today().year and scheduled_end_date.year == date.today().year:
+            date_label = f"{scheduled_date.strftime('%b %d')} - {scheduled_end_date.strftime('%b %d')}"
+        else:
+            date_label = f"{scheduled_date.strftime('%b %d, %Y')} - {scheduled_end_date.strftime('%b %d, %Y')}"
+        if scheduled_time:
+            return f"{date_label}, {scheduled_time.strftime('%I:%M %p').lstrip('0')}"
+        return date_label
+    if scheduled_date.year == date.today().year:
+        date_label = scheduled_date.strftime("%b %d")
+    else:
+        date_label = scheduled_date.strftime("%b %d, %Y")
+    if not scheduled_time:
+        return date_label
+    return f"{date_label}, {scheduled_time.strftime('%I:%M %p').lstrip('0')}"
+
+
+def format_recurrence_badge(task):
+    label = recurrence_label(task.get("recurrence_rule"), task.get("recurrence_interval") or 1)
+    if label == "No recurrence":
+        return "No repeat"
+    return label
 
 
 def scheduled_date_range(task):
@@ -2758,9 +2799,9 @@ def render_task_card(task, key_prefix="task"):
             <span class="pill pill-category">{task["category"]}</span>
             <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
             {attention_pill}
-            <span class="pill">Due: {format_due(task)}</span>
-            <span class="pill">Schedule: {format_schedule(task)}</span>
-            <span class="pill">Repeat: {recurrence_label(task.get("recurrence_rule"), task.get("recurrence_interval") or 1)}</span>
+            <span class="pill">Due {format_due_badge(task)}</span>
+            <span class="pill">At {format_schedule_badge(task)}</span>
+            <span class="pill">Repeat {format_recurrence_badge(task)}</span>
         </div>''',
         unsafe_allow_html=True,
     )
