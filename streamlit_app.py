@@ -2770,9 +2770,12 @@ def render_task_card(task, key_prefix="task"):
                 key=f"{key_prefix}_edit_sched_minutes_{task['id']}",
             )
         if edit_multi_day:
+            edit_end_default = task.get("scheduled_end_date") or task.get("scheduled_date") or date.today()
+            if edit_end_default < edit_sched_date:
+                edit_end_default = edit_sched_date
             edit_sched_end = st.date_input(
                 "Scheduled end date",
-                value=task.get("scheduled_end_date") or task.get("scheduled_date") or date.today(),
+                value=edit_end_default,
                 min_value=edit_sched_date,
                 disabled=not edit_has_schedule,
                 key=f"{key_prefix}_edit_sched_end_{task['id']}",
@@ -4030,9 +4033,12 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 key=f"{panel_key}_personal_capture_priority",
             )
             if personal_multi_day:
+                personal_end_default = st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date", personal_date)
+                if personal_end_default < personal_date:
+                    personal_end_default = personal_date
                 personal_end_date = st.date_input(
                     "End date",
-                    value=st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date", personal_date),
+                    value=personal_end_default,
                     min_value=personal_date,
                     key=f"{panel_key}_personal_capture_scheduled_end_date",
                 )
