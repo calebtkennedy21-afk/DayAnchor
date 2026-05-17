@@ -1204,25 +1204,25 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
             completed_count = completed_by_day.get(day, 0)
             load_score = due_count + scheduled_count
             if load_score >= 6:
-                day_bg = "rgba(185, 28, 28, 0.14)"
+                day_bg = "rgba(127, 29, 29, 0.55)"
             elif load_score >= 4:
-                day_bg = "rgba(217, 119, 6, 0.16)"
+                day_bg = "rgba(120, 53, 15, 0.52)"
             elif load_score >= 2:
-                day_bg = "rgba(37, 99, 235, 0.12)"
+                day_bg = "rgba(30, 64, 175, 0.5)"
             else:
-                day_bg = "rgba(148, 163, 184, 0.08)"
+                day_bg = "rgba(51, 65, 85, 0.52)"
 
             parts = [
                 f"<span style='display:inline-block; font-weight:700; padding:0.1rem 0.4rem; border-radius:999px; background:{day_bg};'>{day.day}</span>"
             ]
             badges = []
             if day.weekday() in clinic_weekday_indexes:
-                badges.append(("Clinic", "#d1fae5", "#047857"))
+                badges.append(("Clinic", "rgba(20, 83, 45, 0.75)", "#bbf7d0"))
             or_label = or_cadence_label_for_day(day, settings)
             if or_label:
-                badges.append((or_label, "#e0e7ff", "#3730a3"))
+                badges.append((or_label, "rgba(49, 46, 129, 0.75)", "#c7d2fe"))
             if day.weekday() == 4 and ((day.isocalendar().week + procedure_friday_cycle_offset) % procedure_friday_frequency == 0):
-                badges.append(("Procedure Friday", "#ffedd5", "#c2410c"))
+                badges.append(("Procedure Friday", "rgba(124, 45, 18, 0.74)", "#fed7aa"))
 
             for label, bg, fg in badges:
                 parts.append(
@@ -1233,14 +1233,14 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
                 span_label = item.get("title") if scheduled_span_position(item, day) != "start" else f"{item['title']}"
                 parts.append(render_span_block(item, day, label_text=span_label, compact=True))
             if scheduled_count:
-                sched_bg = "#dbeafe" if scheduled_count < 3 else "#93c5fd"
-                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{sched_bg}; color:#1e3a8a; font-size:0.76rem;'>S{scheduled_count}</span>")
+                sched_bg = "rgba(30, 64, 175, 0.68)" if scheduled_count < 3 else "rgba(59, 130, 246, 0.68)"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{sched_bg}; color:#dbeafe; font-size:0.76rem;'>S{scheduled_count}</span>")
             if due_count:
-                due_bg = "#fee2e2" if due_count < 3 else "#fca5a5"
-                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{due_bg}; color:#991b1b; font-size:0.76rem;'>D{due_count}</span>")
+                due_bg = "rgba(127, 29, 29, 0.7)" if due_count < 3 else "rgba(153, 27, 27, 0.74)"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{due_bg}; color:#fecaca; font-size:0.76rem;'>D{due_count}</span>")
             if completed_count:
-                done_bg = "#dcfce7" if completed_count < 3 else "#86efac"
-                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{done_bg}; color:#166534; font-size:0.76rem;'>C{completed_count}</span>")
+                done_bg = "rgba(20, 83, 45, 0.68)" if completed_count < 3 else "rgba(22, 101, 52, 0.7)"
+                parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{done_bg}; color:#bbf7d0; font-size:0.76rem;'>C{completed_count}</span>")
 
             cells.append("<br>".join(parts))
 
@@ -1255,14 +1255,14 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, app_settings=N
     st.markdown(
         """
         <div style='display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin:0.2rem 0 0.8rem;'>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dbeafe; display:inline-block;'></span>Scheduled</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,#fef3c7,#fde68a); border:1px solid #f59e0b; display:inline-block;'></span>Vacation / personal range</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,#ccfbf1,#99f6e4); border:1px solid #10b981; display:inline-block;'></span>Clinic multi-day</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#fee2e2; display:inline-block;'></span>Due</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dcfce7; display:inline-block;'></span>Completed</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#d1fae5; display:inline-block;'></span>Clinic</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#e0e7ff; display:inline-block;'></span>OR</span>
-            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#ffedd5; display:inline-block;'></span>Procedure Friday</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(30,64,175,0.68); display:inline-block;'></span>Scheduled</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,rgba(120,53,15,0.7),rgba(146,64,14,0.68)); border:1px solid #f59e0b; display:inline-block;'></span>Vacation / personal range</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,rgba(15,118,110,0.66),rgba(13,148,136,0.64)); border:1px solid #10b981; display:inline-block;'></span>Clinic multi-day</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(127,29,29,0.7); display:inline-block;'></span>Due</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(20,83,45,0.68); display:inline-block;'></span>Completed</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(20,83,45,0.75); display:inline-block;'></span>Clinic</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(49,46,129,0.75); display:inline-block;'></span>OR</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:rgba(124,45,18,0.74); display:inline-block;'></span>Procedure Friday</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1417,39 +1417,62 @@ def inject_styles():
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Sans:wght@400;500;700&display=swap');
 
         :root {
-            --bg: #f4f1ea;
-            --surface: rgba(255, 252, 246, 0.88);
-            --ink: #1f2933;
-            --muted: #667085;
-            --line: rgba(31, 41, 51, 0.08);
-            --shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+            --bg: #04060c;
+            --surface: rgba(9, 14, 24, 0.86);
+            --ink: #e6eefb;
+            --muted: #8ea3c2;
+            --line: rgba(100, 116, 139, 0.28);
+            --shadow: 0 20px 60px rgba(2, 6, 23, 0.68);
             --radius: 22px;
         }
 
         .stApp {
             background:
-                radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 28%),
-                radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 24%),
-                linear-gradient(180deg, #f8f4ec 0%, var(--bg) 46%, #efe9dc 100%);
+                radial-gradient(circle at top left, rgba(20, 184, 166, 0.12), transparent 30%),
+                radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 26%),
+                linear-gradient(180deg, #060a14 0%, var(--bg) 44%, #02040a 100%);
             color: var(--ink);
             font-family: 'DM Sans', sans-serif;
         }
 
         p, li, label, .stMarkdown, .stCaption, .stText, [data-testid="stMarkdownContainer"] {
-            color: #1f2933;
+            color: var(--ink);
         }
 
         h1, h2, h3, h4, .stMarkdown strong {
             font-family: 'Space Grotesk', sans-serif;
-            color: #12212d;
+            color: #f3f7ff;
             letter-spacing: -0.03em;
+        }
+
+        .stMain [data-baseweb="input"] > div,
+        .stMain [data-baseweb="textarea"] > div,
+        .stMain [data-baseweb="select"] > div,
+        .stMain [data-baseweb="tag"] {
+            background: rgba(15, 23, 42, 0.72) !important;
+            border: 1px solid rgba(148, 163, 184, 0.34) !important;
+            color: var(--ink) !important;
+        }
+
+        .stMain [data-baseweb="input"] input,
+        .stMain [data-baseweb="textarea"] textarea,
+        .stMain [data-baseweb="select"] input,
+        .stMain [data-baseweb="select"] span,
+        .stMain [data-baseweb="tag"] span {
+            color: var(--ink) !important;
+        }
+
+        .stMain [data-baseweb="input"] input::placeholder,
+        .stMain [data-baseweb="textarea"] textarea::placeholder {
+            color: rgba(203, 213, 225, 0.68) !important;
+            opacity: 1 !important;
         }
 
         section[data-testid="stSidebar"] {
             background:
-                radial-gradient(circle at 16% 8%, rgba(56, 189, 248, 0.22), transparent 22%),
-                radial-gradient(circle at 88% 18%, rgba(249, 115, 22, 0.18), transparent 24%),
-                linear-gradient(180deg, rgba(12, 24, 35, 0.98), rgba(15, 23, 42, 0.96));
+                radial-gradient(circle at 16% 8%, rgba(56, 189, 248, 0.14), transparent 22%),
+                radial-gradient(circle at 88% 18%, rgba(245, 158, 11, 0.12), transparent 24%),
+                linear-gradient(180deg, rgba(8, 16, 28, 0.98), rgba(8, 13, 24, 0.97));
             border-right: 1px solid rgba(255, 255, 255, 0.14);
             box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.06);
         }
@@ -1514,19 +1537,19 @@ def inject_styles():
         .stMainBlockContainer .stButton > button,
         .stMain .stButton > button,
         [data-testid="stAppViewBlockContainer"] .stButton > button {
-            background: linear-gradient(135deg, #0f766e, #1d4ed8);
+            background: linear-gradient(135deg, #0b5f5f, #1e40af);
             color: #ffffff !important;
             font-weight: 600;
             border: none;
             border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(15, 118, 110, 0.25);
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.48);
         }
 
         .stMainBlockContainer .stButton > button:hover,
         .stMain .stButton > button:hover,
         [data-testid="stAppViewBlockContainer"] .stButton > button:hover {
-            filter: brightness(1.07);
-            box-shadow: 0 4px 16px rgba(15, 118, 110, 0.35);
+            filter: brightness(1.05);
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.58);
         }
 
         .stMainBlockContainer .stButton > button:active,
@@ -1548,10 +1571,11 @@ def inject_styles():
             margin-bottom: 1.5rem;
             border-radius: 28px;
             background:
-                radial-gradient(circle at top right, rgba(255, 255, 255, 0.34), transparent 26%),
-                linear-gradient(135deg, #0f766e 0%, #155eef 52%, #fb923c 100%);
+                radial-gradient(circle at top right, rgba(148, 163, 184, 0.24), transparent 30%),
+                linear-gradient(135deg, #082f49 0%, #0f172a 52%, #1f2937 100%);
             color: white;
-            box-shadow: 0 28px 80px rgba(15, 118, 110, 0.28);
+            box-shadow: 0 28px 80px rgba(2, 6, 23, 0.72);
+            border: 1px solid rgba(100, 116, 139, 0.28);
         }
 
         .hero h1 {
@@ -1594,8 +1618,8 @@ def inject_styles():
         }
 
         .task-card {
-            background: rgba(255, 253, 248, 0.95);
-            border: 1px solid rgba(18, 33, 45, 0.08);
+            background: rgba(15, 23, 42, 0.78);
+            border: 1px solid rgba(148, 163, 184, 0.2);
             border-radius: 18px;
             padding: 1rem;
             margin-bottom: 0.9rem;
@@ -1606,7 +1630,7 @@ def inject_styles():
             font-family: 'Space Grotesk', sans-serif;
             font-size: 1.05rem;
             font-weight: 700;
-            color: #12212d;
+            color: #ecf3ff;
         }
 
         .task-meta {
@@ -1627,19 +1651,19 @@ def inject_styles():
             letter-spacing: 0.01em;
         }
 
-        .pill-priority-high { color: #991b1b; background: #fee2e2; }
-        .pill-priority-medium { color: #92400e; background: #ffedd5; }
-        .pill-priority-low { color: #166534; background: #dcfce7; }
-        .pill-category { color: #0f172a; background: #e2e8f0; }
-        .pill-status { color: #0f766e; background: #ccfbf1; }
-        .pill-status-todo { color: #1e3a8a; background: #dbeafe; }
-        .pill-status-in_progress { color: #7c2d12; background: #ffedd5; }
-        .pill-status-blocked { color: #991b1b; background: #fee2e2; }
-        .pill-status-completed { color: #166534; background: #dcfce7; }
+        .pill-priority-high { color: #fecaca; background: rgba(127, 29, 29, 0.4); }
+        .pill-priority-medium { color: #fed7aa; background: rgba(124, 45, 18, 0.4); }
+        .pill-priority-low { color: #bbf7d0; background: rgba(20, 83, 45, 0.42); }
+        .pill-category { color: #dbeafe; background: #1e293b; }
+        .pill-status { color: #99f6e4; background: rgba(17, 94, 89, 0.4); }
+        .pill-status-todo { color: #bfdbfe; background: rgba(30, 58, 138, 0.38); }
+        .pill-status-in_progress { color: #fde68a; background: rgba(120, 53, 15, 0.42); }
+        .pill-status-blocked { color: #fecaca; background: rgba(127, 29, 29, 0.4); }
+        .pill-status-completed { color: #bbf7d0; background: rgba(20, 83, 45, 0.42); }
 
         .empty-state {
-            border: 1px dashed rgba(18, 33, 45, 0.15);
-            background: rgba(255, 255, 255, 0.45);
+            border: 1px dashed rgba(148, 163, 184, 0.4);
+            background: rgba(15, 23, 42, 0.45);
             border-radius: 18px;
             padding: 1rem;
             color: var(--muted);
@@ -1653,10 +1677,10 @@ def inject_styles():
 
         .ai-hero {
             background:
-                radial-gradient(circle at top right, rgba(255, 255, 255, 0.22), transparent 24%),
-                linear-gradient(135deg, rgba(15, 118, 110, 0.98), rgba(21, 94, 239, 0.96));
+                radial-gradient(circle at top right, rgba(148, 163, 184, 0.2), transparent 24%),
+                linear-gradient(135deg, rgba(8, 47, 73, 0.98), rgba(15, 23, 42, 0.98));
             color: white;
-            border: 1px solid rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(100, 116, 139, 0.3);
         }
 
         .ai-hero .panel-title h3,
@@ -1670,9 +1694,9 @@ def inject_styles():
         .ai-stat-card {
             border-radius: 18px;
             padding: 0.95rem 1rem;
-            background: rgba(255, 255, 255, 0.12);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+            background: rgba(15, 23, 42, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.16);
         }
 
         .ai-stat-label {
@@ -1696,8 +1720,8 @@ def inject_styles():
         }
 
         .ai-command {
-            background: rgba(255, 255, 255, 0.7);
-            border: 1px solid rgba(18, 33, 45, 0.08);
+            background: rgba(15, 23, 42, 0.78);
+            border: 1px solid rgba(148, 163, 184, 0.22);
         }
 
         .ai-chip-grid {
@@ -1712,16 +1736,16 @@ def inject_styles():
             align-items: center;
             border-radius: 999px;
             padding: 0.35rem 0.7rem;
-            background: rgba(15, 23, 42, 0.06);
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            color: #12212d;
+            background: rgba(51, 65, 85, 0.5);
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            color: #dbe7fb;
             font-size: 0.8rem;
             font-weight: 600;
         }
 
         .ai-response-card {
-            background: rgba(255, 255, 255, 0.86);
-            border: 1px solid rgba(18, 33, 45, 0.08);
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.24);
         }
 
         .ai-list {
@@ -1751,9 +1775,9 @@ def inject_styles():
             border-radius: 22px;
             padding: 1rem 1.15rem;
             margin: 0 0 1rem;
-            border: 1px solid rgba(18, 33, 45, 0.08);
-            background: rgba(255, 255, 255, 0.58);
-            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: rgba(15, 23, 42, 0.72);
+            box-shadow: 0 18px 40px rgba(2, 6, 23, 0.45);
         }
 
         .page-banner h2 {
@@ -1821,17 +1845,17 @@ def render_span_block(task, day, label_text=None, compact=False):
         and task.get("category") == "Clinic"
     )
     if is_vacation_span:
-        bg = "linear-gradient(90deg, #fef3c7, #fde68a)"
-        fg = "#92400e"
+        bg = "linear-gradient(90deg, rgba(120, 53, 15, 0.7), rgba(146, 64, 14, 0.68))"
+        fg = "#fde68a"
         border = "#f59e0b"
     elif is_clinic_span:
-        bg = "linear-gradient(90deg, #ccfbf1, #99f6e4)"
-        fg = "#065f46"
+        bg = "linear-gradient(90deg, rgba(15, 118, 110, 0.66), rgba(13, 148, 136, 0.64))"
+        fg = "#ccfbf1"
         border = "#10b981"
     else:
-        bg = "rgba(224, 231, 255, 0.92)"
-        fg = "#3730a3"
-        border = "#6366f1"
+        bg = "rgba(30, 41, 59, 0.88)"
+        fg = "#bfdbfe"
+        border = "#60a5fa"
 
     border_radius = {
         "single": "999px",
