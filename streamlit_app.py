@@ -3219,14 +3219,20 @@ def personal_schedule_templates():
 def apply_personal_schedule_template(form_key, template_key, st_module=st):
     templates = personal_schedule_templates()
     template = templates.get(template_key, templates["blank"])
+    start_date = date.today()
+    end_offset_days = int(template.get("scheduled_end_offset_days", 0))
+    end_date = start_date + timedelta(days=end_offset_days)
+    if end_date < start_date:
+        end_date = start_date
     st_module.session_state[f"{form_key}_title"] = template["title"]
     st_module.session_state[f"{form_key}_description"] = template["description"]
     st_module.session_state[f"{form_key}_priority"] = template["priority"]
-    st_module.session_state[f"{form_key}_scheduled_date"] = date.today()
+    st_module.session_state[f"{form_key}_scheduled_date"] = start_date
     st_module.session_state[f"{form_key}_scheduled_time"] = template["scheduled_time"]
     st_module.session_state[f"{form_key}_scheduled_minutes"] = template["scheduled_minutes"]
     st_module.session_state[f"{form_key}_all_day"] = template["all_day"]
-    st_module.session_state[f"{form_key}_scheduled_end_date"] = date.today() + timedelta(days=int(template.get("scheduled_end_offset_days", 0)))
+    st_module.session_state[f"{form_key}_scheduled_end_date"] = end_date
+    st_module.session_state[f"{form_key}_multi_day"] = end_date > start_date
 
 
 def apply_personal_schedule_template_from_state(form_key, template_state_key, st_module=st):
@@ -4286,31 +4292,51 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             on_change=apply_personal_schedule_template_from_state,
             args=(f"{panel_key}_personal_capture", personal_template_key),
         )
+        active_personal_template = st.session_state.get(personal_template_key, "blank")
+        is_vacation_template = active_personal_template == "vacation"
         with st.form(f"{panel_key}_personal_capture", clear_on_submit=True):
             personal_title = st.text_input("Title", key=f"{panel_key}_personal_capture_title")
             personal_description = st.text_area("Notes", height=90, key=f"{panel_key}_personal_capture_description")
-            personal_date = st.date_input("Date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
-            personal_all_day = st.checkbox("Treat as all-day block", key=f"{panel_key}_personal_capture_all_day")
+            personal_date = st.date_input("Start date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
+            all_day_key = f"{panel_key}_personal_capture_all_day"
+            multi_day_key = f"{panel_key}_personal_capture_multi_day"
+            if is_vacation_template:
+                st.session_state[all_day_key] = True
+                st.session_state[multi_day_key] = True
+
+            personal_all_day = st.checkbox(
+                "Treat as all-day block",
+                key=all_day_key,
+                disabled=is_vacation_template,
+            )
+            multi_day_key = f"{panel_key}_personal_capture_multi_day"
+            if multi_day_key not in st.session_state:
+                st.session_state[multi_day_key] = False
             personal_multi_day = st.checkbox(
                 "Block multiple days",
-                value=st.session_state.get(personal_template_key) == "vacation" or bool(st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date")),
-                key=f"{panel_key}_personal_capture_multi_day",
+                key=multi_day_key,
+                disabled=is_vacation_template,
             )
-            personal_time = st.time_input(
-                "Start time",
-                value=personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_time"],
-                disabled=personal_all_day,
-                key=f"{panel_key}_personal_capture_scheduled_time",
-            )
-            personal_minutes = st.selectbox(
-                "Duration (minutes)",
-                [15, 30, 45, 60, 90, 120, 180, 240, 480],
-                index=[15, 30, 45, 60, 90, 120, 180, 240, 480].index(
-                    personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_minutes"]
-                ),
-                disabled=personal_all_day,
-                key=f"{panel_key}_personal_capture_scheduled_minutes",
-            )
+            if is_vacation_template:
+                st.caption("Vacation mode uses all-day blocks and a required date range.")
+                personal_time = time(8, 0)
+                personal_minutes = 480
+            else:
+                personal_time = st.time_input(
+                    "Start time",
+                    value=personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_time"],
+                    disabled=personal_all_day,
+                    key=f"{panel_key}_personal_capture_scheduled_time",
+                )
+                personal_minutes = st.selectbox(
+                    "Duration (minutes)",
+                    [15, 30, 45, 60, 90, 120, 180, 240, 480],
+                    index=[15, 30, 45, 60, 90, 120, 180, 240, 480].index(
+                        personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_minutes"]
+                    ),
+                    disabled=personal_all_day,
+                    key=f"{panel_key}_personal_capture_scheduled_minutes",
+                )
             personal_priority = st.selectbox(
                 "Priority",
                 ["high", "medium", "low"],
@@ -4319,13 +4345,14 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 key=f"{panel_key}_personal_capture_priority",
             )
             if personal_multi_day:
-                personal_end_default = st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date", personal_date)
-                if personal_end_default < personal_date:
-                    personal_end_default = personal_date
+                min_end_date = personal_date + timedelta(days=1) if is_vacation_template else personal_date
+                personal_end_default = st.session_state.get(f"{panel_key}_personal_capture_scheduled_end_date", min_end_date)
+                if personal_end_default < min_end_date:
+                    personal_end_default = min_end_date
                 personal_end_date = st.date_input(
                     "End date",
                     value=personal_end_default,
-                    min_value=personal_date,
+                    min_value=min_end_date,
                     key=f"{panel_key}_personal_capture_scheduled_end_date",
                 )
             else:
