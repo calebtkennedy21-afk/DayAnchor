@@ -171,7 +171,7 @@ def run_app(context, st_module=st):
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_add_task_panel("overview_add_task", app_settings, default_category="Clinic")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_focus_panel(personal_tasks, app_settings, panel_key="overview_personal")
+        render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
