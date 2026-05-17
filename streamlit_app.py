@@ -3,7 +3,7 @@ import json
 import re
 import calendar
 from datetime import date, time, timedelta
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg.rows import dict_row
@@ -1014,6 +1014,105 @@ def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_
     protocol_ranked.sort(key=lambda item: item[0], reverse=True)
 
     return case_ranked[:max_items], protocol_ranked[:max_items]
+
+
+def build_anatomy_svg(region_name):
+        if region_name == "Foot":
+                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Foot schematic">
+    <defs>
+        <linearGradient id="footGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#d1fae5"/>
+            <stop offset="100%" stop-color="#bae6fd"/>
+        </linearGradient>
+    </defs>
+    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
+    <path d="M210 250C185 205 198 145 255 123C294 108 334 120 360 145C391 175 425 193 477 197C530 201 597 190 657 194C721 198 764 230 772 267C781 309 754 346 694 350C612 356 530 338 452 327C365 314 273 306 210 250Z" fill="url(#footGrad)" stroke="#0f172a" stroke-width="6"/>
+    <path d="M322 145L320 308M390 165L392 320M460 176L460 327M530 182L534 332M600 185L606 333" stroke="#0f172a" stroke-width="5" opacity="0.55"/>
+    <path d="M257 170L365 159M257 198L384 193M247 228L401 226M255 258L419 261" stroke="#0f172a" stroke-width="4" opacity="0.45"/>
+    <circle cx="665" cy="226" r="18" fill="#f59e0b" stroke="#7c2d12" stroke-width="4"/>
+    <circle cx="716" cy="237" r="13" fill="#fb7185" stroke="#9f1239" stroke-width="4"/>
+    <circle cx="742" cy="252" r="11" fill="#60a5fa" stroke="#1d4ed8" stroke-width="4"/>
+    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Foot</text>
+    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Tarsals, rays, plantar fascia, and tendon balance</text>
+    <text x="76" y="338" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Heel / calcaneus</text>
+    <text x="585" y="170" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Metatarsals</text>
+    <text x="668" y="194" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Hallux</text>
+    <text x="716" y="288" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Forefoot</text>
+</svg>"""
+        if region_name == "Ankle":
+                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Ankle schematic">
+    <defs>
+        <linearGradient id="ankleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#fce7f3"/>
+            <stop offset="100%" stop-color="#ddd6fe"/>
+        </linearGradient>
+    </defs>
+    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
+    <rect x="232" y="74" width="112" height="214" rx="30" fill="#e2e8f0" stroke="#0f172a" stroke-width="6"/>
+    <rect x="396" y="74" width="88" height="214" rx="28" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
+    <ellipse cx="410" cy="310" rx="120" ry="72" fill="url(#ankleGrad)" stroke="#0f172a" stroke-width="6"/>
+    <path d="M308 282C332 246 395 228 470 238C530 246 576 277 598 318" fill="none" stroke="#0f172a" stroke-width="8"/>
+    <path d="M252 320C304 346 364 351 428 344C487 338 546 325 612 289" fill="none" stroke="#2563eb" stroke-width="6" opacity="0.75"/>
+    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Ankle</text>
+    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Mortise, syndesmosis, deltoid, and lateral ligament complex</text>
+    <text x="210" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Tibia</text>
+    <text x="398" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Fibula</text>
+    <text x="468" y="365" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Talus / hindfoot</text>
+</svg>"""
+        if region_name == "Lower Leg":
+                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Lower leg schematic">
+    <defs>
+        <linearGradient id="legGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#dbeafe"/>
+            <stop offset="100%" stop-color="#e0f2fe"/>
+        </linearGradient>
+    </defs>
+    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
+    <ellipse cx="430" cy="190" rx="180" ry="112" fill="url(#legGrad)" stroke="#0f172a" stroke-width="6"/>
+    <rect x="330" y="76" width="78" height="230" rx="22" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
+    <rect x="455" y="88" width="64" height="222" rx="20" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
+    <path d="M288 215C344 206 393 202 449 205C505 209 554 219 616 235" fill="none" stroke="#0f172a" stroke-width="7"/>
+    <path d="M351 310C377 336 412 347 458 347C512 347 556 326 590 287" fill="none" stroke="#ef4444" stroke-width="7"/>
+    <path d="M402 307C430 324 465 327 503 320" fill="none" stroke="#f59e0b" stroke-width="7"/>
+    <path d="M474 295C506 310 534 313 560 304" fill="none" stroke="#8b5cf6" stroke-width="7"/>
+    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Lower Leg</text>
+    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Tibial and fibular shafts, calf compartments, Achilles unit, nerves, and vessels</text>
+    <text x="332" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Tibia</text>
+    <text x="452" y="64" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Fibula</text>
+    <text x="610" y="248" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Posterior calf / gastroc-soleus</text>
+    <text x="420" y="378" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Achilles tendon</text>
+</svg>"""
+        return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Knee schematic">
+    <defs>
+        <linearGradient id="kneeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#fee2e2"/>
+            <stop offset="100%" stop-color="#fde68a"/>
+        </linearGradient>
+    </defs>
+    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
+    <rect x="284" y="70" width="134" height="130" rx="38" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
+    <rect x="548" y="70" width="134" height="130" rx="38" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
+    <ellipse cx="482" cy="212" rx="162" ry="106" fill="url(#kneeGrad)" stroke="#0f172a" stroke-width="6"/>
+    <ellipse cx="482" cy="212" rx="58" ry="82" fill="#fff" stroke="#0f172a" stroke-width="6"/>
+    <path d="M366 220C396 178 429 160 482 160C537 160 571 178 600 220" fill="none" stroke="#0f172a" stroke-width="7"/>
+    <path d="M360 258C399 237 437 227 482 227C529 227 567 237 602 258" fill="none" stroke="#2563eb" stroke-width="7"/>
+    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Knee</text>
+    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Menisci, cruciates, collaterals, and extensor mechanism</text>
+    <text x="293" y="60" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Femur</text>
+    <text x="540" y="60" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Femur</text>
+    <text x="470" y="355" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Tibiofemoral joint</text>
+    <text x="444" y="201" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Patella</text>
+</svg>"""
+
+
+def render_anatomy_figure(region_name, caption, panel_key):
+        svg_markup = build_anatomy_svg(region_name)
+        svg_data = quote(svg_markup)
+        st.markdown(
+                f'<div class="anatomy-figure"><img src="data:image/svg+xml;utf8,{svg_data}" alt="{caption}" style="width:100%;max-width:980px;border-radius:18px;border:1px solid rgba(148,163,184,0.25);background:#fff;" /></div>',
+                unsafe_allow_html=True,
+        )
+        st.caption(caption)
 
 
 def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, protocol_documents, panel_key):
@@ -2672,40 +2771,31 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
 
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    foot_tab, ankle_tab, knee_tab = st.tabs(["Foot", "Ankle", "Knee"])
+    foot_tab, ankle_tab, lower_leg_tab, knee_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee"])
 
     with foot_tab:
-        st.markdown("### Osteology")
+        st.markdown("### Osteology and Surface Anatomy")
         st.markdown(
-            "- Tarsals: talus, calcaneus, navicular, cuboid, and cuneiform complex (medial/intermediate/lateral).\n"
-            "- Metatarsals I-V: base, shaft, and head morphology with functional load transfer through rays.\n"
-            "- Phalanges: hallux with proximal/distal phalanges; lesser toes with proximal/middle/distal segments."
+            "- Tarsals: talus, calcaneus, navicular, cuboid, and the three cuneiforms form the hindfoot/midfoot scaffold.\n"
+            "- Metatarsals I-V define the rays and create the forefoot lever arm for push-off and balance.\n"
+            "- Phalanges and sesamoids matter most at the first MTP joint, where flexor hallucis brevis and sesamoids amplify load transfer."
         )
-        st.markdown("### Soft Tissue and Functional Anatomy")
+        st.markdown("### Soft Tissue, Compartments, and Exam Relevance")
         st.markdown(
-            "- Plantar fascia (plantar aponeurosis): key longitudinal arch tension structure via windlass mechanism.\n"
-            "- Intrinsic musculature: lumbricals, interossei, flexor digitorum brevis, abductor hallucis, quadratus plantae.\n"
-            "- Long tendons crossing the foot: tibialis posterior/anterior, peroneus longus/brevis, flexor hallucis longus, flexor digitorum longus."
+            "- Plantar fascia is the central tension band of the arch and is commonly palpated at the medial calcaneal tubercle.\n"
+            "- Intrinsic muscles stabilize the metatarsal heads and support the transverse arch during stance.\n"
+            "- Key exam landmarks include the navicular tuberosity, base of the fifth metatarsal, sesamoids, and first MTP dorsiflexion.",
         )
-        st.markdown("### Clinical Orientation")
+        st.markdown("### Imaging and Surgical Landmarks")
         st.markdown(
-            "- Medial column stabilization: talonavicular and naviculocuneiform mechanics.\n"
-            "- Lateral column support: calcaneocuboid articulation and peroneal tendon contribution.\n"
-            "- Forefoot loading: first MTP complex and sesamoid apparatus in push-off."
+            "- Radiographs often hinge on weight-bearing alignment, first-ray position, and calcaneal pitch.\n"
+            "- Ultrasound is useful for plantar fascia, peroneal tendons, and focal soft-tissue pain.\n"
+            "- Medial column procedures usually orient around the talonavicular, naviculocuneiform, and first TMT complexes."
         )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Gray266.png/1024px-Gray266.png",
-            caption="Dorsum of foot anatomy (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Gray446.png/1024px-Gray446.png",
-            caption="Plantar structures and tendon relationships (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
+        render_anatomy_figure("Foot", "Simplified foot schematic for tarsal, ray, and plantar orientation.", panel_key=f"{panel_key}_foot_figure")
         render_anatomy_related_widget(
             "Foot",
             ["foot", "plantar", "metatarsal", "hallux", "sesamoid", "fascia", "ray", "midfoot", "forefoot"],
@@ -2715,34 +2805,25 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with ankle_tab:
-        st.markdown("### Articulation and Stability")
+        st.markdown("### Articulation, Stability, and Motion")
         st.markdown(
-            "- Talocrural joint: tibial plafond with talar dome, primary sagittal-plane motion (dorsiflexion/plantarflexion).\n"
-            "- Subtalar joint: talocalcaneal articulation influencing inversion/eversion coupling and hindfoot alignment.\n"
-            "- Distal tibiofibular syndesmosis: AITFL, PITFL, interosseous ligament complex for mortise integrity."
+            "- The talocrural joint is a true hinge: dorsiflexion closes the mortise, plantarflexion relaxes it.\n"
+            "- The subtalar joint couples inversion and eversion with hindfoot valgus/varus alignment.\n"
+            "- Syndesmotic integrity depends on the AITFL, PITFL, interosseous ligament, and interosseous membrane."
         )
-        st.markdown("### Ligament Complexes")
+        st.markdown("### Ligament Complexes and Pathology Patterns")
         st.markdown(
-            "- Lateral complex: ATFL, CFL, PTFL.\n"
-            "- Medial (deltoid) complex: superficial and deep components spanning tibionavicular/tibiocalcaneal/tibiotalar fibers.\n"
-            "- Spring ligament (plantar calcaneonavicular): critical for talar head support and medial arch continuity."
+            "- Lateral ligament injuries most often begin with the ATFL, then progress to the CFL.\n"
+            "- The deltoid complex resists talar tilt and external rotation; syndesmotic injury changes mortise congruence.\n"
+            "- The spring ligament and posterior tibial tendon are major medial arch stabilizers."
         )
-        st.markdown("### Tendon Compartments")
+        st.markdown("### Exam and Imaging")
         st.markdown(
-            "- Anterior: tibialis anterior, extensor hallucis longus, extensor digitorum longus.\n"
-            "- Medial: tibialis posterior, FDL, FHL (\"Tom, Dick, and Harry\").\n"
-            "- Lateral: peroneus longus and brevis; posterior: Achilles tendon complex."
+            "- Point tenderness over the ATFL, CFL, and syndesmosis separates most inversion injuries from higher-grade injuries.\n"
+            "- Weight-bearing radiographs and stress views are useful for mortise widening and talar tilt.\n"
+            "- MRI highlights ligament continuity, osteochondral lesions, and peroneal tendon pathology."
         )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Gray354.png/1024px-Gray354.png",
-            caption="Ankle and tarsal region ligament anatomy (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Gray355.png/1024px-Gray355.png",
-            caption="Ankle tendon pathways and retinacula (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
+        render_anatomy_figure("Ankle", "Simplified ankle mortise schematic with tibia, fibula, and talus relationships.", panel_key=f"{panel_key}_ankle_figure")
         render_anatomy_related_widget(
             "Ankle",
             ["ankle", "achilles", "peroneal", "atfl", "cfl", "deltoid", "syndesmosis", "talocrural", "subtalar"],
@@ -2751,35 +2832,54 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             panel_key=f"{panel_key}_ankle",
         )
 
+    with lower_leg_tab:
+        st.markdown("### Compartment Anatomy")
+        st.markdown(
+            "- Anterior compartment: tibialis anterior, extensor hallucis longus, extensor digitorum longus, and peroneus tertius.\n"
+            "- Lateral compartment: peroneus longus and brevis, important for eversion and first-ray support.\n"
+            "- Posterior compartment: gastrocnemius, soleus, plantaris, tibialis posterior, FDL, FHL, and deep neurovascular structures."
+        )
+        st.markdown("### Calf and Achilles Unit")
+        st.markdown(
+            "- The gastrocnemius crosses both knee and ankle; soleus is the deeper endurance plantarflexor.\n"
+            "- Achilles tendon is the common confluence and a major load-transfer structure during gait and push-off.\n"
+            "- Sural nerve and small saphenous vein travel posterolaterally and are useful surface orientation landmarks."
+        )
+        st.markdown("### Clinical Relevance")
+        st.markdown(
+            "- Calf pain differentials often separate muscle strain, Achilles pathology, and vascular causes by exam pattern and focal tenderness.\n"
+            "- Compartment anatomy matters for swelling, overuse syndromes, and postoperative incision planning.\n"
+            "- Ultrasound can evaluate Achilles continuity and dynamic tendon motion; MRI is better for deeper compartment and insertional detail."
+        )
+        render_anatomy_figure("Lower Leg", "Simplified lower-leg schematic emphasizing compartments, calf bulk, and Achilles continuity.", panel_key=f"{panel_key}_lower_leg_figure")
+        render_anatomy_related_widget(
+            "Lower Leg",
+            ["calf", "lower leg", "gastrocnemius", "soleus", "achilles", "peroneal", "fibula", "tibia", "compartment"],
+            surgical_cases,
+            protocol_documents,
+            panel_key=f"{panel_key}_lower_leg",
+        )
+
     with knee_tab:
         st.markdown("### Osseous and Articular Anatomy")
         st.markdown(
-            "- Tibiofemoral articulation: medial/lateral femoral condyles with tibial plateaus.\n"
-            "- Patellofemoral articulation: patellar facets with femoral trochlear groove.\n"
-            "- Menisci: fibrocartilaginous load-sharing and stability structures (medial and lateral menisci)."
+            "- Tibiofemoral articulation is a bicondylar hinge with roll-and-glide mechanics across flexion arcs.\n"
+            "- Patellofemoral articulation tracks the patella within the trochlear groove and influences extensor efficiency.\n"
+            "- Menisci provide load sharing, shock absorption, joint congruence, and rotational stability.",
         )
         st.markdown("### Ligament and Capsular Stabilizers")
         st.markdown(
-            "- Cruciate ligaments: ACL and PCL for anteroposterior and rotational control.\n"
-            "- Collateral ligaments: MCL and LCL for coronal-plane restraint.\n"
-            "- Posterolateral and posteromedial corner structures for complex rotational stability."
+            "- ACL and PCL control anterior/posterior translation and help regulate rotational stability.\n"
+            "- MCL and LCL resist valgus and varus stress, while posterolateral/posteromedial corners manage complex rotation.\n"
+            "- Capsular structures and the IT band/pes anserinus contribute dynamic restraint and palpable landmarks."
         )
-        st.markdown("### Myotendinous and Functional Tracks")
+        st.markdown("### Imaging, Exam, and Procedure Relevance")
         st.markdown(
-            "- Extensor mechanism: quadriceps tendon, patella, patellar tendon, tibial tubercle.\n"
-            "- Flexor contributors: hamstring group with semimembranosus/ semitendinosus/biceps femoris function.\n"
-            "- Iliotibial band and pes anserinus as key lateral and anteromedial dynamic influences."
+            "- Effusion, joint line tenderness, Lachman, pivot shift, valgus, varus, and Thessaly-type maneuvers help localize pathology.\n"
+            "- X-ray alignment and MRI anatomy are most useful for meniscus, cruciate, cartilage, and extensor mechanism detail.\n"
+            "- Surgical planning often references the anteromedial and anterolateral portals, tibial tubercle, and posteromedial corner."
         )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Gray348.png/1024px-Gray348.png",
-            caption="Knee joint capsule and ligament relationships (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Gray350.png/1024px-Gray350.png",
-            caption="Anterior knee and extensor mechanism anatomy (public-domain Gray's anatomy plate)",
-            use_container_width=True,
-        )
+        render_anatomy_figure("Knee", "Simplified knee schematic highlighting femur, patella, and tibiofemoral alignment.", panel_key=f"{panel_key}_knee_figure")
         render_anatomy_related_widget(
             "Knee",
             ["knee", "acl", "pcl", "meniscus", "mcl", "lcl", "patella", "patellar", "tibiofemoral", "patellofemoral"],

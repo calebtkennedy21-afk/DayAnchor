@@ -1,4 +1,4 @@
-# DayAnchor
+e# DayAnchor
 Daily task app for personal and clinic responsibilities.
 
 ## Current State
