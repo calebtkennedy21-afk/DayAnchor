@@ -2859,6 +2859,101 @@ def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, pane
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_personal_quick_capture(form_key, defaults):
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Quick Capture</h3><span>Title and priority — everything else defaults</span></div>', unsafe_allow_html=True)
+    with st.form(form_key, clear_on_submit=True):
+        title = st.text_input("Task title", placeholder="What needs to get done?", key=f"{form_key}_title")
+        priority = st.selectbox(
+            "Priority",
+            ["medium", "high", "low"],
+            format_func=lambda v: v.title(),
+            key=f"{form_key}_priority",
+        )
+        submitted = st.form_submit_button("Capture →", type="primary")
+    if submitted:
+        if not title.strip():
+            st.warning("Add a title to capture the task.")
+        else:
+            add_task(
+                title.strip(),
+                "",
+                "Personal",
+                priority,
+                date.today(),
+                scheduled_date=None,
+                scheduled_time=None,
+                scheduled_minutes=None,
+                recurrence_rule=None,
+                recurrence_interval=1,
+            )
+            st.success(f"\'{title.strip()}\' captured.")
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_personal_one_thing(personal_tasks, panel_key):
+    pin_key = f"{panel_key}_pinned_id"
+    pinned_id = st.session_state.get(pin_key)
+    pinned_task = next((t for t in personal_tasks if t.get("id") == pinned_id), None) if pinned_id else None
+
+    st.markdown(
+        '<div class="panel" style="background: linear-gradient(135deg, rgba(15,118,110,0.10), rgba(29,78,216,0.09)); border: 1.5px solid rgba(15,118,110,0.22);">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='panel-title'><h3>Today's One Thing</h3><span>One task you will not let slip today</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    if pinned_task:
+        due_str = (
+            pinned_task["due_date"].strftime("%b %d")
+            if pinned_task.get("due_date") and hasattr(pinned_task["due_date"], "strftime")
+            else "No due date"
+        )
+        st.markdown(
+            f"<div class='task-card' style='background: rgba(255,255,255,0.9); border: 1.5px solid rgba(15,118,110,0.3);'>"
+            f"<div class='task-title' style='font-size: 1.18rem;'>{pinned_task['title']}</div>"
+            f"<div class='task-meta'>"
+            f"<span class='pill pill-priority-{pinned_task['priority']}'>{pinned_task['priority'].title()}</span>"
+            f"<span class='pill pill-status pill-status-{pinned_task['status']}'>{status_label(pinned_task['status'])}</span>"
+            f"<span class='pill'>Due: {due_str}</span>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+        action_cols = st.columns([1, 1, 3])
+        with action_cols[0]:
+            if st.button("Mark done", key=f"{panel_key}_pin_complete", type="primary"):
+                complete_task(pinned_task["id"])
+                st.session_state.pop(pin_key, None)
+                st.rerun()
+        with action_cols[1]:
+            if st.button("Unpin", key=f"{panel_key}_unpin"):
+                st.session_state.pop(pin_key, None)
+                st.rerun()
+    else:
+        ready = [t for t in personal_tasks if t.get("status") != "completed"]
+        if ready:
+            pick_key = f"{panel_key}_pick"
+            options = [t["title"] for t in ready]
+            if pick_key not in st.session_state:
+                st.session_state[pick_key] = options[0]
+            selected = st.selectbox("Choose your one thing for today", options, key=pick_key)
+            if st.button("Pin this →", key=f"{panel_key}_pin_btn", type="primary"):
+                chosen = next((t for t in ready if t["title"] == selected), None)
+                if chosen:
+                    st.session_state[pin_key] = chosen["id"]
+                    st.rerun()
+        else:
+            st.markdown(
+                '<div class="empty-state">No personal tasks ready to pin. Capture one above.</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic"):
     profiles = clinic_day_profiles(app_settings)
     mode_key = f"{panel_key}_mode"
@@ -4231,6 +4326,8 @@ app_bootstrap.run_app(
         "render_daily_review_panel": render_daily_review_panel,
         "render_page_footer": render_page_footer,
         "render_msk_anatomy_panel": render_msk_anatomy_panel,
+        "render_personal_quick_capture": render_personal_quick_capture,
+        "render_personal_one_thing": render_personal_one_thing,
     }
 )
 

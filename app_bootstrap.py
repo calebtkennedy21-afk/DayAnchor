@@ -39,6 +39,8 @@ def run_app(context, st_module=st):
     render_hero_timeline = context.get("render_hero_timeline")
     render_clinic_overview_panel = context.get("render_clinic_overview_panel")
     render_personal_overview_panel = context.get("render_personal_overview_panel")
+    render_personal_quick_capture = context["render_personal_quick_capture"]
+    render_personal_one_thing = context["render_personal_one_thing"]
 
     initialize_database()
     app_settings = load_app_settings()
@@ -178,7 +180,9 @@ def run_app(context, st_module=st):
         render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions")
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
-        render_add_task_panel("personal_add_task", app_settings, default_category="Personal")
+        render_personal_quick_capture("personal_quick_capture", app_settings)
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.")
     elif current_page == "Clinic":
