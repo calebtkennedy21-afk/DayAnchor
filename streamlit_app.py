@@ -352,10 +352,6 @@ def task_snapshot_for_ai(tasks, max_items=20):
     return "\n".join(lines)
 
 
-def status_rank(status):
-    return {"todo": 0, "in_progress": 1, "blocked": 2, "completed": 3}.get(status, 4)
-
-
 def status_label(status):
     return {
         "todo": "Todo",
@@ -1007,39 +1003,6 @@ def text_keywords(value):
     return [item for item in tokens if item not in stop_words]
 
 
-def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
-    case_text = " ".join(
-        [
-            str(case_item.get("procedure_name") or ""),
-            str(case_item.get("anatomical_location") or ""),
-            str(case_item.get("education_notes") or ""),
-            str(case_item.get("notes") or ""),
-        ]
-    )
-    case_terms = set(text_keywords(case_text))
-    if not case_terms:
-        return []
-
-    ranked = []
-    for doc in protocol_documents:
-        doc_text = " ".join(
-            [
-                str(doc.get("protocol_name") or ""),
-                str(doc.get("file_name") or ""),
-                str(doc.get("notes") or ""),
-            ]
-        )
-        doc_terms = set(text_keywords(doc_text))
-        overlap = case_terms.intersection(doc_terms)
-        if not overlap:
-            continue
-        score = len(overlap)
-        ranked.append((score, sorted(list(overlap))[:6], doc))
-
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    return ranked[:max_items]
-
-
 def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_documents, max_items=4):
     topic_set = set(text_keywords(" ".join(topic_terms)))
 
@@ -1075,95 +1038,6 @@ def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_
     protocol_ranked.sort(key=lambda item: item[0], reverse=True)
 
     return case_ranked[:max_items], protocol_ranked[:max_items]
-
-
-def build_anatomy_svg(region_name):
-        if region_name == "Foot":
-                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Foot schematic">
-    <defs>
-        <linearGradient id="footGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#d1fae5"/>
-            <stop offset="100%" stop-color="#bae6fd"/>
-        </linearGradient>
-    </defs>
-    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
-    <path d="M210 250C185 205 198 145 255 123C294 108 334 120 360 145C391 175 425 193 477 197C530 201 597 190 657 194C721 198 764 230 772 267C781 309 754 346 694 350C612 356 530 338 452 327C365 314 273 306 210 250Z" fill="url(#footGrad)" stroke="#0f172a" stroke-width="6"/>
-    <path d="M322 145L320 308M390 165L392 320M460 176L460 327M530 182L534 332M600 185L606 333" stroke="#0f172a" stroke-width="5" opacity="0.55"/>
-    <path d="M257 170L365 159M257 198L384 193M247 228L401 226M255 258L419 261" stroke="#0f172a" stroke-width="4" opacity="0.45"/>
-    <circle cx="665" cy="226" r="18" fill="#f59e0b" stroke="#7c2d12" stroke-width="4"/>
-    <circle cx="716" cy="237" r="13" fill="#fb7185" stroke="#9f1239" stroke-width="4"/>
-    <circle cx="742" cy="252" r="11" fill="#60a5fa" stroke="#1d4ed8" stroke-width="4"/>
-    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Foot</text>
-    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Tarsals, rays, plantar fascia, and tendon balance</text>
-    <text x="76" y="338" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Heel / calcaneus</text>
-    <text x="585" y="170" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Metatarsals</text>
-    <text x="668" y="194" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Hallux</text>
-    <text x="716" y="288" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Forefoot</text>
-</svg>"""
-        if region_name == "Ankle":
-                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Ankle schematic">
-    <defs>
-        <linearGradient id="ankleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#fce7f3"/>
-            <stop offset="100%" stop-color="#ddd6fe"/>
-        </linearGradient>
-    </defs>
-    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
-    <rect x="232" y="74" width="112" height="214" rx="30" fill="#e2e8f0" stroke="#0f172a" stroke-width="6"/>
-    <rect x="396" y="74" width="88" height="214" rx="28" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
-    <ellipse cx="410" cy="310" rx="120" ry="72" fill="url(#ankleGrad)" stroke="#0f172a" stroke-width="6"/>
-    <path d="M308 282C332 246 395 228 470 238C530 246 576 277 598 318" fill="none" stroke="#0f172a" stroke-width="8"/>
-    <path d="M252 320C304 346 364 351 428 344C487 338 546 325 612 289" fill="none" stroke="#2563eb" stroke-width="6" opacity="0.75"/>
-    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Ankle</text>
-    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Mortise, syndesmosis, deltoid, and lateral ligament complex</text>
-    <text x="210" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Tibia</text>
-    <text x="398" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Fibula</text>
-    <text x="468" y="365" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Talus / hindfoot</text>
-</svg>"""
-        if region_name == "Lower Leg":
-                return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Lower leg schematic">
-    <defs>
-        <linearGradient id="legGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#dbeafe"/>
-            <stop offset="100%" stop-color="#e0f2fe"/>
-        </linearGradient>
-    </defs>
-    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
-    <ellipse cx="430" cy="190" rx="180" ry="112" fill="url(#legGrad)" stroke="#0f172a" stroke-width="6"/>
-    <rect x="330" y="76" width="78" height="230" rx="22" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
-    <rect x="455" y="88" width="64" height="222" rx="20" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
-    <path d="M288 215C344 206 393 202 449 205C505 209 554 219 616 235" fill="none" stroke="#0f172a" stroke-width="7"/>
-    <path d="M351 310C377 336 412 347 458 347C512 347 556 326 590 287" fill="none" stroke="#ef4444" stroke-width="7"/>
-    <path d="M402 307C430 324 465 327 503 320" fill="none" stroke="#f59e0b" stroke-width="7"/>
-    <path d="M474 295C506 310 534 313 560 304" fill="none" stroke="#8b5cf6" stroke-width="7"/>
-    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Lower Leg</text>
-    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Tibial and fibular shafts, calf compartments, Achilles unit, nerves, and vessels</text>
-    <text x="332" y="62" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Tibia</text>
-    <text x="452" y="64" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Fibula</text>
-    <text x="610" y="248" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Posterior calf / gastroc-soleus</text>
-    <text x="420" y="378" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Achilles tendon</text>
-</svg>"""
-        return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="Knee schematic">
-    <defs>
-        <linearGradient id="kneeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#fee2e2"/>
-            <stop offset="100%" stop-color="#fde68a"/>
-        </linearGradient>
-    </defs>
-    <rect width="960" height="420" rx="28" fill="#f8fafc"/>
-    <rect x="284" y="70" width="134" height="130" rx="38" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
-    <rect x="548" y="70" width="134" height="130" rx="38" fill="#cbd5e1" stroke="#0f172a" stroke-width="6"/>
-    <ellipse cx="482" cy="212" rx="162" ry="106" fill="url(#kneeGrad)" stroke="#0f172a" stroke-width="6"/>
-    <ellipse cx="482" cy="212" rx="58" ry="82" fill="#fff" stroke="#0f172a" stroke-width="6"/>
-    <path d="M366 220C396 178 429 160 482 160C537 160 571 178 600 220" fill="none" stroke="#0f172a" stroke-width="7"/>
-    <path d="M360 258C399 237 437 227 482 227C529 227 567 237 602 258" fill="none" stroke="#2563eb" stroke-width="7"/>
-    <text x="58" y="72" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#0f172a">Knee</text>
-    <text x="58" y="108" font-family="Arial, sans-serif" font-size="18" fill="#334155">Menisci, cruciates, collaterals, and extensor mechanism</text>
-    <text x="293" y="60" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Femur</text>
-    <text x="540" y="60" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Femur</text>
-    <text x="470" y="355" font-family="Arial, sans-serif" font-size="18" fill="#0f172a">Tibiofemoral joint</text>
-    <text x="444" y="201" font-family="Arial, sans-serif" font-size="16" fill="#0f172a">Patella</text>
-</svg>"""
 
 
 def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, protocol_documents, panel_key):
@@ -1205,18 +1079,6 @@ def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, proto
 
 
 ref_render_anatomy_related_widget = render_anatomy_related_widget
-
-
-def weekday_index_to_name(index):
-    return {
-        0: "Monday",
-        1: "Tuesday",
-        2: "Wednesday",
-        3: "Thursday",
-        4: "Friday",
-        5: "Saturday",
-        6: "Sunday",
-    }.get(index, "Monday")
 
 
 def weekday_name_to_index(name):
@@ -1495,147 +1357,6 @@ def save_app_settings(settings):
                     )
         except psycopg.Error:
             pass
-
-    st.session_state["app_settings"] = merged
-    return merged
-
-
-def render_anatomy_structure_spotlight(region_name, structures, panel_key):
-    st.markdown(f"#### Structure Spotlight: {region_name}")
-    structure_names = list(structures.keys())
-    choice = st.radio(
-        f"Choose a {region_name.lower()} structure",
-        structure_names,
-        horizontal=True,
-        key=f"{panel_key}_spotlight_choice",
-        label_visibility="collapsed",
-    )
-    info = structures[choice]
-    cols = st.columns([1.1, 0.9])
-    with cols[0]:
-        st.markdown(f"**{choice}**")
-        st.write(info["summary"])
-        st.markdown(
-            f"- **Function:** {info['function']}\n"
-            f"- **Exam focus:** {info['exam']}\n"
-            f"- **Imaging:** {info['imaging']}\n"
-            f"- **Procedure/landmark:** {info['procedure']}"
-        )
-    with cols[1]:
-        if info.get("pearls"):
-            st.markdown("**Pearls**")
-            for pearl in info["pearls"]:
-                st.markdown(f"- {pearl}")
-
-
-def anatomy_structure_map(region_name):
-    if region_name == "Foot":
-        return {
-            "Plantar fascia": {
-                "summary": "Primary longitudinal arch stabilizer and common pain generator at the medial calcaneal tubercle.",
-                "function": "Maintains arch tension through the windlass mechanism during toe-off.",
-                "exam": "Maximal tenderness is often just distal to the medial calcaneal origin.",
-                "imaging": "Ultrasound can show fascial thickening and perifascial edema; MRI can show edema or tearing.",
-                "procedure": "Relevant for plantar fascia release, injection planning, and heel pain workups.",
-                "pearls": ["Morning pain with first steps is classic.", "Dorsiflexion of the hallux tensions the fascia."],
-            },
-            "First ray and sesamoids": {
-                "summary": "The first metatarsal, sesamoids, and hallux complex drive efficient forefoot loading.",
-                "function": "Supports push-off and load transfer through the medial forefoot.",
-                "exam": "Pain at the sesamoids or first MTP suggests overload, sesamoiditis, or hallux pathology.",
-                "imaging": "Weight-bearing radiographs show alignment and sesamoid position; MRI helps with osteochondral and soft-tissue detail.",
-                "procedure": "Useful when planning bunion, hallux rigidus, or plantar forefoot procedures.",
-                "pearls": ["The first ray should be assessed in stance, not just supine.", "Sesamoid position matters for hallux mechanics."],
-            },
-            "Posterior tibial tendon": {
-                "summary": "Key medial arch support tendon running behind the medial malleolus to the navicular and midfoot.",
-                "function": "Inverts and plantarflexes the foot while supporting the medial arch.",
-                "exam": "Pain/swelling posterior to the medial malleolus or inability to single-leg heel raise are useful clues.",
-                "imaging": "MRI can show tendinosis, split tears, and associated spring ligament failure.",
-                "procedure": "Important for flatfoot reconstruction planning and medial column support procedures.",
-                "pearls": ["Tibialis posterior failure often changes the whole foot shape.", "Check both tendon and spring ligament together."],
-            },
-        }
-    if region_name == "Ankle":
-        return {
-            "ATFL": {
-                "summary": "The anterior talofibular ligament is the most commonly injured lateral ankle stabilizer.",
-                "function": "Resists anterior translation of the talus and contributes to inversion restraint.",
-                "exam": "Tenderness just anterior to the lateral malleolus is common after inversion injury.",
-                "imaging": "MRI shows fiber discontinuity, edema, and associated CFL or osteochondral injury.",
-                "procedure": "Key structure in ankle sprain grading and lateral ligament reconstruction planning.",
-                "pearls": ["ATFL injuries often occur first in inversion sprains.", "A positive anterior drawer can point to laxity."],
-            },
-            "Deltoid complex": {
-                "summary": "The medial ligament complex resists valgus tilt and external rotation of the talus.",
-                "function": "Stabilizes the medial mortise and supports talar containment.",
-                "exam": "Medial ankle pain or widening concerns increase after eversion or rotational trauma.",
-                "imaging": "Stress radiographs and MRI help identify deep deltoid disruption and mortise instability.",
-                "procedure": "Relevant in syndesmotic, fracture, and ankle instability workups.",
-                "pearls": ["Deep deltoid integrity matters for mortise stability.", "Medial pain can coexist with syndesmotic injury."],
-            },
-            "Syndesmosis": {
-                "summary": "The distal tibiofibular syndesmosis keeps the ankle mortise congruent under load.",
-                "function": "Maintains fibular spacing and rotational stability during gait.",
-                "exam": "Pain above the mortise, squeeze testing, and external rotation pain can be helpful clues.",
-                "imaging": "Weight-bearing and stress imaging assess widening; MRI can show ligament disruption.",
-                "procedure": "Critical in high ankle sprains and fixation decisions.",
-                "pearls": ["Syndesmotic injury often recovers slower than a simple sprain.", "Look for pain proximal to the joint line."],
-            },
-        }
-    if region_name == "Lower Leg":
-        return {
-            "Gastrocnemius": {
-                "summary": "The large superficial calf muscle with medial and lateral heads crossing both knee and ankle.",
-                "function": "Powerful plantarflexor and knee flexor during propulsion.",
-                "exam": "Tightness and focal tenderness are common with strain or cramping injury.",
-                "imaging": "Ultrasound can identify strain or hematoma; MRI maps tears and edema better.",
-                "procedure": "Relevant for calf strain care, recession planning, and Achilles-related surgery.",
-                "pearls": ["Crosses two joints, so position matters.", "Strains often occur near the musculotendinous junction."],
-            },
-            "Soleus/Achilles": {
-                "summary": "The soleus and Achilles complex are central to endurance plantarflexion and push-off.",
-                "function": "Soleus provides sustained plantarflexion; Achilles transmits force to the calcaneus.",
-                "exam": "Pain with single-leg heel raise or calf squeeze changes raises concern for tendon pathology.",
-                "imaging": "Ultrasound is fast for continuity; MRI is better for insertional and partial-thickness detail.",
-                "procedure": "Important for Achilles repair, debridement, and tendon transfer planning.",
-                "pearls": ["Insertional disease and midsubstance disease can look different clinically.", "Always check the contralateral side."],
-            },
-            "Posterior compartment": {
-                "summary": "Deep posterior structures include tibialis posterior, FDL, FHL, and the posterior tibial neurovascular bundle.",
-                "function": "Provides inversion, toe flexion, and deep supportive control of the arch and gait.",
-                "exam": "Deep compartment pain, weakness, or neurovascular symptoms should change the differential.",
-                "imaging": "MRI clarifies tendon course and muscle edema; ultrasound can help with tendons near the ankle.",
-                "procedure": "Relevant for compartment-focused surgery and tendon pathway orientation.",
-                "pearls": ["The posterior tibial artery and tibial nerve travel together.", "Deep posterior pathology can masquerade as Achilles pain."],
-            },
-        }
-    return {
-        "ACL": {
-            "summary": "Primary anterior translational and rotational stabilizer of the knee.",
-            "function": "Limits anterior tibial translation and helps control pivoting motion.",
-            "exam": "Lachman testing is one of the most useful bedside assessments.",
-            "imaging": "MRI is best for fiber continuity, marrow edema, and associated meniscus injury.",
-            "procedure": "Central to reconstruction planning and tunnel placement discussions.",
-            "pearls": ["A pivot shift suggests rotational instability.", "ACL and meniscus injuries often coexist."],
-        },
-        "Meniscus": {
-            "summary": "Fibrocartilaginous load-sharing structures between the femur and tibia.",
-            "function": "Absorb shock, improve congruence, and contribute to joint stability.",
-            "exam": "Joint-line tenderness and mechanical symptoms are common clues.",
-            "imaging": "MRI is the main tool for tear pattern and root/root-equivalent detail.",
-            "procedure": "Important for repair, meniscectomy, and root repair planning.",
-            "pearls": ["Medial tears are often less mobile and more symptomatic.", "Root tears can behave like near-total meniscectomy."],
-        },
-        "Patellofemoral joint": {
-            "summary": "The articulation between the patella and trochlea that drives anterior knee mechanics.",
-            "function": "Improves quadriceps leverage and extensor efficiency.",
-            "exam": "Pain with stairs, squatting, or prolonged sitting may point here.",
-            "imaging": "MRI and axial radiographs can show maltracking, chondral injury, and tilt.",
-            "procedure": "Relevant to alignment procedures, cartilage work, and portal planning.",
-            "pearls": ["Tracking is dynamic, so assess motion if you can.", "Alignment and soft tissue balance both matter."],
-        },
-    }
 
     st.session_state["app_settings"] = merged
     return merged
@@ -2303,10 +2024,6 @@ def render_span_block(task, day, label_text=None, compact=False):
         f"{text}"
         f"</div>"
     )
-
-
-def task_matches(task, lane):
-    return task["category"] == lane and task["status"] != "completed"
 
 
 def add_task(
@@ -3443,16 +3160,6 @@ def overview_runtime_settings(app_settings):
         "procedure_friday_frequency_weeks": safe_int(app_settings.get("overview_procedure_friday_frequency_weeks", 2), 2),
         "procedure_friday_cycle_offset": safe_int(app_settings.get("overview_procedure_friday_cycle_offset", 0), 0),
     }
-
-
-def overview_mode_label(mode_key):
-    return {
-        "Auto": "Auto",
-        "Outpatient clinic": "Outpatient clinic",
-        "Procedure Friday": "Procedure Friday",
-        "Admin catch-up": "Admin catch-up",
-        "Mixed day": "Mixed day",
-    }.get(mode_key, "Auto")
 
 
 def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks, clinic_tasks):
