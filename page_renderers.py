@@ -15,10 +15,22 @@ def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_t
     st_module.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_calendar_compact_fn, st_module=st):
+def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_calendar_compact_fn, app_settings=None, st_module=st):
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
-    st_module.caption("Legend: S = scheduled tasks, D = tasks due, C = tasks completed. Darker day badges indicate heavier total load.")
+    st_module.markdown(
+        """
+        <div style='display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin:0.2rem 0 0.8rem;'>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dbeafe; display:inline-block;'></span>Scheduled</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#fee2e2; display:inline-block;'></span>Due</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dcfce7; display:inline-block;'></span>Completed</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#d1fae5; display:inline-block;'></span>Clinic</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#e0e7ff; display:inline-block;'></span>OR</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#ffedd5; display:inline-block;'></span>Procedure Friday</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st_module.session_state:
@@ -44,5 +56,5 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_ca
             st_module.session_state[month_key] = next_month_start
             st_module.rerun()
 
-    render_task_calendar_compact_fn(tasks, st_module.session_state[month_key])
+    render_task_calendar_compact_fn(tasks, st_module.session_state[month_key], app_settings)
     st_module.markdown('</div>', unsafe_allow_html=True)

@@ -1253,7 +1253,7 @@ def render_or_calendar_compact(surgical_cases, predicted_labels, month_anchor, p
     st.markdown("\n".join(table_lines), unsafe_allow_html=True)
 
 
-def render_task_calendar_compact(tasks, month_anchor):
+def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
     cal = calendar.Calendar(firstweekday=0)
     weeks = cal.monthdatescalendar(month_anchor.year, month_anchor.month)
 
@@ -1270,6 +1270,17 @@ def render_task_calendar_compact(tasks, month_anchor):
             scheduled_by_day[scheduled_day] = scheduled_by_day.get(scheduled_day, 0) + 1
         if completed_day:
             completed_by_day[completed_day] = completed_by_day.get(completed_day, 0) + 1
+
+    settings = app_settings or DEFAULT_APP_SETTINGS
+    weekday_indexes = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
+    clinic_weekdays = settings.get("overview_clinic_weekdays") or ["Thursday", "Monday"]
+    clinic_weekday_indexes = {weekday_indexes[day] for day in clinic_weekdays if day in weekday_indexes}
+    or_fixed_weekday_index = weekday_indexes.get(settings.get("or_fixed_weekday", "Friday"), 4)
+    or_alternating_days = settings.get("or_alternating_days") or ["Monday", "Wednesday"]
+    or_alternating_day_indexes = {weekday_indexes[day] for day in or_alternating_days if day in weekday_indexes}
+    or_alternating_cycle_offset = int(settings.get("or_alternating_cycle_offset", 0) or 0)
+    procedure_friday_frequency = max(1, int(settings.get("overview_procedure_friday_frequency_weeks", 2) or 2))
+    procedure_friday_cycle_offset = int(settings.get("overview_procedure_friday_cycle_offset", 0) or 0)
 
     headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
@@ -1297,6 +1308,20 @@ def render_task_calendar_compact(tasks, month_anchor):
             parts = [
                 f"<span style='display:inline-block; font-weight:700; padding:0.1rem 0.4rem; border-radius:999px; background:{day_bg};'>{day.day}</span>"
             ]
+            badges = []
+            if day.weekday() in clinic_weekday_indexes:
+                badges.append(("Clinic", "#d1fae5", "#047857"))
+            if day.weekday() == or_fixed_weekday_index:
+                badges.append(("OR", "#e0e7ff", "#3730a3"))
+            if day.weekday() in or_alternating_day_indexes and ((day.isocalendar().week + or_alternating_cycle_offset) % 2 == 0):
+                badges.append(("OR", "#e0e7ff", "#3730a3"))
+            if day.weekday() == 4 and ((day.isocalendar().week + procedure_friday_cycle_offset) % procedure_friday_frequency == 0):
+                badges.append(("Procedure Friday", "#ffedd5", "#c2410c"))
+
+            for label, bg, fg in badges:
+                parts.append(
+                    f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{bg}; color:{fg}; font-size:0.76rem;'>{label}</span>"
+                )
             if scheduled_count:
                 sched_bg = "#dbeafe" if scheduled_count < 3 else "#93c5fd"
                 parts.append(f"<span style='display:inline-block; padding:0.05rem 0.35rem; border-radius:999px; background:{sched_bg}; color:#1e3a8a; font-size:0.76rem;'>S{scheduled_count}</span>")
@@ -1314,10 +1339,22 @@ def render_task_calendar_compact(tasks, month_anchor):
     st.markdown("\n".join(table_lines), unsafe_allow_html=True)
 
 
-def render_task_calendar_panel(tasks, panel_key, title, subtitle):
+def render_task_calendar_panel(tasks, panel_key, title, subtitle, app_settings=None):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
-    st.caption("Legend: S = scheduled tasks, D = tasks due, C = tasks completed. Darker day badges indicate heavier total load.")
+    st.markdown(
+        """
+        <div style='display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin:0.2rem 0 0.8rem;'>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dbeafe; display:inline-block;'></span>Scheduled</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#fee2e2; display:inline-block;'></span>Due</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dcfce7; display:inline-block;'></span>Completed</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#d1fae5; display:inline-block;'></span>Clinic</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#e0e7ff; display:inline-block;'></span>OR</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#ffedd5; display:inline-block;'></span>Procedure Friday</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st.session_state:
@@ -1343,7 +1380,7 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle):
             st.session_state[month_key] = next_month_start
             st.rerun()
 
-    render_task_calendar_compact(tasks, st.session_state[month_key])
+    render_task_calendar_compact(tasks, st.session_state[month_key], app_settings)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
