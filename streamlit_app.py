@@ -1537,8 +1537,6 @@ def anatomy_structure_map(region_name):
             "pearls": ["Tracking is dynamic, so assess motion if you can.", "Alignment and soft tissue balance both matter."],
         },
     }
-        except psycopg.Error:
-            pass
 
     st.session_state["app_settings"] = merged
     return merged
