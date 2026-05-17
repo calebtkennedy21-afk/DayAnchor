@@ -3947,6 +3947,32 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             st.session_state[week_key] = week_start + timedelta(days=7)
             st.rerun()
 
+    jump_cols = st.columns([1.15, 1, 0.9, 0.9, 0.9])
+    with jump_cols[0]:
+        jump_target = st.date_input(
+            "Jump to week of",
+            value=week_start,
+            key=f"{panel_key}_jump_week_of",
+            help="Pick any date and the planner will jump to that week.",
+        )
+    with jump_cols[1]:
+        if st.button("Go to week", key=f"{panel_key}_go_to_week"):
+            st.session_state[week_key] = jump_target - timedelta(days=jump_target.weekday())
+            st.rerun()
+    with jump_cols[2]:
+        if st.button("+2 weeks", key=f"{panel_key}_plus_2_weeks"):
+            st.session_state[week_key] = week_start + timedelta(days=14)
+            st.rerun()
+    with jump_cols[3]:
+        if st.button("+4 weeks", key=f"{panel_key}_plus_4_weeks"):
+            st.session_state[week_key] = week_start + timedelta(days=28)
+            st.rerun()
+    with jump_cols[4]:
+        if st.button("Today", key=f"{panel_key}_jump_today"):
+            today = date.today()
+            st.session_state[week_key] = today - timedelta(days=today.weekday())
+            st.rerun()
+
     st.markdown('<div class="panel-title" style="margin-top:0.75rem;"><h3>Week Planner</h3><span>Move tasks into the week one day at a time</span></div>', unsafe_allow_html=True)
     if ranked_tasks:
         selected_task_id = st.selectbox(
