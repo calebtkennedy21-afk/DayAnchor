@@ -3058,6 +3058,150 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
 
 
+def render_settings_panel(app_settings, panel_key="settings"):
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Settings</h3><span>Default values and planning preferences</span></div>', unsafe_allow_html=True)
+
+    settings_category = st.selectbox(
+        "Default category",
+        ["Personal", "Clinic"],
+        index=0 if app_settings.get("default_category") == "Personal" else 1,
+    )
+    settings_priority = st.selectbox(
+        "Default priority",
+        ["high", "medium", "low"],
+        index=["high", "medium", "low"].index(app_settings.get("default_priority", "medium"))
+        if app_settings.get("default_priority", "medium") in ["high", "medium", "low"]
+        else 1,
+    )
+    settings_duration = st.selectbox(
+        "Default duration (minutes)",
+        [15, 30, 45, 60, 90, 120],
+        index=[15, 30, 45, 60, 90, 120].index(app_settings.get("default_duration", 60))
+        if app_settings.get("default_duration", 60) in [15, 30, 45, 60, 90, 120]
+        else 3,
+    )
+    settings_time = st.time_input(
+        "Default schedule time",
+        value=parse_time_value(app_settings.get("default_schedule_time")) or time(9, 0),
+    )
+    settings_timeline_days = st.slider(
+        "Default timeline window (days)",
+        min_value=3,
+        max_value=21,
+        value=max(3, min(21, int(app_settings.get("timeline_days", 7)))),
+    )
+
+    st.markdown("### Clinic Planning Defaults")
+    settings_surgeon_patient_target = st.slider(
+        "Surgeon clinic patient target",
+        min_value=15,
+        max_value=40,
+        value=safe_int(app_settings.get("surgeon_clinic_patient_target", 25), 25),
+    )
+    settings_general_patient_target = st.slider(
+        "General clinic patient target",
+        min_value=15,
+        max_value=40,
+        value=safe_int(app_settings.get("general_clinic_patient_target", 25), 25),
+    )
+    settings_procedure_target = st.slider(
+        "Procedure Friday target",
+        min_value=4,
+        max_value=16,
+        value=safe_int(app_settings.get("procedure_friday_procedure_target", 8), 8),
+    )
+    settings_visit_minutes = st.slider(
+        "Clinic visit minutes",
+        min_value=8,
+        max_value=20,
+        value=safe_int(app_settings.get("clinic_visit_minutes", 12), 12),
+    )
+    settings_admin_buffer = st.slider(
+        "Clinic admin buffer minutes",
+        min_value=30,
+        max_value=120,
+        value=safe_int(app_settings.get("clinic_admin_buffer_minutes", 60), 60),
+        step=15,
+    )
+    settings_procedure_block = st.slider(
+        "Procedure block minutes",
+        min_value=20,
+        max_value=60,
+        value=safe_int(app_settings.get("procedure_block_minutes", 30), 30),
+        step=5,
+    )
+
+    st.markdown("### Personal Planning Defaults")
+    settings_focus_minutes = st.slider(
+        "Personal focus sprint minutes",
+        min_value=30,
+        max_value=180,
+        value=safe_int(app_settings.get("personal_focus_minutes", 90), 90),
+        step=15,
+    )
+
+    st.markdown("### OR Cadence Defaults")
+    settings_default_surgeon_label = st.text_input(
+        "Default surgeon label",
+        value=app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"),
+    )
+    settings_or_fixed_weekday = st.selectbox(
+        "Weekly fixed OR day",
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        index=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(app_settings.get("or_fixed_weekday", "Friday"))
+        if app_settings.get("or_fixed_weekday", "Friday") in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        else 4,
+    )
+    settings_or_alternating_days = st.multiselect(
+        "Alternating OR weekdays (choose two)",
+        ["Monday", "Tuesday", "Wednesday", "Thursday"],
+        default=app_settings.get("or_alternating_days", ["Monday", "Wednesday"]),
+    )
+    if len(settings_or_alternating_days) < 2:
+        settings_or_alternating_days = ["Monday", "Wednesday"]
+    elif len(settings_or_alternating_days) > 2:
+        settings_or_alternating_days = settings_or_alternating_days[:2]
+
+    settings_or_cycle_offset = st.selectbox(
+        "Alternating week starts with",
+        [0, 1],
+        index=[0, 1].index(safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0))
+        if safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0) in [0, 1]
+        else 0,
+        format_func=lambda value: settings_or_alternating_days[0] if value == 0 else settings_or_alternating_days[1],
+    )
+
+    if st.button("Save Settings", type="primary"):
+        app_settings = save_app_settings(
+            {
+                "default_category": settings_category,
+                "default_priority": settings_priority,
+                "default_duration": int(settings_duration),
+                "default_schedule_time": settings_time.strftime("%H:%M"),
+                "timeline_days": int(settings_timeline_days),
+                "surgeon_clinic_patient_target": int(settings_surgeon_patient_target),
+                "general_clinic_patient_target": int(settings_general_patient_target),
+                "procedure_friday_procedure_target": int(settings_procedure_target),
+                "clinic_visit_minutes": int(settings_visit_minutes),
+                "clinic_admin_buffer_minutes": int(settings_admin_buffer),
+                "procedure_block_minutes": int(settings_procedure_block),
+                "personal_focus_minutes": int(settings_focus_minutes),
+                "default_surgeon_label": settings_default_surgeon_label.strip() or "Dr. Braden Boyer (BB)",
+                "or_fixed_weekday": settings_or_fixed_weekday,
+                "or_alternating_days": settings_or_alternating_days,
+                "or_alternating_cycle_offset": int(settings_or_cycle_offset),
+            }
+        )
+        st.success("Settings saved.")
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
