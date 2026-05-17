@@ -69,7 +69,7 @@ DEFAULT_APP_SETTINGS = {
     "personal_focus_minutes": 90,
     "overview_day_mode": "Auto",
     "overview_role_label": "Medical Assistant",
-    "overview_site_label": "Mercy Orthopedics",
+    "overview_site_label": "MOA (Mercy Orthopedic Associates)",
     "overview_patient_target": 25,
     "overview_procedure_target": 8,
     "overview_admin_buffer_minutes": 60,
@@ -1373,6 +1373,8 @@ def load_app_settings():
                         payload = json.loads(row["payload"])
                         merged = dict(DEFAULT_APP_SETTINGS)
                         merged.update(payload)
+                        if merged.get("overview_site_label") == "Outpatient hospital":
+                            merged["overview_site_label"] = "MOA (Mercy Orthopedic Associates)"
                         return merged
         except (psycopg.Error, json.JSONDecodeError):
             pass
@@ -1381,6 +1383,8 @@ def load_app_settings():
     if isinstance(stored, dict):
         merged = dict(DEFAULT_APP_SETTINGS)
         merged.update(stored)
+        if merged.get("overview_site_label") == "Outpatient hospital":
+            merged["overview_site_label"] = "MOA (Mercy Orthopedic Associates)"
         return merged
     return dict(DEFAULT_APP_SETTINGS)
 

@@ -39,6 +39,9 @@ def render_overview_control_tower(
     unscheduled_high = [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]
     clinic_backlog = [task for task in active_tasks if task.get("category") == "Clinic"]
     personal_backlog = [task for task in active_tasks if task.get("category") == "Personal"]
+    site_display_label = overview_settings["site_label"].split("(", 1)[0].strip()
+    if not site_display_label:
+        site_display_label = overview_settings["site_label"]
 
     overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == date.today() else 1 if task.get("due_date") else 2, deps["priority_rank"](task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
     next_scheduled = scheduled_tasks[:4]
@@ -56,7 +59,7 @@ def render_overview_control_tower(
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Today at a Glance</h3><span>Fast read on the day’s operating mode</span></div>', unsafe_allow_html=True)
         st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {overview_settings['site_label']}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {len(clinic_backlog)} active · Personal: {len(personal_backlog)} active · High-priority unscheduled: {len(unscheduled_high)}</div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {len(clinic_backlog)} active · Personal: {len(personal_backlog)} active · High-priority unscheduled: {len(unscheduled_high)}</div>",
             unsafe_allow_html=True,
         )
         st_module.caption(day_context["reason_text"])
@@ -79,7 +82,7 @@ def render_overview_control_tower(
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Outpatient Load</h3><span>Editable patient and procedure planning</span></div>', unsafe_allow_html=True)
         st_module.metric("Day mode", day_context["mode"])
-        st_module.caption(f"{overview_settings['site_label']} · {overview_settings['role_label']} · buffer {overview_settings['admin_buffer_minutes']} min")
+        st_module.caption(f"{site_display_label} · {overview_settings['role_label']} · buffer {overview_settings['admin_buffer_minutes']} min")
         st_module.markdown(
             f"<div class='ai-chip-grid'><span class='ai-chip'>Clinic active: {clinic_summary['active_clinic_count']}</span><span class='ai-chip'>Unscheduled: {clinic_summary['clinic_unscheduled_count']}</span><span class='ai-chip'>Due soon: {clinic_summary['due_soon_count']}</span><span class='ai-chip'>Active pressure: {day_context['active_pressure']}</span></div>",
             unsafe_allow_html=True,
