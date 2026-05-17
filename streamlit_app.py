@@ -12,6 +12,7 @@ from functools import partial
 
 from clinical_reference import (
     anatomy_structure_map as ref_anatomy_structure_map,
+    anatomy_bones_map as ref_anatomy_bones_map,
     render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
@@ -4010,7 +4011,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    foot_tab, ankle_tab, lower_leg_tab, knee_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee"])
+    foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee", "Bones"])
 
     with foot_tab:
         ref_render_anatomy_structure_spotlight("Foot", ref_anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
@@ -4123,6 +4124,40 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             protocol_documents,
             panel_key=f"{panel_key}_knee",
         )
+
+    with bones_tab:
+        st.markdown("### Skeletal Anatomy (Osteology) Reference")
+        st.markdown("Detailed bone structures and landmarks for the foot, ankle, lower leg, and knee.")
+        
+        bones_region = st.radio(
+            "Select region:",
+            ["Foot Bones", "Ankle Bones", "Lower Leg Bones", "Knee Bones"],
+            key=f"{panel_key}_bones_region",
+            horizontal=True,
+        )
+        
+        if bones_region == "Foot Bones":
+            bones_data = ref_anatomy_bones_map("Foot")
+        elif bones_region == "Ankle Bones":
+            bones_data = ref_anatomy_bones_map("Ankle")
+        elif bones_region == "Lower Leg Bones":
+            bones_data = ref_anatomy_bones_map("Lower Leg")
+        else:
+            bones_data = ref_anatomy_bones_map("Knee")
+        
+        for bone_name, bone_info in bones_data.items():
+            with st.expander(f"**{bone_name}**", expanded=False):
+                st.markdown(f"**Summary:** {bone_info.get('summary', '')}")
+                
+                for key in ["anatomy", "landmarks", "function", "imaging", "procedure"]:
+                    if key in bone_info:
+                        label = key.replace("_", " ").title()
+                        st.markdown(f"**{label}:** {bone_info[key]}")
+                
+                if "pearls" in bone_info:
+                    st.markdown("**Pearls**")
+                    for pearl in bone_info["pearls"]:
+                        st.markdown(f"- {pearl}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 

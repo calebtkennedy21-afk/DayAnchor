@@ -230,3 +230,153 @@ def anatomy_structure_map(region_name):
             "pearls": ["Tracking is dynamic, so assess motion if you can.", "Alignment and soft tissue balance both matter."],
         },
     }
+
+
+def anatomy_bones_map(region_name):
+    """Detailed osteology and skeletal anatomy reference."""
+    if region_name == "Foot":
+        return {
+            "Tarsal bones—Hindfoot": {
+                "summary": "The talus and calcaneus form the foundation of the foot, bearing weight and transmitting forces.",
+                "anatomy": "Talus: Trochlea articulates with tibia/fibula; head and neck angle medially toward the navicular. Calcaneus: Largest tarsal bone with posterior tuberosity (weight-bearing heel) and anterior articulation with cuboid.",
+                "landmarks": "Medial talus bulge, calcaneal tuberosity, posterior calcaneal process, lateral process (Gissane's angle).",
+                "function": "Weight transmission, shock absorption, and rotational coupling during gait.",
+                "imaging": "Weight-bearing radiographs show alignment; Gissane's angle assesses posterior facet orientation. CT clarifies fracture patterns.",
+                "procedure": "Critical for hindfoot arthrodesis, calcaneal osteotomy, and talus preservation planning.",
+                "pearls": ["Calcaneal pitch and talar tilt are key alignment parameters.", "Talus position changes with pes planus vs cavus.", "CT is essential for subtalar joint fractures."],
+            },
+            "Tarsal bones—Midfoot": {
+                "summary": "Navicular, cuboid, and cuneiforms bridge hindfoot and forefoot, controlling arch geometry.",
+                "anatomy": "Navicular: Boat-shaped, articulates with talus head, three cuneiforms, and cuboid. Cuboid: Lateral midfoot articulator with calcaneus and lateral metatarsals. Cuneiforms (medial, intermediate, lateral): Support first, second, and third metatarsals respectively.",
+                "landmarks": "Navicular tuberosity (common pain point), talonavicular joint, naviculocuneiform articulation, cuboid groove for peroneus longus.",
+                "function": "Distribute loads across medial and lateral columns; support arch rigidity and spring ligament complex.",
+                "imaging": "AP, lateral, and oblique radiographs; CT for joint detail. MRI shows spring ligament and midfoot ligament disruption.",
+                "procedure": "Important for hallux limitus, flatfoot, and midfoot ulcer/arthropathy management.",
+                "pearls": ["Spring ligament (deltoid complex) is critical to medial column support.", "Cuboid syndrome involves cuboid-metatarsal hypomobility.", "Midfoot Lisfranc complex requires high clinical suspicion."],
+            },
+            "Metatarsals (rays I–V)": {
+                "summary": "Five metatarsals serve as the lever arms for propulsion and weight distribution across the forefoot.",
+                "anatomy": "Each has a base (proximal), shaft, neck, and head. First ray (hallux metatarsal): Shorter, thicker, bears higher load. Second ray (longest): Most mobile. Third–fifth rays: Progressively shorter and contribute to lateral column stability.",
+                "landmarks": "Metatarsal heads, bases, intermetatarsal spaces (MTJ anatomy), tuberosities, and sesamoid articulations on first and second heads.",
+                "function": "Load distribution during stance and propulsion; windlass mechanism with plantar fascia during toe-off.",
+                "imaging": "Weight-bearing radiographs show metatarsal parabola and first-ray position. MRI or ultrasound for peroneal longus at cuboid and MTJ synovitis.",
+                "procedure": "Relevant for metatarsal osteotomy, bunion, hallux rigidus, metatarsalgia, and forefoot ulcer management.",
+                "pearls": ["First ray should dorsiflex with toe extension (dorsal mobility assessment).", "Metatarsal parabola guides forefoot surgery.", "Sesamoid position reflects first-ray mechanics."],
+            },
+            "Phalanges and sesamoids": {
+                "summary": "Proximal, middle, and distal phalanges form the toes; sesamoids amplify first MTP mechanics.",
+                "anatomy": "Hallux: Two phalanges (proximal and distal); lateral and medial sesamoids under the first MTP head. Digits 2–5: Three phalanges each (proximal, middle, distal) with interphalangeal joints.",
+                "landmarks": "First MTP joint, sesamoid positions (medial vs lateral), IP joint flexor creases, and toe pulp pressure points.",
+                "function": "Fine balance and stability; sesamoids protect first MTP tendon and improve flexor moment arm.",
+                "imaging": "Radiographs (axial views for sesamoid position, weight-bearing for first MTP assessment). MRI for sesamoiditis or hallux pathology.",
+                "procedure": "Important for hallux rigidus, hallux limitus, sesamoiditis, and turf toe management.",
+                "pearls": ["Hallux rigidus is dorsal OA at first MTP.", "Sesamoid stress fractures are rare but painful.", "Turf toe involves plantar plate and collateral ligament failure."],
+            },
+        }
+    if region_name == "Ankle":
+        return {
+            "Tibia and fibula—Distal shafts": {
+                "summary": "The distal tibia and fibula converge to form the ankle mortise, the socket for the talus.",
+                "anatomy": "Distal tibia: Medial malleolus, tibial plafond (trochlea), anterior margin, and posterior lip. Distal fibula: Lateral malleolus, lateral peroneal groove. Syndesmotic ligaments (AITFL, PITFL, interosseous membrane) maintain spacing.",
+                "landmarks": "Medial malleolus (easily palpable), lateral malleolus (fibular prominence), anterior tibial edge, syndesmotic interval (high ankle region).",
+                "function": "Weight-bearing articulation and dynamic mortise stability during rotation and dorsiflexion.",
+                "imaging": "Weight-bearing radiographs assess alignment; CT for complex fractures. Stress radiographs for syndesmotic widening. MRI for syndesmotic and tibiofibular ligament detail.",
+                "procedure": "Essential for fracture classification, syndesmotic fixation, and ankle reconstruction.",
+                "pearls": ["Medial malleolus fractures are common and often involve deltoid ligament.", "Syndesmotic injury recovery is slower than simple ankle sprains.", "Mortise congruence is key to long-term outcomes."],
+            },
+            "Talus": {
+                "summary": "The keystone bone of the ankle, articulating with the mortise above and calcaneus/navicular below.",
+                "anatomy": "Superior surface (trochlea): Broader anteriorly, narrower posteriorly. Medial and lateral facets for mortise stability. Head and neck angle medially toward navicular. Posterior process with medial/lateral tubercles.",
+                "landmarks": "Talar dome, anterior talus (palpable just distal to ankle joint line), posterior process (talus posterior), talar shoulders.",
+                "function": "Primary weight-bearing and load-transmission through the ankle joint; couples with hindfoot rotation.",
+                "imaging": "Radiographs (AP, lateral, mortise views for alignment). CT essential for osteochondral lesions, fractures, and posterior process abnormalities. MRI shows cartilage and ligament attachments.",
+                "procedure": "Critical for ankle replacement, osteochondral repair, lateral process fracture, and talar tilt assessment.",
+                "pearls": ["Talar dome articular cartilage is high-pressure and prone to OCD.", "Posterior process impingement can mimic Achilles pathology.", "Talus has limited blood supply; fractures may lead to AVN."],
+            },
+            "Calcaneus—Posterior and medial surfaces": {
+                "summary": "The heel bone interfaces with the talus via the subtalar joint and supports the ankle architecture.",
+                "anatomy": "Posterior tuberosity: Weight-bearing prominence. Sustentaculum tali: Medial shelf supporting the talar head. Subtalar joint facets (posterior, middle, anterior). Calcaneal body extends to anterior cuboid articulation.",
+                "landmarks": "Calcaneal tuberosity (heel), medial aspect for spring ligament attachment, cuboid groove on anterior surface.",
+                "function": "Heel strike absorption, weight transmission to midfoot, and hindfoot inversion/eversion coupling.",
+                "imaging": "Weight-bearing radiographs show alignment and calcaneal pitch. CT clarifies fractured subtalar joint anatomy. MRI for soft-tissue and plantar fascia detail.",
+                "procedure": "Important for heel pain, Haglund deformity, lateral process fracture, and calcaneal osteotomy.",
+                "pearls": ["Calcaneal fractures often involve subtalar joint disruption.", "Calcaneal pitch determines arch mechanics.", "Haglund deformity is a posterior tuberosity enlargement."],
+            },
+            "Navicular—Head articulation": {
+                "summary": "The navicular receives the talar head, creating a critical medial column coupling point.",
+                "anatomy": "Talonavicular joint (spheroid articulation), navicular-cuneiform joints distally, medial tuberosity for posterior tibial tendon insertion.",
+                "landmarks": "Navicular tuberosity (palpable medially), talonavicular joint line.",
+                "function": "Medial column load transfer, arch geometry, and posterior tibial tendon action point.",
+                "imaging": "MRI best shows spring ligament failure and talonavicular alignment. Radiographs assess medial column height.",
+                "procedure": "Relevant for flatfoot, posterior tibial tendon dysfunction, and medial column reconstruction.",
+                "pearls": ["Talonavicular coverage reflects medial column stability.", "Spring ligament is the dynamic medial support.", "Navicular stress fractures are rare but serious."],
+            },
+        }
+    if region_name == "Lower Leg":
+        return {
+            "Tibia": {
+                "summary": "The weight-bearing bone of the lower leg, transmitting femoral load through the knee to the ankle.",
+                "anatomy": "Proximal end: Medial and lateral condyles, tibial plateau, anterior tuberosity (patellar tendon insertion). Shaft: Anterior and medial borders, nutrient foramen. Distal end: Medial malleolus, tibial plafond.",
+                "landmarks": "Tibial tuberosity (easily palpable anteriorly), anterior tibial crest, medial tibial border, distal medial malleolus.",
+                "function": "Primary weight bearing; provides attachment for muscles (quadriceps, tibialis anterior, tibialis posterior) and ligaments (ACL, MCL).",
+                "imaging": "Radiographs show alignment, physeal anatomy (in skeletally immature), and stress fractures. MRI for compartment syndrome and marrow edema.",
+                "procedure": "Critical for knee arthroplasty, tibial plateau fractures, tibial tuberosity advancement, and stress fracture management.",
+                "pearls": ["Anterior tibial stress fractures are common in runners (posteromedial tibia).", "Tibial tuberosity apophysitis (Osgood-Schlatter) occurs in adolescents.", "Proximal tibiofibular joint (PTFJ) moves with knee flexion."],
+            },
+            "Fibula": {
+                "summary": "Non-weight-bearing bone parallel to the tibia, providing muscle attachment and ankle stabilization.",
+                "anatomy": "Proximal end: Fibular head and neck (just distal to knee joint line). Shaft: Slender, nutrient foramen. Distal end: Lateral malleolus, peroneal groove.",
+                "landmarks": "Fibular head (lateral knee prominence), lateral fibular border, distal lateral malleolus.",
+                "function": "Muscle attachment (biceps femoris, peroneal muscles, soleus); lateral ankle and syndesmotic stabilization.",
+                "imaging": "Often incidental on leg radiographs; important for ankle trauma assessment. Proximal fibular stress injuries less common than tibial.",
+                "procedure": "Relevant for ankle syndesmotic injuries, peroneal nerve palsy, and lateral ankle reconstruction.",
+                "pearls": ["Peroneal nerve wraps around fibular neck (common site of compression).", "Proximal tibiofibular joint can dislocate.", "Fibular head moves anterolaterally with knee flexion."],
+            },
+            "Interosseous membrane and syndesmosis": {
+                "summary": "The tough fascial sheet connecting tibia and fibula, maintaining spacing and transmitting forces.",
+                "anatomy": "Interosseous membrane spans the tibial and fibular shafts. Proximal tibiofibular joint (PTFJ) with its own capsule and ligaments. Distal syndesmosis (AITFL, PITFL, interosseous ligament).",
+                "landmarks": "Central membrane visible on cross-section. Anterior and posterior tibiofibular ligament attachments near ankle.",
+                "function": "Load sharing between tibia and fibula; rotational control during knee and ankle motion.",
+                "imaging": "MRI best shows membrane and syndesmotic ligament detail. Ultrasound can assess fascial continuity.",
+                "procedure": "Important for proximal PTFJ dislocation, syndesmotic injury, and compartment syndrome decompression.",
+                "pearls": ["Interosseous membrane is load-bearing (transfers ~16% of load).", "Syndesmotic injuries require imaging and careful reduction.", "Fasciotomy releases interosseous membrane and fascia."],
+            },
+        }
+    return {
+        "Distal femur": {
+            "summary": "The knee's upper articulation, with medial and lateral condyles forming the tibiofemoral joint.",
+            "anatomy": "Medial femoral condyle: Broader, more posterior. Lateral femoral condyle: Narrower, more anterior. Intercondylar groove (trochlea) for patellar tracking. Epicondyles (adductors, collaterals). Intercondylar notch (ACL/PCL attachments).",
+            "landmarks": "Medial and lateral femoral epicondyles (easily palpable), distal femoral line alignment.",
+            "function": "Primary femoral articulation, weight distribution, and attachment for cruciate and collateral ligaments.",
+            "imaging": "Radiographs show alignment (varus/valgus), distal femoral anatomy. MRI for cartilage, PCL, and ACL attachments.",
+            "procedure": "Essential for knee arthroplasty, distal femoral osteotomy, and fracture management.",
+            "pearls": ["Valgus knee alignment increases medial compartment stress.", "Distal femoral fractures often involve the articular surface.", "Femoral tunnel placement in ACL reconstruction critical."],
+        },
+        "Proximal and distal tibia": {
+            "summary": "The tibia forms the main tibiofemoral and ankle articulations, bridging knee and ankle.",
+            "anatomy": "Proximal tibia: Medial and lateral tibial plateaus, intercondylar eminence (ACL/meniscal attachment), anterior tuberosity. Distal tibia: Tibial plafond (ankle trochlea), medial malleolus, medial and posterior borders.",
+            "landmarks": "Tibial tuberosity (patellar tendon insertion, easily palpable), tibial crest, medial tibial shaft (common stress fracture site).",
+            "function": "Primary weight bearing from femur to ankle; major muscle attachment site (quads, hamstrings, gastrocnemius, tibialis anterior/posterior).",
+            "imaging": "Radiographs show alignment and fracture patterns. MRI for plateau fractures, metaphyseal edema, and stress fractures.",
+            "procedure": "Critical for knee arthroplasty, tibial plateau fracture repair, and tibial tuberosity transfer.",
+            "pearls": ["Tibial plateau fractures often have meniscal tears.", "Posteromedial tibial stress fractures are common in runners.", "Tibial version (internal vs external) affects knee mechanics."],
+        },
+        "Patella and trochlea": {
+            "summary": "The patella is a sesamoid bone within the quadriceps tendon, gliding within the femoral trochlea.",
+            "anatomy": "Patella: Apex (inferior), base (superior), articular facets (medial and lateral). Trochlea: Medial and lateral femoral grooves. Patellofemoral joint is the most mobile knee articulation.",
+            "landmarks": "Patellar apex and medial/lateral facets (felt under skin when knee is extended), trochlear groove (felt under patella).",
+            "function": "Improves quadriceps mechanical advantage; load distribution across patellofemoral joint during knee bending and knee extension.",
+            "imaging": "Axial radiographs (Merchant, sunrise) assess patellar alignment and tilt. MRI shows cartilage, maltracking, and soft-tissue imbalance.",
+            "procedure": "Important for patellofemoral arthritis, maltracking, and patellar realignment surgery.",
+            "pearls": ["Lateral patellar tilt and medial patellar facet compression are common OA patterns.", "Q-angle and tibial tuberosity–trochlear groove (TT-TG) distance guide realignment.", "Patellofemoral pain is often related to muscle imbalance rather than structural abnormality."],
+        },
+        "Fibula and knee articulation": {
+            "summary": "The fibula's proximal head articulates with the tibia just below the knee, contributing to lateral stability.",
+            "anatomy": "Fibular head: Oval articular surface, posterior and superior to tibial plateau. Common fibular nerve wraps around fibular neck. Fibular collateral ligament (FCL) attaches to fibular head.",
+            "landmarks": "Fibular head (easily palpable lateral to knee joint line), fibular neck (just distal to head).",
+            "function": "Lateral knee stabilization via FCL and posterolateral corner (PLC) attachment; provides attachment for biceps femoris.",
+            "imaging": "Standard knee radiographs show fibular alignment. MRI assesses FCL and PLC integrity.",
+            "procedure": "Important for proximal tibiofibular joint (PTFJ) dislocation, FCL repair, and PLC reconstruction.",
+            "pearls": ["Fibular head dislocation is rare but can cause common peroneal nerve compression.", "PTFJ can dislocate anteriorly or posteriorly.", "FCL integrity is assessed with varus stress and dial testing."],
+        },
+    }
