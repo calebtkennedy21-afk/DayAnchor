@@ -2697,12 +2697,12 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Forefoot loading: first MTP complex and sesamoid apparatus in push-off."
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/9/9d/Gray264.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Gray266.png/1024px-Gray266.png",
             caption="Dorsum of foot anatomy (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/8/8d/Gray430.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Gray446.png/1024px-Gray446.png",
             caption="Plantar structures and tendon relationships (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
@@ -2734,12 +2734,12 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Lateral: peroneus longus and brevis; posterior: Achilles tendon complex."
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/1/18/Gray343.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Gray354.png/1024px-Gray354.png",
             caption="Ankle and tarsal region ligament anatomy (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/4/4d/Gray348.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Gray355.png/1024px-Gray355.png",
             caption="Ankle tendon pathways and retinacula (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
@@ -2771,12 +2771,12 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Iliotibial band and pes anserinus as key lateral and anteromedial dynamic influences."
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/7/7f/Gray349.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Gray348.png/1024px-Gray348.png",
             caption="Knee joint capsule and ligament relationships (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
         st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/3/3d/Gray261.png",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Gray350.png/1024px-Gray350.png",
             caption="Anterior knee and extensor mechanism anatomy (public-domain Gray's anatomy plate)",
             use_container_width=True,
         )
