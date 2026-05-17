@@ -1223,7 +1223,7 @@ def weekday_name_to_index(name):
     return mapping.get(name, 4)
 
 
-def predicted_or_days(app_settings, horizon_days=28):
+def or_cadence_label_for_day(day, app_settings):
     fixed_weekday = weekday_name_to_index(app_settings.get("or_fixed_weekday", "Friday"))
     alternating_days = app_settings.get("or_alternating_days") or ["Monday", "Wednesday"]
     if len(alternating_days) < 2:
@@ -1232,17 +1232,24 @@ def predicted_or_days(app_settings, horizon_days=28):
     alt_day_b = weekday_name_to_index(alternating_days[1])
     cycle_offset = safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0)
 
+    weekday = day.weekday()
+    if weekday == fixed_weekday:
+        return f"OR {day.strftime('%a')}"
+
+    alternating_weekday = alt_day_a if ((day.isocalendar().week + cycle_offset) % 2 == 0) else alt_day_b
+    if weekday == alternating_weekday:
+        return f"Alt OR {day.strftime('%a')}"
+
+    return None
+
+
+def predicted_or_days(app_settings, horizon_days=28):
     out = []
     for offset in range(horizon_days):
         day = date.today() + timedelta(days=offset)
-        iso_week = day.isocalendar().week
-        weekday = day.weekday()
-        if weekday == fixed_weekday:
-            out.append((day, "OR day"))
-            continue
-        alternating_weekday = alt_day_a if ((iso_week + cycle_offset) % 2 == 0) else alt_day_b
-        if weekday == alternating_weekday:
-            out.append((day, "Alternating OR day"))
+        label = or_cadence_label_for_day(day, app_settings)
+        if label:
+            out.append((day, label))
     return out
 
 
@@ -1308,10 +1315,6 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
     weekday_indexes = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
     clinic_weekdays = settings.get("overview_clinic_weekdays") or ["Thursday", "Monday"]
     clinic_weekday_indexes = {weekday_indexes[day] for day in clinic_weekdays if day in weekday_indexes}
-    or_fixed_weekday_index = weekday_indexes.get(settings.get("or_fixed_weekday", "Friday"), 4)
-    or_alternating_days = settings.get("or_alternating_days") or ["Monday", "Wednesday"]
-    or_alternating_day_indexes = {weekday_indexes[day] for day in or_alternating_days if day in weekday_indexes}
-    or_alternating_cycle_offset = int(settings.get("or_alternating_cycle_offset", 0) or 0)
     procedure_friday_frequency = max(1, int(settings.get("overview_procedure_friday_frequency_weeks", 2) or 2))
     procedure_friday_cycle_offset = int(settings.get("overview_procedure_friday_cycle_offset", 0) or 0)
 
@@ -1344,10 +1347,9 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
             badges = []
             if day.weekday() in clinic_weekday_indexes:
                 badges.append(("Clinic", "#d1fae5", "#047857"))
-            if day.weekday() == or_fixed_weekday_index:
-                badges.append(("OR", "#e0e7ff", "#3730a3"))
-            if day.weekday() in or_alternating_day_indexes and ((day.isocalendar().week + or_alternating_cycle_offset) % 2 == 0):
-                badges.append(("OR", "#e0e7ff", "#3730a3"))
+            or_label = or_cadence_label_for_day(day, settings)
+            if or_label:
+                badges.append((or_label, "#e0e7ff", "#3730a3"))
             if day.weekday() == 4 and ((day.isocalendar().week + procedure_friday_cycle_offset) % procedure_friday_frequency == 0):
                 badges.append(("Procedure Friday", "#ffedd5", "#c2410c"))
 
