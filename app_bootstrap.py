@@ -263,7 +263,7 @@ def run_app(context, st_module=st):
         render_page_banner("clinic", "Surgical Cases", "Non-PHI case tracking with protocol support and OR cadence.")
         render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases_page")
     elif current_page == "Schedule":
-        render_page_banner("schedule", "Schedule Builder", "Place work into realistic blocks and keep the week coherent.")
+        render_page_banner("schedule", "Schedule Builder", "Plan work and personal blocks, then pin them into real time.")
         render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)

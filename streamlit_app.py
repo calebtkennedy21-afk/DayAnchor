@@ -2931,6 +2931,81 @@ def apply_clinic_visit_template_from_state(form_key, template_state_key, st_modu
     apply_clinic_visit_template(form_key, st_module.session_state.get(template_state_key, "blank"), st_module=st_module)
 
 
+def personal_schedule_templates():
+    return {
+        "blank": {
+            "label": "Blank personal capture",
+            "title": "",
+            "description": "",
+            "priority": "medium",
+            "scheduled_time": time(18, 0),
+            "scheduled_minutes": 60,
+            "all_day": False,
+        },
+        "dinner": {
+            "label": "Dinner",
+            "title": "Dinner",
+            "description": "Protected personal time for dinner, social plans, or a calm evening block.",
+            "priority": "medium",
+            "scheduled_time": time(18, 30),
+            "scheduled_minutes": 90,
+            "all_day": False,
+        },
+        "event": {
+            "label": "Event",
+            "title": "Evening event",
+            "description": "Concert, outing, family event, or another fixed personal commitment.",
+            "priority": "medium",
+            "scheduled_time": time(19, 0),
+            "scheduled_minutes": 120,
+            "all_day": False,
+        },
+        "appointment": {
+            "label": "Appointment",
+            "title": "Personal appointment",
+            "description": "Medical, dental, or life-admin appointment that needs a real calendar slot.",
+            "priority": "high",
+            "scheduled_time": time(9, 0),
+            "scheduled_minutes": 60,
+            "all_day": False,
+        },
+        "travel": {
+            "label": "Travel",
+            "title": "Travel block",
+            "description": "Transit, airport time, or commute buffer.",
+            "priority": "medium",
+            "scheduled_time": time(8, 0),
+            "scheduled_minutes": 180,
+            "all_day": False,
+        },
+        "vacation": {
+            "label": "Vacation / trip",
+            "title": "Vacation day",
+            "description": "All-day personal block for a trip, day off, or protected downtime.",
+            "priority": "low",
+            "scheduled_time": time(8, 0),
+            "scheduled_minutes": 480,
+            "all_day": True,
+        },
+    }
+
+
+def apply_personal_schedule_template(form_key, template_key, st_module=st):
+    templates = personal_schedule_templates()
+    template = templates.get(template_key, templates["blank"])
+    st_module.session_state[f"{form_key}_title"] = template["title"]
+    st_module.session_state[f"{form_key}_description"] = template["description"]
+    st_module.session_state[f"{form_key}_priority"] = template["priority"]
+    st_module.session_state[f"{form_key}_scheduled_date"] = date.today()
+    st_module.session_state[f"{form_key}_scheduled_time"] = template["scheduled_time"]
+    st_module.session_state[f"{form_key}_scheduled_minutes"] = template["scheduled_minutes"]
+    st_module.session_state[f"{form_key}_all_day"] = template["all_day"]
+
+
+def apply_personal_schedule_template_from_state(form_key, template_state_key, st_module=st):
+    apply_personal_schedule_template(form_key, st_module.session_state.get(template_state_key, "blank"), st_module=st_module)
+
+
 def build_time_blocks(profile):
     total_minutes = 8 * 60
     core_minutes = max(120, total_minutes - profile["prep_minutes"] - profile["admin_buffer_minutes"])
@@ -3620,6 +3695,7 @@ def render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel
 
 def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule"):
     snapshot = schedule_workload_snapshot(active_tasks)
+    personal_tasks = [task for task in active_tasks if task.get("category") == "Personal"]
     lens_key = f"{panel_key}_lens"
     if lens_key not in st.session_state:
         st.session_state[lens_key] = "Balanced"
@@ -3642,24 +3718,161 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         return (due_value, priority_rank(task["priority"]), 0 if task.get("scheduled_date") else 1)
 
     ranked_tasks = sorted(snapshot["unscheduled"], key=sort_key)[:8]
+    schedule_time_default = parse_time_value(app_settings.get("default_schedule_time")) or time(9, 0)
+    duration_options = [15, 30, 45, 60, 90, 120]
+    default_duration = int(app_settings.get("default_duration", 60) or 60)
+    default_duration_index = duration_options.index(default_duration) if default_duration in duration_options else 3
+    pin_task_key = f"{panel_key}_pin_task"
+    if pin_task_key not in st.session_state and ranked_tasks:
+        st.session_state[pin_task_key] = ranked_tasks[0]["id"]
+    week_key = f"{panel_key}_week_anchor"
+    if week_key not in st.session_state:
+        today = date.today()
+        st.session_state[week_key] = today - timedelta(days=today.weekday())
+
+    week_start = st.session_state[week_key]
+    week_days = [week_start + timedelta(days=offset) for offset in range(7)]
+    scheduled_by_day = {day: [] for day in week_days}
+    for task in snapshot["upcoming"]:
+        task_day = task.get("scheduled_date")
+        if task_day in scheduled_by_day:
+            scheduled_by_day[task_day].append(task)
+    for day_tasks in scheduled_by_day.values():
+        day_tasks.sort(key=lambda task: (task.get("scheduled_time") or time(23, 59), priority_rank(task["priority"]), task["title"]))
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Schedule Builder</h3><span>Preview the next best blocks before you pin times</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Schedule Builder</h3><span>Plan work, pin personal blocks, and move tasks into real time</span></div>', unsafe_allow_html=True)
     metric_cols = st.columns(4)
     metric_cols[0].metric("Scheduled", len(snapshot["upcoming"]))
     metric_cols[1].metric("Unscheduled", len(snapshot["unscheduled"]))
     metric_cols[2].metric("High-priority unscheduled", len(snapshot["unscheduled_high"]))
     metric_cols[3].metric("Capacity gap", max(0, snapshot["capacity_gap"]))
 
+    week_controls = st.columns([1, 2, 1])
+    with week_controls[0]:
+        if st.button("Prev week", key=f"{panel_key}_prev_week"):
+            st.session_state[week_key] = week_start - timedelta(days=7)
+            st.rerun()
+    with week_controls[1]:
+        st.markdown(
+            f"<div style='text-align:center; font-weight:700; margin-top:0.4rem;'>{week_start.strftime('%b %d')} - {(week_start + timedelta(days=6)).strftime('%b %d, %Y')}</div>",
+            unsafe_allow_html=True,
+        )
+    with week_controls[2]:
+        if st.button("Next week", key=f"{panel_key}_next_week"):
+            st.session_state[week_key] = week_start + timedelta(days=7)
+            st.rerun()
+
+    st.markdown('<div class="panel-title" style="margin-top:0.75rem;"><h3>Week Planner</h3><span>Move tasks into the week one day at a time</span></div>', unsafe_allow_html=True)
+    if ranked_tasks:
+        selected_task_id = st.selectbox(
+            "Task to place",
+            [task["id"] for task in ranked_tasks],
+            key=pin_task_key,
+            format_func=lambda task_id: next(
+                (
+                    f"{task['title']} · {task['category']} · {task['priority'].title()} · {task.get('due_date') or 'No due date'}"
+                    for task in ranked_tasks
+                    if task["id"] == task_id
+                ),
+                str(task_id),
+            ),
+        )
+        st.caption("Use the buttons below to pin the selected task into a day, then fine-tune it in the list panel.")
+        planner_cols = st.columns(7)
+        for index, day in enumerate(week_days):
+            with planner_cols[index]:
+                st.markdown(
+                    f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span></div>",
+                    unsafe_allow_html=True,
+                )
+                if scheduled_by_day[day]:
+                    for task in scheduled_by_day[day][:3]:
+                        scheduled_time = task.get("scheduled_time")
+                        time_label = scheduled_time.strftime("%I:%M %p").lstrip("0") if scheduled_time else "Any time"
+                        st.markdown(
+                            f"<div style='margin:0.45rem 0 0.35rem; padding:0.45rem 0.55rem; border-radius:0.8rem; background:rgba(148,163,184,0.10);'><strong>{task['title']}</strong><br /><span style='font-size:0.8rem; opacity:0.8;'>{task['category']} · {time_label} · {task.get('scheduled_minutes') or '-'} min</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    if len(scheduled_by_day[day]) > 3:
+                        st.caption(f"+ {len(scheduled_by_day[day]) - 3} more")
+                else:
+                    st.caption("No blocks yet.")
+
+                place_label = "Place here"
+                if st.button(place_label, key=f"{panel_key}_place_day_{day.isoformat()}", disabled=not ranked_tasks):
+                    target = next((task for task in ranked_tasks if task["id"] == selected_task_id), None)
+                    if target:
+                        update_task(
+                            target["id"],
+                            scheduled_date=day,
+                            scheduled_time=schedule_time_default,
+                            scheduled_minutes=default_duration,
+                        )
+                        st.success(f"Placed '{target['title']}' on {day.strftime('%a %b %d')}.")
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="empty-state">No unscheduled tasks are waiting for placement this week.</div>', unsafe_allow_html=True)
+
     left_col, right_col = st.columns([1.1, 0.9], gap="large")
     with left_col:
         st.markdown('<div class="panel-title"><h3>Draft Order</h3><span>Ranked according to the selected lens</span></div>', unsafe_allow_html=True)
         if ranked_tasks:
+            selected_task_id = st.session_state.get(pin_task_key, ranked_tasks[0]["id"])
+            pin_cols = st.columns([1, 1, 1])
+            with pin_cols[0]:
+                pin_date = st.date_input("Pin date", value=date.today(), key=f"{panel_key}_pin_date")
+            with pin_cols[1]:
+                pin_time = st.time_input("Pin time", value=schedule_time_default, key=f"{panel_key}_pin_time")
+            with pin_cols[2]:
+                pin_minutes = st.selectbox(
+                    "Duration",
+                    duration_options,
+                    index=default_duration_index,
+                    key=f"{panel_key}_pin_minutes",
+                )
+            if st.button("Pin selected task", key=f"{panel_key}_pin_selected", type="primary"):
+                target = next((task for task in ranked_tasks if task["id"] == selected_task_id), None)
+                if target:
+                    update_task(
+                        target["id"],
+                        scheduled_date=pin_date,
+                        scheduled_time=pin_time,
+                        scheduled_minutes=pin_minutes,
+                    )
+                    st.success(f"Pinned '{target['title']}' to {pin_date} at {pin_time.strftime('%I:%M %p').lstrip('0')}.")
+                    st.rerun()
+
+            st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Ranked items</h3><span>Quick actions on the next few unscheduled tasks</span></div>', unsafe_allow_html=True)
             for task in ranked_tasks:
+                scheduled_label = format_schedule(task)
                 st.markdown(
-                    f"- <strong>{task['title']}</strong> · {task['category']} · {task['priority'].title()} · {task.get('due_date') or 'No due date'}",
+                    f"<div class='task-card'><div class='task-title'>{task['title']}</div><div class='task-meta'><span class='pill pill-category'>{task['category']}</span><span class='pill pill-priority-{task['priority']}'>Priority: {task['priority'].title()}</span><span class='pill'>{task.get('due_date') or 'No due date'}</span><span class='pill'>{scheduled_label}</span></div></div>",
                     unsafe_allow_html=True,
                 )
+                action_cols = st.columns(3)
+                with action_cols[0]:
+                    if st.button("Pin tomorrow", key=f"{panel_key}_pin_tomorrow_{task['id']}"):
+                        update_task(
+                            task["id"],
+                            scheduled_date=date.today() + timedelta(days=1),
+                            scheduled_time=schedule_time_default,
+                            scheduled_minutes=default_duration,
+                        )
+                        st.success(f"Pinned '{task['title']}' for tomorrow.")
+                        st.rerun()
+                with action_cols[1]:
+                    if task.get("status") != "in_progress" and st.button("Start", key=f"{panel_key}_start_{task['id']}"):
+                        set_task_status(task["id"], "in_progress")
+                        st.success(f"'{task['title']}' moved to In Progress.")
+                        st.rerun()
+                with action_cols[2]:
+                    if st.button("Clear schedule", key=f"{panel_key}_clear_{task['id']}"):
+                        update_task(task["id"], scheduled_date=None, scheduled_time=None, scheduled_minutes=None)
+                        st.success(f"Cleared the schedule for '{task['title']}'.")
+                        st.rerun()
         else:
             st.markdown('<div class="empty-state">No unscheduled tasks need ordering right now.</div>', unsafe_allow_html=True)
     with right_col:
@@ -3674,6 +3887,84 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         )
         if snapshot["unscheduled_high"]:
             st.caption(f"Top unscheduled high-priority task: {snapshot['unscheduled_high'][0]['title']}")
+
+        st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Personal Scheduling</h3><span>Add events, dinners, travel, and vacation blocks</span></div>', unsafe_allow_html=True)
+        personal_template_key = f"{panel_key}_personal_template"
+        if personal_template_key not in st.session_state:
+            st.session_state[personal_template_key] = "blank"
+        personal_templates = personal_schedule_templates()
+        st.selectbox(
+            "Personal template",
+            list(personal_templates.keys()),
+            key=personal_template_key,
+            format_func=lambda key: personal_templates[key]["label"],
+            on_change=apply_personal_schedule_template_from_state,
+            args=(f"{panel_key}_personal_capture", personal_template_key),
+        )
+        with st.form(f"{panel_key}_personal_capture", clear_on_submit=True):
+            personal_title = st.text_input("Title", key=f"{panel_key}_personal_capture_title")
+            personal_description = st.text_area("Notes", height=90, key=f"{panel_key}_personal_capture_description")
+            personal_date = st.date_input("Date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
+            personal_all_day = st.checkbox("Treat as all-day block", key=f"{panel_key}_personal_capture_all_day")
+            personal_time = st.time_input(
+                "Start time",
+                value=personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_time"],
+                disabled=personal_all_day,
+                key=f"{panel_key}_personal_capture_scheduled_time",
+            )
+            personal_minutes = st.selectbox(
+                "Duration (minutes)",
+                [15, 30, 45, 60, 90, 120, 180, 240, 480],
+                index=[15, 30, 45, 60, 90, 120, 180, 240, 480].index(
+                    personal_schedule_templates()[st.session_state[personal_template_key]]["scheduled_minutes"]
+                ),
+                disabled=personal_all_day,
+                key=f"{panel_key}_personal_capture_scheduled_minutes",
+            )
+            personal_priority = st.selectbox(
+                "Priority",
+                ["high", "medium", "low"],
+                index=["high", "medium", "low"].index(personal_schedule_templates()[st.session_state[personal_template_key]]["priority"]),
+                format_func=lambda value: value.title(),
+                key=f"{panel_key}_personal_capture_priority",
+            )
+            personal_submit = st.form_submit_button("Add personal block", type="primary")
+
+        if personal_submit:
+            if not personal_title.strip():
+                st.warning("Add a title for the personal block.")
+            else:
+                scheduled_time = time(8, 0) if personal_all_day else personal_time
+                scheduled_minutes = 480 if personal_all_day else int(personal_minutes)
+                add_task(
+                    personal_title.strip(),
+                    personal_description.strip(),
+                    "Personal",
+                    personal_priority,
+                    personal_date,
+                    scheduled_date=personal_date,
+                    scheduled_time=scheduled_time,
+                    scheduled_minutes=scheduled_minutes,
+                    recurrence_rule=None,
+                    recurrence_interval=1,
+                )
+                st.success(f"Added personal block for {personal_date}.")
+                st.rerun()
+
+        upcoming_personal = sorted(
+            [task for task in personal_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
+            key=lambda task: (task.get("scheduled_date") or date.max, task.get("scheduled_time") or time(23, 59)),
+        )[:5]
+        if upcoming_personal:
+            st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming personal blocks</h3><span>What is already on your calendar</span></div>', unsafe_allow_html=True)
+            for task in upcoming_personal:
+                st.markdown(
+                    f"- <strong>{task['title']}</strong> · {task.get('scheduled_date')} · {format_schedule(task)} · {task.get('scheduled_minutes') or '-'} min",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="empty-state">No personal blocks scheduled yet. Add dinners, trips, appointments, or vacation time here.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
