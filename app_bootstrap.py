@@ -199,7 +199,7 @@ def run_app(context, st_module=st):
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings)
+        render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_quick_capture("personal_quick_capture", app_settings)
@@ -229,7 +229,7 @@ def run_app(context, st_module=st):
         render_page_banner("schedule", "Schedule Builder", "Place work into realistic blocks and keep the week coherent.")
         render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings)
+        render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
     elif current_page == "Anatomy":
         render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
         context["render_msk_anatomy_panel"](surgical_cases, protocol_documents, panel_key="anatomy_page")

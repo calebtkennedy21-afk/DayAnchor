@@ -5134,7 +5134,7 @@ elif current_page == "Schedule":
     render_timeline_panel(scheduled_tasks, timeline_days)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_task_calendar_panel(filtered_tasks, "schedule_tasks_calendar", "Schedule Calendar", "Month view for workload timing and follow-through")
+    render_task_calendar_panel(filtered_tasks, "schedule_tasks_calendar", "Schedule Calendar", "Month view for workload timing and follow-through", app_settings=app_settings)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     unscheduled_tasks = [task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]
