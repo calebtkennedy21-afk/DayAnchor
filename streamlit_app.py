@@ -3130,6 +3130,24 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_metrics_row():
+    tasks = load_tasks()
+    active_tasks = [task for task in tasks if task.get("status") != "completed"]
+    due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
+    completed_tasks = [task for task in tasks if task.get("status") == "completed"]
+    scheduled_tasks = [
+        task
+        for task in active_tasks
+        if task.get("scheduled_date") and task.get("scheduled_time")
+    ]
+
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1.metric("Active Tasks", len(active_tasks))
+    metric_col2.metric("Due Today", len(due_today))
+    metric_col3.metric("Completed", len(completed_tasks))
+    metric_col4.metric("Scheduled", len(scheduled_tasks))
+
+
 def render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="review"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -4455,14 +4473,6 @@ scheduled_tasks = sorted(
     [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
     key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
 )
-
-
-def render_metrics_row():
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    metric_col1.metric("Active Tasks", len(active_tasks))
-    metric_col2.metric("Due Today", len(due_today))
-    metric_col3.metric("Completed", len(completed_tasks))
-    metric_col4.metric("Scheduled", len(scheduled_tasks))
 
 
 if len(filtered_tasks) != len(tasks):
