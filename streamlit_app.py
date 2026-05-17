@@ -4521,6 +4521,208 @@ def resolve_overview_lens(active_tasks, personal_tasks, clinic_tasks, app_settin
     }
 
 
+def fetch_health_news(news_api_key, max_articles=5):
+    """Fetch health and fitness related news from NewsAPI."""
+    try:
+        import requests
+    except ImportError:
+        return []
+    
+    if not news_api_key:
+        return []
+    
+    try:
+        # Fetch health & fitness news
+        health_url = "https://newsapi.org/v2/everything"
+        health_params = {
+            "q": "health fitness wellness exercise nutrition",
+            "sortBy": "publishedAt",
+            "language": "en",
+            "pageSize": max_articles,
+            "apiKey": news_api_key,
+        }
+        health_response = requests.get(health_url, params=health_params, timeout=5)
+        health_articles = health_response.json().get("articles", [])[:max_articles // 2]
+        
+        # Fetch medical & surgical news
+        medical_url = "https://newsapi.org/v2/everything"
+        medical_params = {
+            "q": "medical surgery orthopedic healthcare treatment procedure",
+            "sortBy": "publishedAt",
+            "language": "en",
+            "pageSize": max_articles,
+            "apiKey": news_api_key,
+        }
+        medical_response = requests.get(medical_url, params=medical_params, timeout=5)
+        medical_articles = medical_response.json().get("articles", [])[:max_articles // 2]
+        
+        # Combine and deduplicate by title
+        all_articles = health_articles + medical_articles
+        seen_titles = set()
+        unique_articles = []
+        for article in all_articles:
+            title = article.get("title", "").lower()
+            if title not in seen_titles:
+                seen_titles.add(title)
+                unique_articles.append(article)
+        
+        return unique_articles[:max_articles]
+    except Exception as e:
+        st.warning(f"Could not fetch news: {str(e)}")
+        return []
+
+
+def summarize_news_with_ai(articles, ai_model_name_fn, ai_enabled_fn):
+    """Use OpenAI to summarize news articles and generate motivational takeaways."""
+    if not ai_enabled_fn() or not articles:
+        return None, None
+    
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        articles_text = "\n\n".join([
+            f"Title: {article.get('title', '')}\n"
+            f"Source: {article.get('source', {}).get('name', 'Unknown')}\n"
+            f"Description: {article.get('description', '')}"
+            for article in articles[:5]
+        ])
+        
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a health and wellness expert who creates brief, inspiring morning briefings. "
+                               "Summarize the key news in 2-3 sentences, then provide 3 motivational takeaways or actionable insights."
+                }
+                ,
+                {
+                    "role": "user",
+                    "content": f"Please create a brief morning news digest and motivational briefing from these articles:\n\n{articles_text}"
+                }
+            ],
+            temperature=0.7,
+            max_tokens=400,
+        )
+        
+        full_response = response.choices[0].message.content
+        
+        # Split response into summary and motivational takeaways
+        if "motivational" in full_response.lower() or "takeaway" in full_response.lower():
+            parts = re.split(r'(?:motivational takeaway|actionable insight|takeaway)[s]?[:\n]', full_response, flags=re.IGNORECASE)
+            summary = parts[0].strip() if len(parts) > 0 else full_response
+            takeaways = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            lines = full_response.split('\n')
+            summary = '\n'.join(lines[:3]) if len(lines) > 3 else full_response
+            takeaways = '\n'.join(lines[3:]) if len(lines) > 3 else ""
+        
+        return summary, takeaways
+    except Exception as e:
+        st.error(f"AI summarization error: {str(e)}")
+        return None, None
+
+
+def render_morning_digest_panel(articles, summary, takeaways, panel_key="morning_digest"):
+    """Render the morning news digest panel."""
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>📰 Morning News Digest</h3><span>Health, fitness, and medical news for today</span></div>', unsafe_allow_html=True)
+    
+    if not articles:
+        st.info("No news articles available today. Check your NewsAPI key or try again later.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+    
+    if summary:
+        st.markdown("### 📌 Today's Headlines")
+        st.markdown(summary)
+    
+    if takeaways:
+        st.markdown("### 💡 Motivational Takeaways")
+        st.markdown(takeaways)
+    
+    st.markdown("### 📑 Featured Articles")
+    for i, article in enumerate(articles[:5], 1):
+        with st.expander(f"{i}. {article.get('title', 'Untitled')}", expanded=False):
+            st.markdown(f"**Source:** {article.get('source', {}).get('name', 'Unknown')}")
+            st.markdown(f"**Published:** {article.get('publishedAt', 'Unknown date')[:10]}")
+            if article.get('description'):
+                st.markdown(f"**Description:** {article.get('description', '')}")
+            if article.get('url'):
+                st.markdown(f"[Read full article →]({article.get('url')})")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_full_news_page(articles, summary, takeaways, panel_key="news_page"):
+    """Render a full page dedicated to news."""
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>📰 Health & Medical News</h3><span>Curated news on health, fitness, and surgical topics</span></div>', unsafe_allow_html=True)
+    
+    if not articles:
+        st.info("No news articles available. Check your NewsAPI key configuration.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+    
+    tab1, tab2, tab3 = st.tabs(["Digest", "Full Articles", "Article Details"])
+    
+    with tab1:
+        st.markdown("## 📌 Today's Digest")
+        if summary:
+            st.markdown(summary)
+        else:
+            st.info("AI summary unavailable.")
+        
+        if takeaways:
+            st.markdown("## 💡 Key Takeaways & Motivation")
+            st.markdown(takeaways)
+    
+    with tab2:
+        st.markdown("## 📑 All Featured Articles")
+        for i, article in enumerate(articles, 1):
+            st.markdown(f"### {i}. {article.get('title', 'Untitled')}")
+            st.markdown(f"**Source:** {article.get('source', {}).get('name', 'Unknown')} | **Date:** {article.get('publishedAt', 'Unknown')[:10]}")
+            if article.get('description'):
+                st.markdown(article.get('description', ''))
+            if article.get('url'):
+                st.markdown(f"[Read full article →]({article.get('url')})", unsafe_allow_html=True)
+            st.divider()
+    
+    with tab3:
+        st.markdown("## 🔍 Article Details & Sources")
+        article_choice = st.selectbox(
+            "Select an article",
+            [f"{i}. {article.get('title', 'Untitled')[:60]}..." for i, article in enumerate(articles, 1)],
+            key=f"{panel_key}_article_select"
+        )
+        if article_choice:
+            idx = int(article_choice.split(".")[0]) - 1
+            if 0 <= idx < len(articles):
+                article = articles[idx]
+                st.markdown(f"## {article.get('title', 'Untitled')}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Source", article.get('source', {}).get('name', 'Unknown'))
+                    st.metric("Published", article.get('publishedAt', 'Unknown')[:10])
+                with col2:
+                    if article.get('author'):
+                        st.metric("Author", article.get('author', 'Unknown'))
+                    if article.get('url'):
+                        st.markdown(f"[Open in browser →]({article.get('url')})")
+                
+                st.markdown("### Content")
+                if article.get('description'):
+                    st.markdown(article.get('description', ''))
+                if article.get('content'):
+                    st.markdown(article.get('content', ''))
+                
+                if article.get('urlToImage'):
+                    st.image(article.get('urlToImage'), use_column_width=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview"):
     today = date.today()
     lens_key = f"{panel_key}_lens"
@@ -5014,6 +5216,10 @@ app_bootstrap.run_app(
         "render_msk_anatomy_panel": render_msk_anatomy_panel,
         "render_personal_quick_capture": render_personal_quick_capture,
         "render_personal_one_thing": render_personal_one_thing,
+        "fetch_health_news": fetch_health_news,
+        "summarize_news_with_ai": summarize_news_with_ai,
+        "render_morning_digest_panel": render_morning_digest_panel,
+        "render_full_news_page": render_full_news_page,
     }
 )
 

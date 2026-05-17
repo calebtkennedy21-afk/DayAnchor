@@ -47,6 +47,10 @@ def run_app(context, st_module=st):
     render_personal_overview_panel = context.get("render_personal_overview_panel")
     render_personal_quick_capture = context["render_personal_quick_capture"]
     render_personal_one_thing = context["render_personal_one_thing"]
+    fetch_health_news = context.get("fetch_health_news")
+    summarize_news_with_ai = context.get("summarize_news_with_ai")
+    render_morning_digest_panel = context.get("render_morning_digest_panel")
+    render_full_news_page = context.get("render_full_news_page")
 
     initialize_database()
     app_settings = load_app_settings()
@@ -95,7 +99,7 @@ def run_app(context, st_module=st):
         st_module.markdown("### Navigation")
         current_page = st_module.radio(
             "Go to",
-            ["Overview", "Personal", "Clinic", "Cases", "Schedule", "Anatomy", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
+            ["Overview", "Personal", "Clinic", "Cases", "Schedule", "Anatomy", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
             label_visibility="collapsed",
         )
 
@@ -156,6 +160,31 @@ def run_app(context, st_module=st):
     tasks = load_tasks()
     surgical_cases = load_surgical_cases()
     protocol_documents = load_protocol_documents()
+    
+    # Fetch and cache news for the day
+    import os
+    news_api_key = os.getenv("NEWSAPI_KEY")
+    if "news_articles_cache" not in st_module.session_state:
+        if fetch_health_news:
+            st_module.session_state.news_articles_cache = fetch_health_news(news_api_key, max_articles=10)
+        else:
+            st_module.session_state.news_articles_cache = []
+    
+    news_articles = st_module.session_state.news_articles_cache
+    
+    # Summarize news with AI (cached in session)
+    if "news_summary_cache" not in st_module.session_state or "news_takeaways_cache" not in st_module.session_state:
+        if summarize_news_with_ai and news_articles and ai_enabled():
+            summary, takeaways = summarize_news_with_ai(news_articles, ai_model_name, ai_enabled)
+            st_module.session_state.news_summary_cache = summary
+            st_module.session_state.news_takeaways_cache = takeaways
+        else:
+            st_module.session_state.news_summary_cache = None
+            st_module.session_state.news_takeaways_cache = None
+    
+    news_summary = st_module.session_state.news_summary_cache
+    news_takeaways = st_module.session_state.news_takeaways_cache
+    
     query = (search_query or "").strip().lower()
     all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
     all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
@@ -193,8 +222,9 @@ def run_app(context, st_module=st):
         st_module.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
     if current_page == "Overview":
-        render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")
-        overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
+        render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")        if render_morning_digest_panel and news_articles:
+            render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)        overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -238,6 +268,12 @@ def run_app(context, st_module=st):
     elif current_page == "Anatomy":
         render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
         context["render_msk_anatomy_panel"](surgical_cases, protocol_documents, panel_key="anatomy_page")
+    elif current_page == "News":
+        render_page_banner("overview", "Morning News", "Health, fitness, and medical news curated for you.")
+        if render_full_news_page:
+            render_full_news_page(news_articles, news_summary, news_takeaways, panel_key="news_page")
+        else:
+            st_module.info("News rendering not available. Please ensure news functions are properly loaded.")
     elif current_page == "AI":
         render_page_banner("ai", "AI Workbench", "Planner, scheduler, and review in one place.")
         render_ai_panel(tasks, active_tasks, panel_key="ai_page")
