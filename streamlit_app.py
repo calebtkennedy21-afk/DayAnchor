@@ -3625,7 +3625,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
             key=f"{panel_key}_search",
         ).strip().lower()
     with filter_row[1]:
-        stream_filter = st.selectbox("Stream", ["All", "Main OR", "TenJet"], key=f"{panel_key}_stream_filter")
+        stream_filter = st.selectbox("Stream", ["All", "Main OR", "DSC OR", "TenJet"], key=f"{panel_key}_stream_filter")
     with filter_row[2]:
         status_filter = st.selectbox("Status", ["All", "planned", "completed", "canceled"], key=f"{panel_key}_status_filter")
     with filter_row[3]:
@@ -3680,7 +3680,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
     with top_left:
         with st.form(f"{panel_key}_new_case_form"):
             case_date = st.date_input("Case date", value=date.today())
-            case_stream = st.selectbox("Case stream", ["Main OR", "TenJet"])
+            case_stream = st.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"])
             or_facility = st.selectbox("OR facility", ["Mercy OR", "DSC OR"])
             procedure_name = st.text_input("Procedure performed")
             anatomical_location = st.text_input("Anatomical location")
