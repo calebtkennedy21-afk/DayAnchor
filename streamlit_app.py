@@ -12,7 +12,6 @@ from functools import partial
 
 from clinical_reference import (
     anatomy_structure_map as ref_anatomy_structure_map,
-    render_anatomy_related_widget as ref_render_anatomy_related_widget,
     render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
@@ -1154,6 +1153,9 @@ def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, proto
                     mime=doc.get("file_mime") or "application/octet-stream",
                     key=f"{panel_key}_anatomy_protocol_download_{doc_id}_{topic_name.lower()}",
                 )
+
+
+ref_render_anatomy_related_widget = render_anatomy_related_widget
 
 
 def weekday_index_to_name(index):
