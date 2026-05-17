@@ -1393,6 +1393,8 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, app_settings=N
         """
         <div style='display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin:0.2rem 0 0.8rem;'>
             <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dbeafe; display:inline-block;'></span>Scheduled</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,#fef3c7,#fde68a); border:1px solid #f59e0b; display:inline-block;'></span>Vacation / personal range</span>
+            <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:4px; background:linear-gradient(90deg,#ccfbf1,#99f6e4); border:1px solid #10b981; display:inline-block;'></span>Clinic multi-day</span>
             <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#fee2e2; display:inline-block;'></span>Due</span>
             <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#dcfce7; display:inline-block;'></span>Completed</span>
             <span style='display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem;'><span style='width:0.8rem; height:0.8rem; border-radius:999px; background:#d1fae5; display:inline-block;'></span>Clinic</span>
@@ -2255,10 +2257,24 @@ def render_span_block(task, day, label_text=None, compact=False):
     if not position:
         return ""
 
-    if task.get("category") == "Personal" and task.get("scheduled_end_date") and task.get("scheduled_end_date") != task.get("scheduled_date"):
-        bg = "linear-gradient(90deg, rgba(37,99,235,0.18), rgba(29,78,216,0.28))"
-        fg = "#1e3a8a"
-        border = "#2563eb"
+    is_vacation_span = (
+        task.get("scheduled_end_date")
+        and task.get("scheduled_end_date") != task.get("scheduled_date")
+        and task.get("category") == "Personal"
+    )
+    is_clinic_span = (
+        task.get("scheduled_end_date")
+        and task.get("scheduled_end_date") != task.get("scheduled_date")
+        and task.get("category") == "Clinic"
+    )
+    if is_vacation_span:
+        bg = "linear-gradient(90deg, #fef3c7, #fde68a)"
+        fg = "#92400e"
+        border = "#f59e0b"
+    elif is_clinic_span:
+        bg = "linear-gradient(90deg, #ccfbf1, #99f6e4)"
+        fg = "#065f46"
+        border = "#10b981"
     else:
         bg = "rgba(224, 231, 255, 0.92)"
         fg = "#3730a3"
@@ -2272,7 +2288,12 @@ def render_span_block(task, day, label_text=None, compact=False):
     }.get(position, "999px")
     min_height = "1.45rem" if compact else "1.65rem"
     text = label_text or task["title"]
-    if position != "start" and position != "single":
+    if position == "start" or position == "single":
+        if is_vacation_span:
+            text = f"\u2600\ufe0f {text}"
+        elif is_clinic_span:
+            text = f"\U0001f3e5 {text}"
+    else:
         text = ""
 
     return (
