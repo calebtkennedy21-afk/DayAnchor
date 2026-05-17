@@ -1105,16 +1105,6 @@ def build_anatomy_svg(region_name):
 </svg>"""
 
 
-def render_anatomy_figure(region_name, caption, panel_key):
-        svg_markup = build_anatomy_svg(region_name)
-        svg_data = quote(svg_markup)
-        st.markdown(
-                f'<div class="anatomy-figure"><img src="data:image/svg+xml;utf8,{svg_data}" alt="{caption}" style="width:100%;max-width:980px;border-radius:18px;border:1px solid rgba(148,163,184,0.25);background:#fff;" /></div>',
-                unsafe_allow_html=True,
-        )
-        st.caption(caption)
-
-
 def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, protocol_documents, panel_key):
     case_matches, protocol_matches = anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_documents, max_items=4)
     st.markdown(f"#### Related {topic_name} Cases & Protocols")
@@ -1391,6 +1381,144 @@ def save_app_settings(settings):
                         """,
                         (payload_text,),
                     )
+
+
+def render_anatomy_structure_spotlight(region_name, structures, panel_key):
+    st.markdown(f"#### Structure Spotlight: {region_name}")
+    structure_names = list(structures.keys())
+    choice = st.radio(
+        f"Choose a {region_name.lower()} structure",
+        structure_names,
+        horizontal=True,
+        key=f"{panel_key}_spotlight_choice",
+        label_visibility="collapsed",
+    )
+    info = structures[choice]
+    cols = st.columns([1.1, 0.9])
+    with cols[0]:
+        st.markdown(f"**{choice}**")
+        st.write(info["summary"])
+        st.markdown(
+            f"- **Function:** {info['function']}\n"
+            f"- **Exam focus:** {info['exam']}\n"
+            f"- **Imaging:** {info['imaging']}\n"
+            f"- **Procedure/landmark:** {info['procedure']}"
+        )
+    with cols[1]:
+        if info.get("pearls"):
+            st.markdown("**Pearls**")
+            for pearl in info["pearls"]:
+                st.markdown(f"- {pearl}")
+
+
+def anatomy_structure_map(region_name):
+    if region_name == "Foot":
+        return {
+            "Plantar fascia": {
+                "summary": "Primary longitudinal arch stabilizer and common pain generator at the medial calcaneal tubercle.",
+                "function": "Maintains arch tension through the windlass mechanism during toe-off.",
+                "exam": "Maximal tenderness is often just distal to the medial calcaneal origin.",
+                "imaging": "Ultrasound can show fascial thickening and perifascial edema; MRI can show edema or tearing.",
+                "procedure": "Relevant for plantar fascia release, injection planning, and heel pain workups.",
+                "pearls": ["Morning pain with first steps is classic.", "Dorsiflexion of the hallux tensions the fascia."],
+            },
+            "First ray and sesamoids": {
+                "summary": "The first metatarsal, sesamoids, and hallux complex drive efficient forefoot loading.",
+                "function": "Supports push-off and load transfer through the medial forefoot.",
+                "exam": "Pain at the sesamoids or first MTP suggests overload, sesamoiditis, or hallux pathology.",
+                "imaging": "Weight-bearing radiographs show alignment and sesamoid position; MRI helps with osteochondral and soft-tissue detail.",
+                "procedure": "Useful when planning bunion, hallux rigidus, or plantar forefoot procedures.",
+                "pearls": ["The first ray should be assessed in stance, not just supine.", "Sesamoid position matters for hallux mechanics."],
+            },
+            "Posterior tibial tendon": {
+                "summary": "Key medial arch support tendon running behind the medial malleolus to the navicular and midfoot.",
+                "function": "Inverts and plantarflexes the foot while supporting the medial arch.",
+                "exam": "Pain/swelling posterior to the medial malleolus or inability to single-leg heel raise are useful clues.",
+                "imaging": "MRI can show tendinosis, split tears, and associated spring ligament failure.",
+                "procedure": "Important for flatfoot reconstruction planning and medial column support procedures.",
+                "pearls": ["Tibialis posterior failure often changes the whole foot shape.", "Check both tendon and spring ligament together."],
+            },
+        }
+    if region_name == "Ankle":
+        return {
+            "ATFL": {
+                "summary": "The anterior talofibular ligament is the most commonly injured lateral ankle stabilizer.",
+                "function": "Resists anterior translation of the talus and contributes to inversion restraint.",
+                "exam": "Tenderness just anterior to the lateral malleolus is common after inversion injury.",
+                "imaging": "MRI shows fiber discontinuity, edema, and associated CFL or osteochondral injury.",
+                "procedure": "Key structure in ankle sprain grading and lateral ligament reconstruction planning.",
+                "pearls": ["ATFL injuries often occur first in inversion sprains.", "A positive anterior drawer can point to laxity."],
+            },
+            "Deltoid complex": {
+                "summary": "The medial ligament complex resists valgus tilt and external rotation of the talus.",
+                "function": "Stabilizes the medial mortise and supports talar containment.",
+                "exam": "Medial ankle pain or widening concerns increase after eversion or rotational trauma.",
+                "imaging": "Stress radiographs and MRI help identify deep deltoid disruption and mortise instability.",
+                "procedure": "Relevant in syndesmotic, fracture, and ankle instability workups.",
+                "pearls": ["Deep deltoid integrity matters for mortise stability.", "Medial pain can coexist with syndesmotic injury."],
+            },
+            "Syndesmosis": {
+                "summary": "The distal tibiofibular syndesmosis keeps the ankle mortise congruent under load.",
+                "function": "Maintains fibular spacing and rotational stability during gait.",
+                "exam": "Pain above the mortise, squeeze testing, and external rotation pain can be helpful clues.",
+                "imaging": "Weight-bearing and stress imaging assess widening; MRI can show ligament disruption.",
+                "procedure": "Critical in high ankle sprains and fixation decisions.",
+                "pearls": ["Syndesmotic injury often recovers slower than a simple sprain.", "Look for pain proximal to the joint line."],
+            },
+        }
+    if region_name == "Lower Leg":
+        return {
+            "Gastrocnemius": {
+                "summary": "The large superficial calf muscle with medial and lateral heads crossing both knee and ankle.",
+                "function": "Powerful plantarflexor and knee flexor during propulsion.",
+                "exam": "Tightness and focal tenderness are common with strain or cramping injury.",
+                "imaging": "Ultrasound can identify strain or hematoma; MRI maps tears and edema better.",
+                "procedure": "Relevant for calf strain care, recession planning, and Achilles-related surgery.",
+                "pearls": ["Crosses two joints, so position matters.", "Strains often occur near the musculotendinous junction."],
+            },
+            "Soleus/Achilles": {
+                "summary": "The soleus and Achilles complex are central to endurance plantarflexion and push-off.",
+                "function": "Soleus provides sustained plantarflexion; Achilles transmits force to the calcaneus.",
+                "exam": "Pain with single-leg heel raise or calf squeeze changes raises concern for tendon pathology.",
+                "imaging": "Ultrasound is fast for continuity; MRI is better for insertional and partial-thickness detail.",
+                "procedure": "Important for Achilles repair, debridement, and tendon transfer planning.",
+                "pearls": ["Insertional disease and midsubstance disease can look different clinically.", "Always check the contralateral side."],
+            },
+            "Posterior compartment": {
+                "summary": "Deep posterior structures include tibialis posterior, FDL, FHL, and the posterior tibial neurovascular bundle.",
+                "function": "Provides inversion, toe flexion, and deep supportive control of the arch and gait.",
+                "exam": "Deep compartment pain, weakness, or neurovascular symptoms should change the differential.",
+                "imaging": "MRI clarifies tendon course and muscle edema; ultrasound can help with tendons near the ankle.",
+                "procedure": "Relevant for compartment-focused surgery and tendon pathway orientation.",
+                "pearls": ["The posterior tibial artery and tibial nerve travel together.", "Deep posterior pathology can masquerade as Achilles pain."],
+            },
+        }
+    return {
+        "ACL": {
+            "summary": "Primary anterior translational and rotational stabilizer of the knee.",
+            "function": "Limits anterior tibial translation and helps control pivoting motion.",
+            "exam": "Lachman testing is one of the most useful bedside assessments.",
+            "imaging": "MRI is best for fiber continuity, marrow edema, and associated meniscus injury.",
+            "procedure": "Central to reconstruction planning and tunnel placement discussions.",
+            "pearls": ["A pivot shift suggests rotational instability.", "ACL and meniscus injuries often coexist."],
+        },
+        "Meniscus": {
+            "summary": "Fibrocartilaginous load-sharing structures between the femur and tibia.",
+            "function": "Absorb shock, improve congruence, and contribute to joint stability.",
+            "exam": "Joint-line tenderness and mechanical symptoms are common clues.",
+            "imaging": "MRI is the main tool for tear pattern and root/root-equivalent detail.",
+            "procedure": "Important for repair, meniscectomy, and root repair planning.",
+            "pearls": ["Medial tears are often less mobile and more symptomatic.", "Root tears can behave like near-total meniscectomy."],
+        },
+        "Patellofemoral joint": {
+            "summary": "The articulation between the patella and trochlea that drives anterior knee mechanics.",
+            "function": "Improves quadriceps leverage and extensor efficiency.",
+            "exam": "Pain with stairs, squatting, or prolonged sitting may point here.",
+            "imaging": "MRI and axial radiographs can show maltracking, chondral injury, and tilt.",
+            "procedure": "Relevant to alignment procedures, cartilage work, and portal planning.",
+            "pearls": ["Tracking is dynamic, so assess motion if you can.", "Alignment and soft tissue balance both matter."],
+        },
+    }
         except psycopg.Error:
             pass
 
@@ -2777,6 +2905,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     foot_tab, ankle_tab, lower_leg_tab, knee_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee"])
 
     with foot_tab:
+        render_anatomy_structure_spotlight("Foot", anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
         st.markdown("### Osteology and Surface Anatomy")
         st.markdown(
             "- Tarsals: talus, calcaneus, navicular, cuboid, and the three cuneiforms form the hindfoot/midfoot scaffold.\n"
@@ -2795,7 +2924,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Ultrasound is useful for plantar fascia, peroneal tendons, and focal soft-tissue pain.\n"
             "- Medial column procedures usually orient around the talonavicular, naviculocuneiform, and first TMT complexes."
         )
-        render_anatomy_figure("Foot", "Simplified foot schematic for tarsal, ray, and plantar orientation.", panel_key=f"{panel_key}_foot_figure")
         render_anatomy_related_widget(
             "Foot",
             ["foot", "plantar", "metatarsal", "hallux", "sesamoid", "fascia", "ray", "midfoot", "forefoot"],
@@ -2805,6 +2933,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with ankle_tab:
+        render_anatomy_structure_spotlight("Ankle", anatomy_structure_map("Ankle"), panel_key=f"{panel_key}_ankle_spotlight")
         st.markdown("### Articulation, Stability, and Motion")
         st.markdown(
             "- The talocrural joint is a true hinge: dorsiflexion closes the mortise, plantarflexion relaxes it.\n"
@@ -2823,7 +2952,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Weight-bearing radiographs and stress views are useful for mortise widening and talar tilt.\n"
             "- MRI highlights ligament continuity, osteochondral lesions, and peroneal tendon pathology."
         )
-        render_anatomy_figure("Ankle", "Simplified ankle mortise schematic with tibia, fibula, and talus relationships.", panel_key=f"{panel_key}_ankle_figure")
         render_anatomy_related_widget(
             "Ankle",
             ["ankle", "achilles", "peroneal", "atfl", "cfl", "deltoid", "syndesmosis", "talocrural", "subtalar"],
@@ -2833,6 +2961,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with lower_leg_tab:
+        render_anatomy_structure_spotlight("Lower Leg", anatomy_structure_map("Lower Leg"), panel_key=f"{panel_key}_lower_leg_spotlight")
         st.markdown("### Compartment Anatomy")
         st.markdown(
             "- Anterior compartment: tibialis anterior, extensor hallucis longus, extensor digitorum longus, and peroneus tertius.\n"
@@ -2851,7 +2980,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- Compartment anatomy matters for swelling, overuse syndromes, and postoperative incision planning.\n"
             "- Ultrasound can evaluate Achilles continuity and dynamic tendon motion; MRI is better for deeper compartment and insertional detail."
         )
-        render_anatomy_figure("Lower Leg", "Simplified lower-leg schematic emphasizing compartments, calf bulk, and Achilles continuity.", panel_key=f"{panel_key}_lower_leg_figure")
         render_anatomy_related_widget(
             "Lower Leg",
             ["calf", "lower leg", "gastrocnemius", "soleus", "achilles", "peroneal", "fibula", "tibia", "compartment"],
@@ -2861,6 +2989,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         )
 
     with knee_tab:
+        render_anatomy_structure_spotlight("Knee", anatomy_structure_map("Knee"), panel_key=f"{panel_key}_knee_spotlight")
         st.markdown("### Osseous and Articular Anatomy")
         st.markdown(
             "- Tibiofemoral articulation is a bicondylar hinge with roll-and-glide mechanics across flexion arcs.\n"
@@ -2879,7 +3008,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             "- X-ray alignment and MRI anatomy are most useful for meniscus, cruciate, cartilage, and extensor mechanism detail.\n"
             "- Surgical planning often references the anteromedial and anterolateral portals, tibial tubercle, and posteromedial corner."
         )
-        render_anatomy_figure("Knee", "Simplified knee schematic highlighting femur, patella, and tibiofemoral alignment.", panel_key=f"{panel_key}_knee_figure")
         render_anatomy_related_widget(
             "Knee",
             ["knee", "acl", "pcl", "meniscus", "mcl", "lcl", "patella", "patellar", "tibiofemoral", "patellofemoral"],
@@ -2932,8 +3060,8 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
                 st.success("Protocol uploaded.")
                 st.rerun()
 
-    if protocol_documents:
-        for doc in protocol_documents[:12]:
+    if filtered_protocols:
+        for doc in filtered_protocols[:12]:
             doc_id = doc.get("id")
             doc_bytes = doc.get("file_bytes")
             if isinstance(doc_bytes, memoryview):
@@ -2965,14 +3093,73 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
     st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
 
     metrics = st.columns(4)
-    planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
-    completed_cases = [item for item in surgical_cases if item.get("status") == "completed"]
-    tenjet_cases = [item for item in surgical_cases if item.get("case_stream") == "TenJet"]
-    main_or_cases = [item for item in surgical_cases if item.get("case_stream") == "Main OR"]
+    planned_cases = [item for item in filtered_cases if item.get("status") == "planned"]
+    completed_cases = [item for item in filtered_cases if item.get("status") == "completed"]
+    tenjet_cases = [item for item in filtered_cases if item.get("case_stream") == "TenJet"]
+    main_or_cases = [item for item in filtered_cases if item.get("case_stream") == "Main OR"]
     metrics[0].metric("Planned", len(planned_cases))
     metrics[1].metric("Completed", len(completed_cases))
     metrics[2].metric("Main OR", len(main_or_cases))
     metrics[3].metric("TenJet", len(tenjet_cases))
+
+    filter_row = st.columns([1.35, 0.85, 0.85, 0.9])
+    with filter_row[0]:
+        search_term = st.text_input(
+            "Search cases and protocols",
+            placeholder="Procedure, anatomy, note, or protocol title...",
+            key=f"{panel_key}_search",
+        ).strip().lower()
+    with filter_row[1]:
+        stream_filter = st.selectbox("Stream", ["All", "Main OR", "TenJet"], key=f"{panel_key}_stream_filter")
+    with filter_row[2]:
+        status_filter = st.selectbox("Status", ["All", "planned", "completed", "canceled"], key=f"{panel_key}_status_filter")
+    with filter_row[3]:
+        region_filter = st.selectbox("Region", ["All", "Foot", "Ankle", "Lower Leg", "Knee"], key=f"{panel_key}_region_filter")
+
+    region_tokens = {
+        "Foot": ["foot", "plantar", "metatarsal", "hallux", "midfoot", "forefoot", "tarsal"],
+        "Ankle": ["ankle", "achilles", "peroneal", "talocrural", "subtalar", "syndesmosis"],
+        "Lower Leg": ["calf", "lower leg", "gastrocnemius", "soleus", "tibia", "fibula"],
+        "Knee": ["knee", "acl", "pcl", "meniscus", "patella", "tibiofemoral"],
+    }
+
+    def matches_case_filters(item):
+        combined_text = " ".join(
+            [
+                str(item.get("procedure_name") or ""),
+                str(item.get("anatomical_location") or ""),
+                str(item.get("notes") or ""),
+                str(item.get("education_notes") or ""),
+            ]
+        ).lower()
+        if search_term and search_term not in combined_text:
+            return False
+        if stream_filter != "All" and item.get("case_stream") != stream_filter:
+            return False
+        if status_filter != "All" and item.get("status") != status_filter:
+            return False
+        if region_filter != "All" and not any(token in combined_text for token in region_tokens.get(region_filter, [])):
+            return False
+        return True
+
+    def matches_protocol_filters(doc):
+        combined_text = " ".join(
+            [
+                str(doc.get("protocol_name") or ""),
+                str(doc.get("file_name") or ""),
+                str(doc.get("notes") or ""),
+            ]
+        ).lower()
+        if search_term and search_term not in combined_text:
+            return False
+        if region_filter != "All" and not any(token in combined_text for token in region_tokens.get(region_filter, [])):
+            return False
+        return True
+
+    filtered_cases = [item for item in surgical_cases if matches_case_filters(item)]
+    filtered_protocols = [item for item in protocol_documents if matches_protocol_filters(item)]
+    if search_term or stream_filter != "All" or status_filter != "All" or region_filter != "All":
+        st.caption(f"Showing {len(filtered_cases)} case(s) and {len(filtered_protocols)} protocol(s) after filters.")
 
     top_left, top_right = st.columns([1.1, 0.9], gap="large")
     with top_left:
@@ -3041,8 +3228,8 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
 
     st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Recent Cases</h3><span>Track what was scheduled and what was done</span></div>', unsafe_allow_html=True)
-    if surgical_cases:
-        for item in surgical_cases[:20]:
+    if filtered_cases:
+        for item in filtered_cases[:20]:
             case_id = item.get("id")
             case_date_value = item.get("case_date")
             date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
@@ -3100,7 +3287,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
                     st.success("Case deleted.")
                     st.rerun()
     else:
-        st.markdown('<div class="empty-state">No surgical cases logged yet.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state">No surgical cases match the current filters.</div>' if surgical_cases else '<div class="empty-state">No surgical cases logged yet.</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
