@@ -20,9 +20,30 @@ from clinical_reference import (
 import ai_workflows
 import app_bootstrap
 import data_access
+from formatting_core import (
+    format_due,
+    format_due_badge,
+    format_recurrence_badge,
+    format_schedule,
+    format_schedule_badge,
+    recurrence_label,
+    status_label,
+)
 import page_renderers
 import page_sections
-import scheduling_core
+from scheduling_core import (
+    build_week_rebalance_moves,
+    clinic_visit_templates,
+    personal_schedule_templates,
+    priority_rank,
+    safe_int,
+    scheduled_date_range,
+    scheduled_minutes_on_day,
+    scheduled_span_position,
+    shift_date_by_rule,
+    task_attention_signal,
+    task_attention_sort_key,
+)
 
 try:
     from openai import OpenAI
@@ -351,29 +372,6 @@ def task_snapshot_for_ai(tasks, max_items=20):
             )
         )
     return "\n".join(lines)
-
-
-def status_label(status):
-    return {
-        "todo": "Todo",
-        "in_progress": "In Progress",
-        "blocked": "Blocked",
-        "completed": "Completed",
-    }.get(status, status.replace("_", " ").title())
-
-
-def recurrence_label(rule, interval):
-    if not rule:
-        return "No recurrence"
-    if rule == "daily":
-        return f"Every {interval} day(s)"
-    if rule == "weekly":
-        return f"Every {interval} week(s)"
-    return "No recurrence"
-
-
-def shift_date_by_rule(value, rule, interval):
-    return scheduling_core.shift_date_by_rule(value, rule, interval)
 
 
 def generate_ai_plan(tasks, user_prompt):
@@ -1798,89 +1796,6 @@ def render_page_banner(page_key, title, subtitle):
     )
 
 
-def priority_rank(priority):
-    return scheduling_core.priority_rank(priority)
-
-
-def task_attention_signal(task, reference_date=None):
-    return scheduling_core.task_attention_signal(task, reference_date)
-
-
-def task_attention_sort_key(task, reference_date=None):
-    return scheduling_core.task_attention_sort_key(task, reference_date)
-
-
-def format_due(task):
-    due_date = task.get("due_date")
-    if not due_date:
-        return "No due date"
-    return due_date.strftime("%b %d, %Y") if hasattr(due_date, "strftime") else str(due_date)
-
-
-def format_due_badge(task):
-    due_date = task.get("due_date")
-    if not due_date:
-        return "No due"
-    if not hasattr(due_date, "strftime"):
-        return str(due_date)
-    if due_date.year == date.today().year:
-        return due_date.strftime("%b %d")
-    return due_date.strftime("%b %d, %Y")
-
-
-def format_schedule(task):
-    scheduled_date = task.get("scheduled_date")
-    scheduled_time = task.get("scheduled_time")
-    scheduled_end_date = task.get("scheduled_end_date")
-    if not scheduled_date:
-        return "Unscheduled"
-    if scheduled_end_date and scheduled_end_date != scheduled_date:
-        if scheduled_time:
-            return f'{scheduled_date.strftime("%b %d")} - {scheduled_end_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
-        return f'{scheduled_date.strftime("%b %d")} - {scheduled_end_date.strftime("%b %d")}'
-    if not scheduled_time:
-        return scheduled_date.strftime("%b %d")
-    return f'{scheduled_date.strftime("%b %d")}, {scheduled_time.strftime("%I:%M %p").lstrip("0")}'
-
-
-def format_schedule_badge(task):
-    scheduled_date = task.get("scheduled_date")
-    scheduled_time = task.get("scheduled_time")
-    scheduled_end_date = task.get("scheduled_end_date")
-    if not scheduled_date:
-        return "Unscheduled"
-    if scheduled_end_date and scheduled_end_date != scheduled_date:
-        if scheduled_date.year == date.today().year and scheduled_end_date.year == date.today().year:
-            date_label = f"{scheduled_date.strftime('%b %d')} - {scheduled_end_date.strftime('%b %d')}"
-        else:
-            date_label = f"{scheduled_date.strftime('%b %d, %Y')} - {scheduled_end_date.strftime('%b %d, %Y')}"
-        if scheduled_time:
-            return f"{date_label}, {scheduled_time.strftime('%I:%M %p').lstrip('0')}"
-        return date_label
-    if scheduled_date.year == date.today().year:
-        date_label = scheduled_date.strftime("%b %d")
-    else:
-        date_label = scheduled_date.strftime("%b %d, %Y")
-    if not scheduled_time:
-        return date_label
-    return f"{date_label}, {scheduled_time.strftime('%I:%M %p').lstrip('0')}"
-
-
-def format_recurrence_badge(task):
-    label = recurrence_label(task.get("recurrence_rule"), task.get("recurrence_interval") or 1)
-    if label == "No recurrence":
-        return "No repeat"
-    return label
-
-
-def scheduled_date_range(task):
-    return scheduling_core.scheduled_date_range(task)
-
-
-def scheduled_span_position(task, day):
-    return scheduling_core.scheduled_span_position(task, day)
-
-
 def render_span_block(task, day, label_text=None, compact=False):
     position = scheduled_span_position(task, day)
     if not position:
@@ -2665,10 +2580,6 @@ def ai_workbench_summary(tasks, active_tasks):
     }
 
 
-def safe_int(value, fallback):
-    return scheduling_core.safe_int(value, fallback)
-
-
 def clinic_day_profiles(app_settings):
     patient_target = safe_int(app_settings.get("surgeon_clinic_patient_target", 25), 25)
     general_patient_target = safe_int(app_settings.get("general_clinic_patient_target", 25), 25)
@@ -2711,10 +2622,6 @@ def clinic_day_profiles(app_settings):
     }
 
 
-def clinic_visit_templates():
-    return scheduling_core.clinic_visit_templates()
-
-
 def apply_clinic_visit_template(form_key, template_key, st_module=st):
     templates = clinic_visit_templates()
     template = templates.get(template_key, templates["blank"])
@@ -2733,10 +2640,6 @@ def apply_clinic_visit_template(form_key, template_key, st_module=st):
 
 def apply_clinic_visit_template_from_state(form_key, template_state_key, st_module=st):
     apply_clinic_visit_template(form_key, st_module.session_state.get(template_state_key, "blank"), st_module=st_module)
-
-
-def personal_schedule_templates():
-    return scheduling_core.personal_schedule_templates()
 
 
 def apply_personal_schedule_template(form_key, template_key, st_module=st):
@@ -2834,14 +2737,6 @@ def schedule_workload_snapshot(active_tasks):
         "unscheduled_high": [task for task in unscheduled if task.get("priority") == "high"],
         "capacity_gap": len(unscheduled) - len(upcoming),
     }
-
-
-def scheduled_minutes_on_day(task, day):
-    return scheduling_core.scheduled_minutes_on_day(task, day)
-
-
-def build_week_rebalance_moves(upcoming_tasks, week_days, daily_capacity_minutes):
-    return scheduling_core.build_week_rebalance_moves(upcoming_tasks, week_days, daily_capacity_minutes)
 
 
 def overview_runtime_settings(app_settings):
