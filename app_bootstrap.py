@@ -146,6 +146,11 @@ def run_app(context, st_module=st):
         else:
             st_module.info("AI disabled. Set OPENAI_API_KEY to enable.")
 
+        st_module.markdown("---")
+        st_module.markdown("### My Apps")
+        st_module.link_button("📊 Signal Scanner", "https://tradingbot-production-ed44.up.railway.app/?auth=eyJlbWFpbCI6ImNhbGViLnQua2VubmVkeTIxQGdtYWlsLmNvbSIsImV4cCI6MTc3OTkzODAxNX0.2zIv6Ip3AFgaTsAHNWzYU9GhlKIGUq8f_B_gA-7nBKE", use_container_width=True)
+        st_module.link_button("💰 Budgeting Bot", "https://budgetingbot-production.up.railway.app/", use_container_width=True)
+
     st_module.markdown('<p class="section-lead">Navigate by lane and workflow area from the sidebar.</p>', unsafe_allow_html=True)
 
     tasks = load_tasks()
