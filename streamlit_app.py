@@ -68,14 +68,14 @@ DEFAULT_APP_SETTINGS = {
     "procedure_block_minutes": 30,
     "personal_focus_minutes": 90,
     "overview_day_mode": "Auto",
-    "overview_role_label": "Medical assistant",
-    "overview_site_label": "Outpatient hospital",
+    "overview_role_label": "Medical Assistant",
+    "overview_site_label": "Mercy Orthopedics",
     "overview_patient_target": 25,
     "overview_procedure_target": 8,
     "overview_admin_buffer_minutes": 60,
     "overview_shift_minutes": 480,
     "overview_focus_window_minutes": 90,
-    "overview_clinic_weekdays": ["Monday", "Tuesday", "Thursday"],
+    "overview_clinic_weekdays": ["Thursday", "Monday"],
     "overview_admin_weekdays": ["Wednesday"],
     "overview_procedure_friday_frequency_weeks": 2,
     "overview_procedure_friday_cycle_offset": 0,
@@ -661,6 +661,7 @@ def initialize_database():
                     )
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_url TEXT")
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_notes TEXT NOT NULL DEFAULT ''")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS or_facility TEXT NOT NULL DEFAULT 'Mercy OR'")
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS protocol_documents (
@@ -749,6 +750,7 @@ def add_surgical_case(
     case_stream,
     procedure_name,
     anatomical_location,
+    or_facility="Mercy OR",
     status="planned",
     notes="",
     education_url="",
@@ -757,6 +759,7 @@ def add_surgical_case(
     stream_value = case_stream.strip()
     procedure_value = procedure_name.strip()
     location_value = anatomical_location.strip()
+    facility_value = (or_facility or "Mercy OR").strip()
     notes_value = notes.strip()
     education_url_value = education_url.strip()
     education_notes_value = education_notes.strip()
@@ -773,18 +776,20 @@ def add_surgical_case(
                         case_stream,
                         procedure_name,
                         anatomical_location,
+                        or_facility,
                         status,
                         notes,
                         education_url,
                         education_notes,
                         created_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         case_date,
                         stream_value,
                         procedure_value,
                         location_value,
+                        facility_value,
                         status,
                         notes_value,
                         education_url_value,
@@ -802,6 +807,7 @@ def add_surgical_case(
             "case_stream": stream_value,
             "procedure_name": procedure_value,
             "anatomical_location": location_value,
+            "or_facility": facility_value,
             "status": status,
             "notes": notes_value,
             "education_url": education_url_value,
@@ -817,6 +823,7 @@ def update_surgical_case(case_id, **fields):
         "case_stream",
         "procedure_name",
         "anatomical_location",
+        "or_facility",
         "status",
         "notes",
         "education_url",
@@ -2622,14 +2629,14 @@ def schedule_workload_snapshot(active_tasks):
 def overview_runtime_settings(app_settings):
     return {
         "day_mode": app_settings.get("overview_day_mode", "Auto"),
-        "role_label": app_settings.get("overview_role_label", "Medical assistant"),
-        "site_label": app_settings.get("overview_site_label", "Outpatient hospital"),
+        "role_label": app_settings.get("overview_role_label", "Medical Assistant"),
+        "site_label": app_settings.get("overview_site_label", "Mercy Orthopedics"),
         "patient_target": safe_int(app_settings.get("overview_patient_target", 25), 25),
         "procedure_target": safe_int(app_settings.get("overview_procedure_target", 8), 8),
         "admin_buffer_minutes": safe_int(app_settings.get("overview_admin_buffer_minutes", 60), 60),
         "shift_minutes": safe_int(app_settings.get("overview_shift_minutes", 480), 480),
         "focus_window_minutes": safe_int(app_settings.get("overview_focus_window_minutes", 90), 90),
-        "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Monday", "Tuesday", "Thursday"]),
+        "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Thursday", "Monday"]),
         "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Wednesday"]),
         "procedure_friday_frequency_weeks": safe_int(app_settings.get("overview_procedure_friday_frequency_weeks", 2), 2),
         "procedure_friday_cycle_offset": safe_int(app_settings.get("overview_procedure_friday_cycle_offset", 0), 0),
@@ -2772,14 +2779,14 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
 
     updated = {
         "day_mode": day_mode,
-        "role_label": role_label.strip() or "Medical assistant",
-        "site_label": site_label.strip() or "Outpatient hospital",
+        "role_label": role_label.strip() or "Medical Assistant",
+        "site_label": site_label.strip() or "Mercy Orthopedics",
         "patient_target": int(patient_target),
         "procedure_target": int(procedure_target),
         "admin_buffer_minutes": int(admin_buffer),
         "shift_minutes": int(shift_minutes),
         "focus_window_minutes": int(focus_window_minutes),
-        "clinic_weekdays": clinic_weekdays or ["Monday", "Tuesday", "Thursday"],
+        "clinic_weekdays": clinic_weekdays or ["Thursday", "Monday"],
         "admin_weekdays": admin_weekdays or ["Wednesday"],
         "procedure_friday_frequency_weeks": int(procedure_frequency),
         "procedure_friday_cycle_offset": int(procedure_cycle_offset),
@@ -3560,6 +3567,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
         with st.form(f"{panel_key}_new_case_form"):
             case_date = st.date_input("Case date", value=date.today())
             case_stream = st.selectbox("Case stream", ["Main OR", "TenJet"])
+            or_facility = st.selectbox("OR facility", ["Mercy OR", "DSC OR"])
             procedure_name = st.text_input("Procedure performed")
             anatomical_location = st.text_input("Anatomical location")
             status = st.selectbox("Status", ["planned", "completed", "canceled"])
@@ -3577,6 +3585,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
                     case_stream=case_stream,
                     procedure_name=procedure_name,
                     anatomical_location=anatomical_location,
+                    or_facility=or_facility,
                     status=status,
                     notes=notes,
                     education_url=education_url,
@@ -3631,7 +3640,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
             hint_suffix = f" · {or_hint}" if or_hint else ""
             st.markdown(
                 f"<div class='task-card'><div class='task-title'>{item.get('procedure_name')}</div>"
-                f"<div class='task-meta'><span class='pill'>{date_label}{hint_suffix}</span><span class='pill pill-category'>{item.get('case_stream')}</span><span class='pill pill-status'>{str(item.get('status', 'planned')).title()}</span><span class='pill'>{item.get('anatomical_location') or 'Location not specified'}</span></div>"
+                f"<div class='task-meta'><span class='pill'>{date_label}{hint_suffix}</span><span class='pill pill-category'>{item.get('case_stream')}</span><span class='pill pill-status-in_progress'>{item.get('or_facility') or 'Mercy OR'}</span><span class='pill pill-status'>{str(item.get('status', 'planned')).title()}</span><span class='pill'>{item.get('anatomical_location') or 'Location not specified'}</span></div>"
                 f"<p style='margin-top:0.6rem;'>{item.get('notes') or ''}</p></div>",
                 unsafe_allow_html=True,
             )
