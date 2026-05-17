@@ -4522,7 +4522,7 @@ def resolve_overview_lens(active_tasks, personal_tasks, clinic_tasks, app_settin
 
 
 def fetch_health_news(news_api_key, max_articles=5):
-    """Fetch health and fitness related news from NewsAPI."""
+    """Fetch medical and clinical news from NewsAPI, with nutrition/wellness focus."""
     try:
         import requests
     except ImportError:
@@ -4532,32 +4532,32 @@ def fetch_health_news(news_api_key, max_articles=5):
         return []
     
     try:
-        # Fetch health & fitness news
-        health_url = "https://newsapi.org/v2/everything"
-        health_params = {
-            "q": "health fitness wellness exercise nutrition",
-            "sortBy": "publishedAt",
-            "language": "en",
-            "pageSize": max_articles,
-            "apiKey": news_api_key,
-        }
-        health_response = requests.get(health_url, params=health_params, timeout=5)
-        health_articles = health_response.json().get("articles", [])[:max_articles // 2]
-        
-        # Fetch medical & surgical news
+        # Fetch primary medical & surgical news
         medical_url = "https://newsapi.org/v2/everything"
         medical_params = {
-            "q": "medical surgery orthopedic healthcare treatment procedure",
+            "q": "medical surgery orthopedic healthcare treatment procedure clinical",
             "sortBy": "publishedAt",
             "language": "en",
             "pageSize": max_articles,
             "apiKey": news_api_key,
         }
         medical_response = requests.get(medical_url, params=medical_params, timeout=5)
-        medical_articles = medical_response.json().get("articles", [])[:max_articles // 2]
+        medical_articles = medical_response.json().get("articles", [])[:int(max_articles * 0.65)]
+        
+        # Fetch nutrition & health science news
+        nutrition_url = "https://newsapi.org/v2/everything"
+        nutrition_params = {
+            "q": "nutrition health science wellness diet research medical",
+            "sortBy": "publishedAt",
+            "language": "en",
+            "pageSize": max_articles,
+            "apiKey": news_api_key,
+        }
+        nutrition_response = requests.get(nutrition_url, params=nutrition_params, timeout=5)
+        nutrition_articles = nutrition_response.json().get("articles", [])[:int(max_articles * 0.35)]
         
         # Combine and deduplicate by title
-        all_articles = health_articles + medical_articles
+        all_articles = medical_articles + nutrition_articles
         seen_titles = set()
         unique_articles = []
         for article in all_articles:
