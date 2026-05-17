@@ -3159,7 +3159,7 @@ def apply_clinic_visit_template_from_state(form_key, template_state_key, st_modu
 def personal_schedule_templates():
     return {
         "blank": {
-            "label": "Blank personal capture",
+            "label": "Blank — custom block",
             "title": "",
             "description": "",
             "priority": "medium",
@@ -3212,6 +3212,24 @@ def personal_schedule_templates():
             "scheduled_minutes": 480,
             "all_day": True,
             "scheduled_end_offset_days": 4,
+        },
+        "clinic_shift": {
+            "label": "Clinic shift",
+            "title": "Clinic shift",
+            "description": "Scheduled clinic session or on-call block.",
+            "priority": "high",
+            "scheduled_time": time(7, 0),
+            "scheduled_minutes": 480,
+            "all_day": False,
+        },
+        "meeting": {
+            "label": "Meeting",
+            "title": "Meeting",
+            "description": "Team meeting, case conference, or scheduled call.",
+            "priority": "medium",
+            "scheduled_time": time(10, 0),
+            "scheduled_minutes": 60,
+            "all_day": False,
         },
     }
 
@@ -4279,13 +4297,13 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             st.caption(f"Top unscheduled high-priority task: {snapshot['unscheduled_high'][0]['title']}")
 
         st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Personal Scheduling</h3><span>Add events, dinners, travel, and vacation blocks</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Schedule Template</h3><span>Add events, dinners, travel, vacation, and clinic blocks to the calendar</span></div>', unsafe_allow_html=True)
         personal_template_key = f"{panel_key}_personal_template"
         if personal_template_key not in st.session_state:
             st.session_state[personal_template_key] = "blank"
         personal_templates = personal_schedule_templates()
         st.selectbox(
-            "Personal template",
+            "Template",
             list(personal_templates.keys()),
             key=personal_template_key,
             format_func=lambda key: personal_templates[key]["label"],
@@ -4297,6 +4315,11 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         with st.form(f"{panel_key}_personal_capture", clear_on_submit=True):
             personal_title = st.text_input("Title", key=f"{panel_key}_personal_capture_title")
             personal_description = st.text_area("Notes", height=90, key=f"{panel_key}_personal_capture_description")
+            block_category = st.selectbox(
+                "Category",
+                ["Personal", "Clinic"],
+                key=f"{panel_key}_personal_capture_category",
+            )
             personal_date = st.date_input("Start date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
             all_day_key = f"{panel_key}_personal_capture_all_day"
             multi_day_key = f"{panel_key}_personal_capture_multi_day"
@@ -4309,7 +4332,6 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 key=all_day_key,
                 disabled=is_vacation_template,
             )
-            multi_day_key = f"{panel_key}_personal_capture_multi_day"
             if multi_day_key not in st.session_state:
                 st.session_state[multi_day_key] = False
             personal_multi_day = st.checkbox(
@@ -4357,18 +4379,19 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 )
             else:
                 personal_end_date = personal_date
-            personal_submit = st.form_submit_button("Add personal block", type="primary")
+            submit_label = "Add vacation range" if is_vacation_template else "Add to schedule"
+            personal_submit = st.form_submit_button(submit_label, type="primary")
 
         if personal_submit:
             if not personal_title.strip():
-                st.warning("Add a title for the personal block.")
+                st.warning("Add a title for the block.")
             else:
                 scheduled_time = time(8, 0) if personal_all_day else personal_time
                 scheduled_minutes = 480 if personal_all_day else int(personal_minutes)
                 add_task(
                     personal_title.strip(),
                     personal_description.strip(),
-                    "Personal",
+                    block_category,
                     personal_priority,
                     personal_date,
                     scheduled_date=personal_date,
@@ -4378,22 +4401,23 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                     recurrence_rule=None,
                     recurrence_interval=1,
                 )
-                st.success(f"Added personal block for {personal_date}.")
+                st.success(f"Added {block_category} block: {personal_title.strip()} starting {personal_date.strftime('%b %d')}.")
                 st.rerun()
 
-        upcoming_personal = sorted(
-            [task for task in personal_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
+        all_scheduled = sorted(
+            [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
             key=lambda task: (task.get("scheduled_date") or date.max, task.get("scheduled_time") or time(23, 59)),
-        )[:5]
-        if upcoming_personal:
-            st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming personal blocks</h3><span>What is already on your calendar</span></div>', unsafe_allow_html=True)
-            for task in upcoming_personal:
+        )[:6]
+        if all_scheduled:
+            st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming scheduled blocks</h3><span>What is already on the calendar</span></div>', unsafe_allow_html=True)
+            for task in all_scheduled:
+                cat_badge = f"<span style='font-size:0.72rem;color:#888;'>[{task.get('category','—')}]</span>"
                 st.markdown(
-                    f"- <strong>{task['title']}</strong> · {task.get('scheduled_date')} · {format_schedule(task)} · {task.get('scheduled_minutes') or '-'} min",
+                    f"- <strong>{task['title']}</strong> {cat_badge} · {task.get('scheduled_date')} · {format_schedule(task)} · {task.get('scheduled_minutes') or '-'} min",
                     unsafe_allow_html=True,
                 )
         else:
-            st.markdown('<div class="empty-state">No personal blocks scheduled yet. Add dinners, trips, appointments, or vacation time here.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="empty-state">No scheduled blocks yet. Use the template above to add events, trips, appointments, or clinic blocks.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
