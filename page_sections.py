@@ -4,6 +4,45 @@ import calendar
 import streamlit as st
 
 
+def build_today_plan(active_tasks, scheduled_tasks, priority_rank_fn):
+    today = date.today()
+
+    def sort_key(task):
+        due_date = task.get("due_date") or date.max
+        scheduled_date = task.get("scheduled_date") or date.max
+        scheduled_time = task.get("scheduled_time") or time(23, 59)
+        priority = priority_rank_fn(task["priority"])
+        if task.get("due_date") and task["due_date"] <= today:
+            return (0, task["due_date"], priority, scheduled_time)
+        if task.get("scheduled_date") == today:
+            return (1, scheduled_time, priority, due_date)
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time")):
+            return (2, due_date, priority, scheduled_time)
+        return (3, due_date, priority, scheduled_date, scheduled_time)
+
+    ordered = []
+    seen_ids = set()
+    for task in sorted(active_tasks, key=sort_key):
+        task_id = task.get("id")
+        if task_id in seen_ids:
+            continue
+        seen_ids.add(task_id)
+        ordered.append(task)
+
+    scheduled_today = [task for task in scheduled_tasks if task.get("scheduled_date") == today]
+    unscheduled_high = [task for task in ordered if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]
+    urgent_due = [task for task in ordered if task.get("due_date") and task["due_date"] <= today]
+
+    return {
+        "ordered": ordered,
+        "primary": ordered[0] if ordered else None,
+        "scheduled_today": scheduled_today[:4],
+        "urgent_due": urgent_due[:4],
+        "unscheduled_high": unscheduled_high[:4],
+        "unscheduled_count": len([task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]),
+    }
+
+
 def render_overview_control_tower(
     tasks,
     active_tasks,
@@ -42,6 +81,11 @@ def render_overview_control_tower(
     site_display_label = overview_settings["site_label"].split("(", 1)[0].strip()
     if not site_display_label:
         site_display_label = overview_settings["site_label"]
+
+    today_plan = build_today_plan(active_tasks, scheduled_tasks, deps["priority_rank"])
+    focus_key = f"{panel_key}_focus_task_id"
+    pinned_focus = next((task for task in today_plan["ordered"] if task.get("id") == st_module.session_state.get(focus_key)), None)
+    focus_task = pinned_focus or today_plan["primary"]
 
     overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == date.today() else 1 if task.get("due_date") else 2, deps["priority_rank"](task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
     next_scheduled = scheduled_tasks[:4]
@@ -99,20 +143,59 @@ def render_overview_control_tower(
     lower_left, lower_right = st_module.columns(2, gap="large")
     with lower_left:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Schedule Runway</h3><span>What can still be placed cleanly</span></div>', unsafe_allow_html=True)
-        st_module.caption(f"{len(schedule_snapshot['unscheduled'])} unscheduled tasks, {len(schedule_snapshot['unscheduled_high'])} high-priority ones.")
+        st_module.markdown('<div class="panel-title"><h3>Today Plan</h3><span>One queue for execution</span></div>', unsafe_allow_html=True)
+        st_module.caption(f"{today_plan['unscheduled_count']} unscheduled tasks, {len(today_plan['unscheduled_high'])} high-priority ones, {len(today_plan['scheduled_today'])} scheduled today.")
+        if focus_task:
+            if focus_task in today_plan["urgent_due"]:
+                why_text = "Overdue or due today"
+            elif focus_task in today_plan["scheduled_today"]:
+                why_text = "Already on today's schedule"
+            else:
+                why_text = "High-priority work waiting for an open slot"
+            st_module.markdown(
+                f"<div class='empty-state' style='text-align:left;'><strong>Start here:</strong> {focus_task['title']}<br /><strong>Why now:</strong> {why_text}</div>",
+                unsafe_allow_html=True,
+            )
+            focus_controls = st_module.columns(2)
+            with focus_controls[0]:
+                if st_module.button("Pin focus task", key=f"{panel_key}_pin_focus"):
+                    st_module.session_state[focus_key] = focus_task.get("id")
+                    st_module.rerun()
+            with focus_controls[1]:
+                if st_module.button("Clear focus", key=f"{panel_key}_clear_focus"):
+                    st_module.session_state.pop(focus_key, None)
+                    st_module.rerun()
+        else:
+            st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
         st_module.markdown(
             f"<div class='empty-state' style='text-align:left;'><strong>Default buffer:</strong> {overview_settings['admin_buffer_minutes']} min<br /><strong>Focus window:</strong> {overview_settings['focus_window_minutes']} min<br /><strong>Recommended mode:</strong> {lens['label']}</div>",
             unsafe_allow_html=True,
         )
-        for task in next_scheduled:
+        if today_plan["ordered"]:
+            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Execution queue</h3><span>Ordered by urgency and priority</span></div>', unsafe_allow_html=True)
+            for task in today_plan["ordered"][:4]:
+                if task in today_plan["urgent_due"]:
+                    tag = "Overdue"
+                elif task in today_plan["scheduled_today"]:
+                    tag = "Today"
+                elif task in today_plan["unscheduled_high"]:
+                    tag = "High priority"
+                else:
+                    tag = "Queued"
+                st_module.markdown(
+                    f"- <strong>{task['title']}</strong> · {tag} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
+                    unsafe_allow_html=True,
+                )
+        if today_plan["scheduled_today"]:
+            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Scheduled blocks</h3><span>Protected time already on the calendar</span></div>', unsafe_allow_html=True)
+        for task in today_plan["scheduled_today"]:
             scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
             st_module.markdown(
                 f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
                 unsafe_allow_html=True,
             )
-        if not next_scheduled:
-            st_module.markdown('<div class="empty-state">No scheduled blocks yet. Use the Schedule page to place work into the week.</div>', unsafe_allow_html=True)
+        if not today_plan["scheduled_today"]:
+            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to protect a focus window.</div>', unsafe_allow_html=True)
         st_module.markdown('</div>', unsafe_allow_html=True)
 
     with lower_right:
