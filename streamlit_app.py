@@ -1691,6 +1691,31 @@ def inject_styles():
             filter: brightness(1.03);
         }
 
+        /* ── Main content buttons ── */
+        .stMainBlockContainer .stButton > button,
+        .stMain .stButton > button,
+        [data-testid="stAppViewBlockContainer"] .stButton > button {
+            background: linear-gradient(135deg, #0f766e, #1d4ed8);
+            color: #ffffff !important;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(15, 118, 110, 0.25);
+        }
+
+        .stMainBlockContainer .stButton > button:hover,
+        .stMain .stButton > button:hover,
+        [data-testid="stAppViewBlockContainer"] .stButton > button:hover {
+            filter: brightness(1.07);
+            box-shadow: 0 4px 16px rgba(15, 118, 110, 0.35);
+        }
+
+        .stMainBlockContainer .stButton > button:active,
+        .stMain .stButton > button:active,
+        [data-testid="stAppViewBlockContainer"] .stButton > button:active {
+            filter: brightness(0.97);
+        }
+
         .block-container {
             padding-top: 2rem;
             padding-bottom: 2rem;
