@@ -118,6 +118,14 @@ DEFAULT_APP_SETTINGS = {
     "overview_focus_window_minutes": 90,
     "overview_clinic_weekdays": ["Thursday", "Monday"],
     "overview_admin_weekdays": ["Tuesday"],
+    "calendar_weekday_assignments": {
+        "Monday": ["BB clinic"],
+        "Tuesday": ["Office day"],
+        "Wednesday": ["WFH personal catch-up"],
+        "Thursday": ["BB clinic"],
+        "Friday": ["Dr. Rozek TenJet"],
+    },
+    "calendar_date_overrides": {},
     "overview_procedure_friday_frequency_weeks": 2,
     "overview_procedure_friday_cycle_offset": 0,
     "or_fixed_weekday": "Friday",
@@ -1097,6 +1105,74 @@ def weekday_name_to_index(name):
     return mapping.get(name, 4)
 
 
+def default_calendar_weekday_assignments():
+    return {
+        "Monday": ["BB clinic"],
+        "Tuesday": ["Office day"],
+        "Wednesday": ["WFH personal catch-up"],
+        "Thursday": ["BB clinic"],
+        "Friday": ["Dr. Rozek TenJet"],
+    }
+
+
+def normalize_calendar_labels(value):
+    if isinstance(value, list):
+        labels = [str(item).strip() for item in value if str(item).strip()]
+    elif isinstance(value, str):
+        labels = [item.strip() for item in value.split(",") if item.strip()]
+    else:
+        labels = []
+
+    seen = set()
+    deduped = []
+    for label in labels:
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(label)
+    return deduped
+
+
+def normalize_calendar_weekday_assignments(raw_assignments):
+    defaults = default_calendar_weekday_assignments()
+    normalized = {}
+    for day, fallback_labels in defaults.items():
+        labels = []
+        if isinstance(raw_assignments, dict):
+            labels = normalize_calendar_labels(raw_assignments.get(day))
+        normalized[day] = labels or list(fallback_labels)
+    return normalized
+
+
+def normalize_calendar_date_overrides(raw_overrides):
+    if not isinstance(raw_overrides, dict):
+        return {}
+    normalized = {}
+    for raw_day, raw_labels in raw_overrides.items():
+        try:
+            parsed_day = date.fromisoformat(str(raw_day))
+        except ValueError:
+            continue
+        labels = normalize_calendar_labels(raw_labels)
+        if labels:
+            normalized[parsed_day.isoformat()] = labels
+    return dict(sorted(normalized.items()))
+
+
+def calendar_badge_palette(label):
+    lower_label = str(label).lower()
+    if "office" in lower_label or "paperwork" in lower_label:
+        return "rgba(12, 74, 110, 0.75)", "#bae6fd"
+    if "wfh" in lower_label or "home" in lower_label or "personal" in lower_label:
+        return "rgba(91, 33, 182, 0.75)", "#e9d5ff"
+    if "rozek" in lower_label or "tenjet" in lower_label:
+        return "rgba(124, 45, 18, 0.74)", "#fed7aa"
+    if "bb" in lower_label or "boyer" in lower_label or "clinic" in lower_label:
+        return "rgba(20, 83, 45, 0.75)", "#bbf7d0"
+    return "rgba(51, 65, 85, 0.8)", "#e2e8f0"
+
+
 def or_cadence_label_for_day(day, app_settings):
     fixed_weekday = weekday_name_to_index(app_settings.get("or_fixed_weekday", "Friday"))
     alternating_days = app_settings.get("or_alternating_days") or ["Monday", "Wednesday"]
@@ -1185,11 +1261,8 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
             completed_by_day[completed_day] = completed_by_day.get(completed_day, 0) + 1
 
     settings = app_settings or DEFAULT_APP_SETTINGS
-    weekday_indexes = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
-    clinic_weekdays = settings.get("overview_clinic_weekdays") or ["Thursday", "Monday"]
-    admin_weekdays = settings.get("overview_admin_weekdays") or ["Tuesday"]
-    clinic_weekday_indexes = {weekday_indexes[day] for day in clinic_weekdays if day in weekday_indexes}
-    admin_weekday_indexes = {weekday_indexes[day] for day in admin_weekdays if day in weekday_indexes}
+    weekday_assignments = normalize_calendar_weekday_assignments(settings.get("calendar_weekday_assignments"))
+    date_overrides = normalize_calendar_date_overrides(settings.get("calendar_date_overrides"))
     procedure_friday_frequency = max(1, int(settings.get("overview_procedure_friday_frequency_weeks", 2) or 2))
     procedure_friday_cycle_offset = int(settings.get("overview_procedure_friday_cycle_offset", 0) or 0)
 
@@ -1220,12 +1293,12 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
                 f"<span style='display:inline-block; font-weight:700; padding:0.1rem 0.4rem; border-radius:999px; background:{day_bg};'>{day.day}</span>"
             ]
             badges = []
-            if day.weekday() in clinic_weekday_indexes:
-                badges.append(("Clinic", "rgba(20, 83, 45, 0.75)", "#bbf7d0"))
-            if day.weekday() in admin_weekday_indexes:
-                badges.append(("Office day", "rgba(12, 74, 110, 0.75)", "#bae6fd"))
-            if day.weekday() == 2:
-                badges.append(("WFH personal catch-up", "rgba(91, 33, 182, 0.75)", "#e9d5ff"))
+            custom_labels = date_overrides.get(day.isoformat())
+            if custom_labels is None:
+                custom_labels = weekday_assignments.get(day.strftime("%A"), [])
+            for label in custom_labels:
+                bg, fg = calendar_badge_palette(label)
+                badges.append((label, bg, fg))
             or_label = or_cadence_label_for_day(day, settings)
             if or_label:
                 badges.append((or_label, "rgba(49, 46, 129, 0.75)", "#c7d2fe"))
@@ -5073,7 +5146,12 @@ generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
-render_task_calendar_panel = partial(page_renderers.render_task_calendar_panel, render_task_calendar_compact_fn=render_task_calendar_compact, st_module=st)
+render_task_calendar_panel = partial(
+    page_renderers.render_task_calendar_panel,
+    render_task_calendar_compact_fn=render_task_calendar_compact,
+    save_app_settings_fn=save_app_settings,
+    st_module=st,
+)
 
 page_shared_deps = {
     "overview_lens_options": overview_lens_options,
