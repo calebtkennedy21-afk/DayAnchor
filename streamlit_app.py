@@ -1,5 +1,6 @@
 import os
 import json
+import html
 import re
 import calendar
 import textwrap
@@ -2386,16 +2387,15 @@ def set_task_status(task_id, new_status):
 def render_task_card(task, key_prefix="task"):
     attention = task_attention_signal(task)
     st.markdown('<div class="task-card">', unsafe_allow_html=True)
-    st.markdown(f'<div class="task-title">{task["title"]}</div>', unsafe_allow_html=True)
-    if task.get("description"):
-        st.write(task["description"])
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     st.markdown(
         textwrap.dedent(
             f'''
+            <div class="task-title">{html.escape(str(task["title"]))}</div>
+            {f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""}
             <div class="task-meta">
                 <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
-                <span class="pill pill-category">{task["category"]}</span>
+                <span class="pill pill-category">{html.escape(str(task["category"]))}</span>
                 <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
                 {attention_pill}
                 <span class="pill">Due {format_due_badge(task)}</span>
