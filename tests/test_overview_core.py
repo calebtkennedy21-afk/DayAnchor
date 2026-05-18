@@ -124,7 +124,7 @@ def test_resolve_overview_day_context_auto_tuesday_admin_day():
         "procedure_target": 8,
         "shift_minutes": 480,
         "clinic_weekdays": ["Thursday", "Monday"],
-        "admin_weekdays": ["Tuesday", "Wednesday"],
+        "admin_weekdays": ["Tuesday"],
         "procedure_friday_frequency_weeks": 2,
         "procedure_friday_cycle_offset": 0,
     }
@@ -146,7 +146,7 @@ def test_resolve_overview_day_context_wednesday_wfh_mixed_day():
         "procedure_target": 8,
         "shift_minutes": 480,
         "clinic_weekdays": ["Thursday", "Monday"],
-        "admin_weekdays": ["Tuesday", "Wednesday"],
+        "admin_weekdays": ["Tuesday"],
         "procedure_friday_frequency_weeks": 2,
         "procedure_friday_cycle_offset": 0,
     }
