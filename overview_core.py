@@ -131,7 +131,7 @@ def overview_runtime_settings(app_settings):
         "shift_minutes": safe_int(app_settings.get("overview_shift_minutes", 480), 480),
         "focus_window_minutes": safe_int(app_settings.get("overview_focus_window_minutes", 90), 90),
         "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Thursday", "Monday"]),
-        "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Wednesday"]),
+        "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Tuesday", "Wednesday"]),
         "procedure_friday_frequency_weeks": safe_int(app_settings.get("overview_procedure_friday_frequency_weeks", 2), 2),
         "procedure_friday_cycle_offset": safe_int(app_settings.get("overview_procedure_friday_cycle_offset", 0), 0),
     }
@@ -141,8 +141,8 @@ def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks
     today = reference_date or date.today()
     mode = overview_settings.get("day_mode", "Auto")
     weekday_name = today.strftime("%A")
-    clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Monday", "Tuesday", "Thursday"]
-    admin_weekdays = overview_settings.get("admin_weekdays") or ["Wednesday"]
+    clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Monday", "Thursday"]
+    admin_weekdays = overview_settings.get("admin_weekdays") or ["Tuesday", "Wednesday"]
     cadence_weeks = max(1, safe_int(overview_settings.get("procedure_friday_frequency_weeks", 2), 2))
     cycle_offset = safe_int(overview_settings.get("procedure_friday_cycle_offset", 0), 0)
     week_number = today.isocalendar().week
@@ -152,6 +152,9 @@ def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks
     if today.weekday() == 4 and ((week_number + cycle_offset) % cadence_weeks == 0):
         auto_mode = "Procedure Friday"
         reason_text = f"Friday matches the {cadence_weeks}-week procedure cadence."
+    elif weekday_name == "Wednesday":
+        auto_mode = "Mixed day"
+        reason_text = "Wednesday is a work-from-home catch-up day, so the board balances personal and clinic work."
     elif weekday_name in admin_weekdays:
         auto_mode = "Admin catch-up"
         reason_text = f"{weekday_name} is marked as an admin catch-up day in your settings."

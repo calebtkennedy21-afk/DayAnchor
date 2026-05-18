@@ -117,14 +117,36 @@ def test_overview_runtime_settings_defaults_and_casts():
     assert runtime["day_mode"] == "Auto"
 
 
-def test_resolve_overview_day_context_auto_admin_day():
+def test_resolve_overview_day_context_auto_tuesday_admin_day():
     overview_settings = {
         "day_mode": "Auto",
         "patient_target": 25,
         "procedure_target": 8,
         "shift_minutes": 480,
         "clinic_weekdays": ["Thursday", "Monday"],
-        "admin_weekdays": ["Wednesday"],
+        "admin_weekdays": ["Tuesday", "Wednesday"],
+        "procedure_friday_frequency_weeks": 2,
+        "procedure_friday_cycle_offset": 0,
+    }
+    context = resolve_overview_day_context(
+        overview_settings,
+        active_tasks=[],
+        personal_tasks=[],
+        clinic_tasks=[],
+        reference_date=date(2026, 5, 19),
+    )
+    assert context["mode"] == "Admin catch-up"
+    assert context["target_label"] == "admin blocks"
+
+
+def test_resolve_overview_day_context_wednesday_wfh_mixed_day():
+    overview_settings = {
+        "day_mode": "Auto",
+        "patient_target": 25,
+        "procedure_target": 8,
+        "shift_minutes": 480,
+        "clinic_weekdays": ["Thursday", "Monday"],
+        "admin_weekdays": ["Tuesday", "Wednesday"],
         "procedure_friday_frequency_weeks": 2,
         "procedure_friday_cycle_offset": 0,
     }
@@ -135,8 +157,8 @@ def test_resolve_overview_day_context_auto_admin_day():
         clinic_tasks=[],
         reference_date=date(2026, 5, 20),
     )
-    assert context["mode"] == "Admin catch-up"
-    assert context["target_label"] == "admin blocks"
+    assert context["mode"] == "Mixed day"
+    assert "work-from-home" in context["reason_text"]
 
 
 def test_resolve_overview_day_context_manual_override():

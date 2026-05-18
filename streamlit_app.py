@@ -117,7 +117,7 @@ DEFAULT_APP_SETTINGS = {
     "overview_shift_minutes": 480,
     "overview_focus_window_minutes": 90,
     "overview_clinic_weekdays": ["Thursday", "Monday"],
-    "overview_admin_weekdays": ["Wednesday"],
+    "overview_admin_weekdays": ["Tuesday", "Wednesday"],
     "overview_procedure_friday_frequency_weeks": 2,
     "overview_procedure_friday_cycle_offset": 0,
     "or_fixed_weekday": "Friday",
@@ -1187,7 +1187,9 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
     settings = app_settings or DEFAULT_APP_SETTINGS
     weekday_indexes = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
     clinic_weekdays = settings.get("overview_clinic_weekdays") or ["Thursday", "Monday"]
+    admin_weekdays = settings.get("overview_admin_weekdays") or ["Tuesday", "Wednesday"]
     clinic_weekday_indexes = {weekday_indexes[day] for day in clinic_weekdays if day in weekday_indexes}
+    admin_weekday_indexes = {weekday_indexes[day] for day in admin_weekdays if day in weekday_indexes}
     procedure_friday_frequency = max(1, int(settings.get("overview_procedure_friday_frequency_weeks", 2) or 2))
     procedure_friday_cycle_offset = int(settings.get("overview_procedure_friday_cycle_offset", 0) or 0)
 
@@ -1220,6 +1222,10 @@ def render_task_calendar_compact(tasks, month_anchor, app_settings=None):
             badges = []
             if day.weekday() in clinic_weekday_indexes:
                 badges.append(("Clinic", "rgba(20, 83, 45, 0.75)", "#bbf7d0"))
+            if day.weekday() in admin_weekday_indexes:
+                badges.append(("Office day", "rgba(12, 74, 110, 0.75)", "#bae6fd"))
+            if day.weekday() == 2:
+                badges.append(("WFH personal catch-up", "rgba(91, 33, 182, 0.75)", "#e9d5ff"))
             or_label = or_cadence_label_for_day(day, settings)
             if or_label:
                 badges.append((or_label, "rgba(49, 46, 129, 0.75)", "#c7d2fe"))
@@ -2668,7 +2674,7 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
         clinic_weekdays = st.multiselect(
             "Clinic weekdays",
             ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-            default=current["clinic_weekdays"] if isinstance(current.get("clinic_weekdays"), list) else ["Monday", "Tuesday", "Thursday"],
+            default=current["clinic_weekdays"] if isinstance(current.get("clinic_weekdays"), list) else ["Monday", "Thursday"],
             key=f"{panel_key}_clinic_weekdays",
         )
 
@@ -2679,7 +2685,7 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
         admin_weekdays = st.multiselect(
             "Admin weekdays",
             ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-            default=current["admin_weekdays"] if isinstance(current.get("admin_weekdays"), list) else ["Wednesday"],
+            default=current["admin_weekdays"] if isinstance(current.get("admin_weekdays"), list) else ["Tuesday", "Wednesday"],
             key=f"{panel_key}_admin_weekdays",
         )
         procedure_frequency = st.selectbox(
@@ -2707,7 +2713,7 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
         "shift_minutes": int(shift_minutes),
         "focus_window_minutes": int(focus_window_minutes),
         "clinic_weekdays": clinic_weekdays or ["Thursday", "Monday"],
-        "admin_weekdays": admin_weekdays or ["Wednesday"],
+        "admin_weekdays": admin_weekdays or ["Tuesday", "Wednesday"],
         "procedure_friday_frequency_weeks": int(procedure_frequency),
         "procedure_friday_cycle_offset": int(procedure_cycle_offset),
     }
