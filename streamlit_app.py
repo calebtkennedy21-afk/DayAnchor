@@ -2,6 +2,7 @@ import os
 import json
 import re
 import calendar
+import textwrap
 from datetime import date, time, timedelta
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -2390,15 +2391,19 @@ def render_task_card(task, key_prefix="task"):
         st.write(task["description"])
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     st.markdown(
-        f'''<div class="task-meta">
-            <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
-            <span class="pill pill-category">{task["category"]}</span>
-            <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
-            {attention_pill}
-            <span class="pill">Due {format_due_badge(task)}</span>
-            <span class="pill">At {format_schedule_badge(task)}</span>
-            <span class="pill">Repeat {format_recurrence_badge(task)}</span>
-        </div>''',
+        textwrap.dedent(
+            f'''
+            <div class="task-meta">
+                <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
+                <span class="pill pill-category">{task["category"]}</span>
+                <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
+                {attention_pill}
+                <span class="pill">Due {format_due_badge(task)}</span>
+                <span class="pill">At {format_schedule_badge(task)}</span>
+                <span class="pill">Repeat {format_recurrence_badge(task)}</span>
+            </div>
+            '''
+        ),
         unsafe_allow_html=True,
     )
     cols = st.columns(3)
