@@ -103,13 +103,10 @@ def render_overview_control_tower(
             unsafe_allow_html=True,
         )
         if overview_focus:
-            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Next actions</h3><span>What should move first</span></div>', unsafe_allow_html=True)
-            for task in overview_focus:
-                attention = deps["task_attention_signal"](task, date.today())
-                st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {attention['label']} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
-                    unsafe_allow_html=True,
-                )
+            st_module.markdown(
+                f"<div class='empty-state' style='text-align:left;'><strong>Top action pressure:</strong> {len(overview_focus)} tasks in the immediate queue.<br /><strong>Highest signal:</strong> {overview_focus[0]['title']}</div>",
+                unsafe_allow_html=True,
+            )
         else:
             st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
         st_module.markdown('</div>', unsafe_allow_html=True)
@@ -188,10 +185,10 @@ def render_overview_control_tower(
 
     with lower_right:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Capture</h3><span>Use one shared entry point</span></div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Action Shortcuts</h3><span>Fast context before deciding the next move</span></div>', unsafe_allow_html=True)
         default_lane = "Clinic" if lens_choice in ("Clinic day", "Procedure Friday") else "Personal"
         st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>Quick capture moved to the sidebar.</strong><br />Open <strong>Quick capture</strong> to add tasks from any page.<br /><strong>Suggested lane right now:</strong> {default_lane}</div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>Suggested lane:</strong> {default_lane}<br /><strong>Overdue right now:</strong> {len(overdue_tasks_today)}<br /><strong>Unscheduled high priority:</strong> {len(unscheduled_high)}<br />Use <strong>Quick capture</strong> in the sidebar to add a task instantly.</div>",
             unsafe_allow_html=True,
         )
         st_module.markdown('</div>', unsafe_allow_html=True)

@@ -305,14 +305,18 @@ def run_app(context, st_module=st):
 
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-            render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
-            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-            render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
-            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-            render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
-            if render_morning_digest_panel and news_articles:
+            context_tab, calendar_tab, news_tab = st_module.tabs(["Context", "Calendar", "News"])
+            with context_tab:
+                render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
                 st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-                render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
+                render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
+            with calendar_tab:
+                render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
+            with news_tab:
+                if render_morning_digest_panel and news_articles:
+                    render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
+                else:
+                    st_module.info("No news digest is available right now.")
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_one_thing(personal_tasks, "personal_one_thing")
