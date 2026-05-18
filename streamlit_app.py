@@ -1847,15 +1847,15 @@ def render_span_block(task, day, label_text=None, compact=False):
         and task.get("category") == "Clinic"
     )
     if is_vacation_span:
-        bg = "linear-gradient(90deg, rgba(120, 53, 15, 0.7), rgba(146, 64, 14, 0.68))"
+        bg = "linear-gradient(90deg, rgba(120, 53, 15, 0.8), rgba(146, 64, 14, 0.78))"
         fg = "#fde68a"
         border = "#f59e0b"
     elif is_clinic_span:
-        bg = "linear-gradient(90deg, rgba(15, 118, 110, 0.66), rgba(13, 148, 136, 0.64))"
+        bg = "linear-gradient(90deg, rgba(15, 118, 110, 0.76), rgba(13, 148, 136, 0.74))"
         fg = "#ccfbf1"
         border = "#10b981"
     else:
-        bg = "rgba(30, 41, 59, 0.88)"
+        bg = "rgba(30, 41, 59, 0.92)"
         fg = "#bfdbfe"
         border = "#60a5fa"
 
@@ -2386,26 +2386,22 @@ def set_task_status(task_id, new_status):
 
 def render_task_card(task, key_prefix="task"):
     attention = task_attention_signal(task)
-    st.markdown('<div class="task-card">', unsafe_allow_html=True)
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
-    st.markdown(
-        textwrap.dedent(
-            f'''
-            <div class="task-title">{html.escape(str(task["title"]))}</div>
-            {f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""}
-            <div class="task-meta">
-                <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
-                <span class="pill pill-category">{html.escape(str(task["category"]))}</span>
-                <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
-                {attention_pill}
-                <span class="pill">Due {format_due_badge(task)}</span>
-                <span class="pill">At {format_schedule_badge(task)}</span>
-                <span class="pill">Repeat {format_recurrence_badge(task)}</span>
-            </div>
-            '''
-        ),
-        unsafe_allow_html=True,
-    )
+    desc_html = f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""
+    card_html = f'''<div class="task-card">
+        <div class="task-title">{html.escape(str(task["title"]))}</div>
+        {desc_html}
+        <div class="task-meta">
+            <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
+            <span class="pill pill-category">{html.escape(str(task["category"]))}</span>
+            <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
+            {attention_pill}
+            <span class="pill">Due {format_due_badge(task)}</span>
+            <span class="pill">At {format_schedule_badge(task)}</span>
+            <span class="pill">Repeat {format_recurrence_badge(task)}</span>
+        </div>
+    </div>'''
+    st.markdown(card_html, unsafe_allow_html=True)
     cols = st.columns(3)
     with cols[0]:
         if task["status"] != "completed" and st.button("Mark complete", key=f"{key_prefix}_complete_{task['id']}"):
@@ -2548,7 +2544,6 @@ def render_task_card(task, key_prefix="task"):
             )
             st.success("Task updated.")
             st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_text):
@@ -4819,6 +4814,11 @@ def render_add_task_panel(form_key, defaults, default_category=None):
                 disabled=not schedule_enabled,
                 key=f"{form_key}_scheduled_minutes",
             )
+        multi_day_enabled = st.checkbox("Multi-day span (e.g., vacation)", value=False, disabled=not schedule_enabled, key=f"{form_key}_multi_day_enabled")
+        if multi_day_enabled and schedule_enabled:
+            scheduled_end_date = st.date_input("End date", value=scheduled_date, disabled=False, key=f"{form_key}_scheduled_end_date")
+        else:
+            scheduled_end_date = None
         recurrence_cols = st.columns(2)
         with recurrence_cols[0]:
             recurrence_rule = st.selectbox(
@@ -4850,6 +4850,7 @@ def render_add_task_panel(form_key, defaults, default_category=None):
                 priority,
                 due_date,
                 scheduled_date=scheduled_date if schedule_enabled else None,
+                scheduled_end_date=scheduled_end_date if schedule_enabled and multi_day_enabled else None,
                 scheduled_time=scheduled_time if schedule_enabled else None,
                 scheduled_minutes=scheduled_minutes if schedule_enabled else None,
                 recurrence_rule=None if recurrence_rule == "none" else recurrence_rule,
