@@ -91,12 +91,32 @@ def render_overview_control_tower(
 
     due_today_count = len(due_today_tasks)
     scheduled_today_count = len(today_plan["scheduled_today"])
-    due_and_scheduled_today_count = len([task for task in due_today_tasks if task.get("scheduled_date") == today])
+    due_and_scheduled_today_tasks = [task for task in due_today_tasks if task.get("scheduled_date") == today]
+    due_and_scheduled_today_count = len(due_and_scheduled_today_tasks)
     counts_cols = st_module.columns(3)
     counts_cols[0].metric("Due Today", due_today_count)
     counts_cols[1].metric("Scheduled Today", scheduled_today_count)
     counts_cols[2].metric("Due + Scheduled Today", due_and_scheduled_today_count)
     st_module.caption("Use this strip to quickly separate what is time-blocked today from what is simply due.")
+
+    list_cols = st_module.columns(3)
+    list_sections = [
+        ("Due Today", due_today_tasks),
+        ("Scheduled Today", today_plan["scheduled_today"]),
+        ("Due + Scheduled", due_and_scheduled_today_tasks),
+    ]
+    for col, (label, items) in zip(list_cols, list_sections):
+        with col:
+            st_module.markdown(f"**{label} tasks**")
+            if items:
+                for task in items[:4]:
+                    st_module.markdown(
+                        f"- {task['title']} ({task['priority'].title()})"
+                    )
+                if len(items) > 4:
+                    st_module.caption(f"+ {len(items) - 4} more")
+            else:
+                st_module.caption("None")
 
     top_left, top_right = st_module.columns([1.25, 0.85], gap="large")
     with top_left:
