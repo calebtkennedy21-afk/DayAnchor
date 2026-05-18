@@ -154,6 +154,15 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_ca
     if save_app_settings_fn and isinstance(app_settings, dict):
         with st_module.expander("Edit calendar assignments", expanded=False):
             st_module.caption("Set recurring weekday assignments and optional date-specific overrides when the week changes.")
+            reset_flag_key = f"{panel_key}_reset_calendar_editor_pending"
+            override_text_key = f"{panel_key}_date_overrides_text"
+            if st_module.session_state.pop(reset_flag_key, False):
+                defaults = _default_calendar_weekday_assignments()
+                for day in WEEKDAY_ASSIGNMENT_DAYS:
+                    day_key = f"{panel_key}_assignment_{day.lower()}"
+                    st_module.session_state[day_key] = ", ".join(defaults[day])
+                st_module.session_state[override_text_key] = ""
+
             current_assignments = _normalize_weekday_assignments(app_settings.get("calendar_weekday_assignments"))
             assignment_cols = st_module.columns(5)
             for index, day in enumerate(WEEKDAY_ASSIGNMENT_DAYS):
@@ -164,7 +173,6 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_ca
                     st_module.text_input(day, key=day_key, help="Comma-separated labels")
 
             current_overrides = _normalize_date_overrides(app_settings.get("calendar_date_overrides"))
-            override_text_key = f"{panel_key}_date_overrides_text"
             if override_text_key not in st_module.session_state:
                 st_module.session_state[override_text_key] = _format_date_overrides_text(current_overrides)
             st_module.text_area(
@@ -199,11 +207,7 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_ca
                         st_module.rerun()
             with reset_col:
                 if st_module.button("Reset editor", key=f"{panel_key}_reset_calendar_editor"):
-                    defaults = _default_calendar_weekday_assignments()
-                    for day in WEEKDAY_ASSIGNMENT_DAYS:
-                        day_key = f"{panel_key}_assignment_{day.lower()}"
-                        st_module.session_state[day_key] = ", ".join(defaults[day])
-                    st_module.session_state[override_text_key] = ""
+                    st_module.session_state[reset_flag_key] = True
                     st_module.rerun()
 
     render_task_calendar_compact_fn(tasks, st_module.session_state[month_key], app_settings)
