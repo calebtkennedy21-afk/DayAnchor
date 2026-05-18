@@ -4,7 +4,7 @@ import html
 import re
 import calendar
 import textwrap
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import psycopg
@@ -648,13 +648,24 @@ def initialize_database():
                             scheduled_minutes INTEGER,
                             recurrence_rule TEXT,
                             recurrence_interval INTEGER,
-                            completed_date DATE
+                            completed_date DATE,
+                            completed_at TIMESTAMP
                         )
                         """
                     )
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_rule TEXT")
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER")
                     cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_end_date DATE")
+                    cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP")
+                    cur.execute(
+                        """
+                        UPDATE tasks
+                        SET completed_at = completed_date::timestamp
+                        WHERE status = 'completed'
+                          AND completed_at IS NULL
+                          AND completed_date IS NOT NULL
+                        """
+                    )
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS app_settings (
@@ -733,9 +744,25 @@ def initialize_database():
     DB_ERROR = " | ".join(errors)
 
 
+def _task_visible_in_app(task, reference_time=None):
+    if task.get("status") != "completed":
+        return True
+
+    now = reference_time or datetime.utcnow()
+    completed_at = task.get("completed_at")
+    if isinstance(completed_at, datetime):
+        return now - completed_at <= timedelta(hours=24)
+
+    completed_date = task.get("completed_date")
+    if isinstance(completed_date, date):
+        return now - datetime.combine(completed_date, time.min) <= timedelta(hours=24)
+
+    return True
+
+
 def load_tasks():
     if not db_enabled():
-        return st.session_state.tasks
+        return [task for task in st.session_state.tasks if _task_visible_in_app(task)]
     try:
         with get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -756,14 +783,18 @@ def load_tasks():
                         scheduled_minutes,
                         recurrence_rule,
                         recurrence_interval,
-                        completed_date
+                        completed_date,
+                        completed_at
                     FROM tasks
+                    WHERE status <> 'completed'
+                       OR completed_at IS NULL
+                       OR completed_at >= NOW() - INTERVAL '24 hours'
                     ORDER BY created_date DESC, id DESC
                     """
                 )
                 return cur.fetchall()
     except psycopg.Error:
-        return st.session_state.tasks
+        return [task for task in st.session_state.tasks if _task_visible_in_app(task)]
 
 
 def load_surgical_cases():
@@ -1995,8 +2026,9 @@ def add_task(
                         scheduled_minutes,
                         recurrence_rule,
                         recurrence_interval,
-                        completed_date
-                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        completed_date,
+                        completed_at
+                    ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         title.strip(),
@@ -2011,6 +2043,7 @@ def add_task(
                         scheduled_minutes,
                         recurrence_rule,
                         max(1, int(recurrence_interval or 1)),
+                        None,
                         None,
                     ),
                 )
@@ -2033,6 +2066,7 @@ def add_task(
             "recurrence_rule": recurrence_rule,
             "recurrence_interval": max(1, int(recurrence_interval or 1)),
             "completed_date": None,
+            "completed_at": None,
         }
     )
 
@@ -2052,6 +2086,7 @@ def update_task(task_id, **fields):
         "recurrence_rule",
         "recurrence_interval",
         "completed_date",
+        "completed_at",
     }
     sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
     if not sanitized:
@@ -2407,7 +2442,8 @@ def get_task_by_id(task_id):
                         scheduled_minutes,
                         recurrence_rule,
                         recurrence_interval,
-                        completed_date
+                        completed_date,
+                        completed_at
                     FROM tasks
                     WHERE id = %s
                     """,
@@ -2429,7 +2465,7 @@ def complete_task(task_id):
     if task.get("status") == "completed":
         return
 
-    update_task(task_id, status="completed", completed_date=date.today())
+    update_task(task_id, status="completed", completed_date=date.today(), completed_at=datetime.utcnow())
 
     recurrence_rule = task.get("recurrence_rule")
     recurrence_interval = max(1, int(task.get("recurrence_interval") or 1))
@@ -2460,7 +2496,7 @@ def set_task_status(task_id, new_status):
     if new_status == "completed":
         complete_task(task_id)
     else:
-        update_task(task_id, status=new_status, completed_date=None)
+        update_task(task_id, status=new_status, completed_date=None, completed_at=None)
 
 
 def render_task_card(task, key_prefix="task"):

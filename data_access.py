@@ -1,13 +1,29 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 import psycopg
 from psycopg.rows import dict_row
 import streamlit as st
 
 
+def _task_visible_in_app(task, reference_time=None):
+    if task.get("status") != "completed":
+        return True
+
+    now = reference_time or datetime.utcnow()
+    completed_at = task.get("completed_at")
+    if isinstance(completed_at, datetime):
+        return now - completed_at <= timedelta(hours=24)
+
+    completed_date = task.get("completed_date")
+    if isinstance(completed_date, date):
+        return now - datetime.combine(completed_date, time.min) <= timedelta(hours=24)
+
+    return True
+
+
 def load_tasks(db_enabled_fn, get_connection_fn, st_module=st):
     if not db_enabled_fn():
-        return st_module.session_state.tasks
+        return [task for task in st_module.session_state.tasks if _task_visible_in_app(task)]
     try:
         with get_connection_fn() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -27,14 +43,18 @@ def load_tasks(db_enabled_fn, get_connection_fn, st_module=st):
                         scheduled_minutes,
                         recurrence_rule,
                         recurrence_interval,
-                        completed_date
+                        completed_date,
+                        completed_at
                     FROM tasks
+                    WHERE status <> 'completed'
+                       OR completed_at IS NULL
+                       OR completed_at >= NOW() - INTERVAL '24 hours'
                     ORDER BY created_date DESC, id DESC
                     """
                 )
                 return cur.fetchall()
     except psycopg.Error:
-        return st_module.session_state.tasks
+        return [task for task in st_module.session_state.tasks if _task_visible_in_app(task)]
 
 
 def load_surgical_cases(db_enabled_fn, get_connection_fn, st_module=st):
