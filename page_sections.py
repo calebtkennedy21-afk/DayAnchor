@@ -191,6 +191,17 @@ def render_overview_control_tower(
             f"<div class='empty-state' style='text-align:left;'><strong>Suggested lane:</strong> {default_lane}<br /><strong>Overdue right now:</strong> {len(overdue_tasks_today)}<br /><strong>Unscheduled high priority:</strong> {len(unscheduled_high)}<br />Use <strong>Quick capture</strong> in the sidebar to add a task instantly.</div>",
             unsafe_allow_html=True,
         )
+        with st_module.form(f"{panel_key}_overview_quick_add", clear_on_submit=True):
+            quick_title = st_module.text_input("Quick add from overview", placeholder="Enter task title")
+            quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
+            quick_submit = st_module.form_submit_button("Add task", type="primary")
+        if quick_submit:
+            if not quick_title.strip():
+                st_module.warning("Add a task title first.")
+            else:
+                deps["add_task"](quick_title.strip(), "", default_lane, quick_priority, date.today())
+                st_module.success("Quick task added from overview.")
+                st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
 
