@@ -74,7 +74,8 @@ def render_overview_control_tower(
 
     today_plan = build_today_plan(active_tasks, scheduled_tasks, deps["task_attention_sort_key"])
     focus_key = f"{panel_key}_focus_task_id"
-    pinned_focus = next((task for task in today_plan["ordered"] if task.get("id") == st_module.session_state.get(focus_key)), None)
+    pinned_focus_id = st_module.session_state.get(focus_key)
+    pinned_focus = next((task for task in today_plan["ordered"] if task.get("id") == pinned_focus_id), None)
     focus_task = pinned_focus or today_plan["primary"]
 
     overview_focus = sorted(active_tasks, key=lambda task: deps["task_attention_sort_key"](task, date.today()))[:4]
@@ -137,23 +138,25 @@ def render_overview_control_tower(
         st_module.markdown('<div class="panel-title"><h3>Today Plan</h3><span>One queue for execution</span></div>', unsafe_allow_html=True)
         st_module.caption(f"{today_plan['unscheduled_count']} unscheduled tasks, {len(today_plan['unscheduled_high'])} high-priority ones, {len(today_plan['scheduled_today'])} scheduled today.")
         if focus_task:
+            is_focus_pinned = pinned_focus_id == focus_task.get("id")
             if focus_task in today_plan["urgent_due"]:
                 why_text = "Overdue or due today"
             elif focus_task in today_plan["scheduled_today"]:
                 why_text = "Already on today's schedule"
             else:
                 why_text = "High-priority work waiting for an open slot"
+            pin_text = "Pinned for today" if is_focus_pinned else "Not pinned"
             st_module.markdown(
-                f"<div class='empty-state' style='text-align:left;'><strong>Start here:</strong> {focus_task['title']}<br /><strong>Why now:</strong> {why_text}</div>",
+                f"<div class='empty-state' style='text-align:left;'><strong>Start here:</strong> {focus_task['title']}<br /><strong>Why now:</strong> {why_text}<br /><strong>Focus status:</strong> {pin_text}</div>",
                 unsafe_allow_html=True,
             )
             focus_controls = st_module.columns(2)
             with focus_controls[0]:
-                if st_module.button("Pin focus task", key=f"{panel_key}_pin_focus"):
+                if st_module.button("Pin focus task", key=f"{panel_key}_pin_focus", disabled=is_focus_pinned):
                     st_module.session_state[focus_key] = focus_task.get("id")
                     st_module.rerun()
             with focus_controls[1]:
-                if st_module.button("Clear focus", key=f"{panel_key}_clear_focus"):
+                if st_module.button("Clear focus", key=f"{panel_key}_clear_focus", disabled=not bool(pinned_focus_id)):
                     st_module.session_state.pop(focus_key, None)
                     st_module.rerun()
         else:
