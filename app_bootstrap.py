@@ -211,6 +211,15 @@ def run_app(context, st_module=st):
     completed_tasks = [task for task in filtered_tasks if task["status"] == "completed"]
     personal_tasks = sorted([task for task in active_tasks if task["category"] == "Personal"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
     clinic_tasks = sorted([task for task in active_tasks if task["category"] == "Clinic"], key=lambda task: (priority_rank(task["priority"]), task["due_date"] or date.max))
+    clinic_tasks_all = sorted(
+        [task for task in filtered_tasks if task["category"] == "Clinic"],
+        key=lambda task: (
+            0 if task.get("status") != "completed" else 1,
+            priority_rank(task["priority"]),
+            task.get("due_date") or date.max,
+            task.get("completed_date") or date.max,
+        ),
+    )
     due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
     overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
     scheduled_tasks = sorted(
@@ -259,6 +268,14 @@ def run_app(context, st_module=st):
         render_add_task_panel("clinic_add_task", app_settings, default_category="Clinic")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_task_list_panel(
+            "Clinic Tasks",
+            "All clinic-related tasks, including completed work",
+            clinic_tasks_all,
+            "clinic_task",
+            "No clinic tasks match the current filters.",
+        )
     elif current_page == "Cases":
         render_page_banner("clinic", "Surgical Cases", "Non-PHI case tracking with protocol support and OR cadence.")
         render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases_page")
