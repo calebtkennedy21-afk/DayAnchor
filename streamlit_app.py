@@ -3339,6 +3339,14 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     for day_tasks in scheduled_by_day.values():
         day_tasks.sort(key=lambda task: (task.get("scheduled_time") or time(23, 59), priority_rank(task["priority"]), task["title"]))
 
+    due_by_day = {day: [] for day in week_days}
+    for task in active_tasks:
+        due_day = task.get("due_date")
+        if due_day in due_by_day:
+            due_by_day[due_day].append(task)
+    for day_tasks in due_by_day.values():
+        day_tasks.sort(key=lambda task: (priority_rank(task["priority"]), task.get("scheduled_time") or time(23, 59), task.get("title") or ""))
+
     week_planned_minutes = sum(scheduled_minutes_by_day.values())
     overloaded_days = [day for day in week_days if scheduled_minutes_by_day[day] > daily_capacity_minutes]
     remaining_week_capacity = weekly_capacity_minutes - week_planned_minutes
@@ -3441,7 +3449,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     for index, day in enumerate(week_days):
         with planner_cols[index]:
             st.markdown(
-                f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} item(s)</span><span class='pill'>{scheduled_minutes_by_day[day]} / {daily_capacity_minutes} min</span></div>",
+                f"<div class='task-card' style='min-height: 14rem;'><div class='task-title'>{day.strftime('%a')}</div><div class='task-meta'><span class='pill'>{day.strftime('%b %d')}</span><span class='pill'>{len(scheduled_by_day[day])} scheduled</span><span class='pill'>{len(due_by_day[day])} due</span><span class='pill'>{scheduled_minutes_by_day[day]} / {daily_capacity_minutes} min</span></div>",
                 unsafe_allow_html=True,
             )
             if scheduled_by_day[day]:
@@ -3452,8 +3460,31 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                     st.markdown(render_span_block(task, day, label_text=span_label, compact=True), unsafe_allow_html=True)
                 if len(scheduled_by_day[day]) > 3:
                     st.caption(f"+ {len(scheduled_by_day[day]) - 3} more")
+                with st.expander(f"View all scheduled ({len(scheduled_by_day[day])})", expanded=False):
+                    for task in scheduled_by_day[day]:
+                        scheduled_time = task.get("scheduled_time")
+                        time_label = scheduled_time.strftime("%I:%M %p").lstrip("0") if scheduled_time else "Any time"
+                        minutes_label = f"{task.get('scheduled_minutes') or '-'} min"
+                        st.markdown(
+                            f"- **{task['title']}** · {task['priority'].title()} · {status_label(task.get('status', 'todo'))} · {time_label} · {minutes_label}",
+                            unsafe_allow_html=True,
+                        )
             else:
                 st.caption("No blocks yet.")
+
+            if due_by_day[day]:
+                with st.expander(f"View all due ({len(due_by_day[day])})", expanded=False):
+                    for task in due_by_day[day]:
+                        if task.get("scheduled_date") == day:
+                            schedule_note = "scheduled today"
+                        elif task.get("scheduled_date"):
+                            schedule_note = f"scheduled {task['scheduled_date']}"
+                        else:
+                            schedule_note = "not scheduled"
+                        st.markdown(
+                            f"- **{task['title']}** · {task['category']} · {task['priority'].title()} · {status_label(task.get('status', 'todo'))} · {schedule_note}",
+                            unsafe_allow_html=True,
+                        )
             st.markdown('</div>', unsafe_allow_html=True)
 
     if ranked_tasks:
