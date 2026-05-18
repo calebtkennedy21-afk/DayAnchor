@@ -2388,20 +2388,8 @@ def render_task_card(task, key_prefix="task"):
     attention = task_attention_signal(task)
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     desc_html = f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""
-    card_html = f'''<div class="task-card">
-        <div class="task-title">{html.escape(str(task["title"]))}</div>
-        {desc_html}
-        <div class="task-meta">
-            <span class="pill pill-priority-{task["priority"]}">Priority: {task["priority"].title()}</span>
-            <span class="pill pill-category">{html.escape(str(task["category"]))}</span>
-            <span class="pill pill-status pill-status-{task["status"]}">{status_label(task["status"])}</span>
-            {attention_pill}
-            <span class="pill">Due {format_due_badge(task)}</span>
-            <span class="pill">At {format_schedule_badge(task)}</span>
-            <span class="pill">Repeat {format_recurrence_badge(task)}</span>
-        </div>
-    </div>'''
-    st.markdown(card_html, unsafe_allow_html=True)
+    card_html = f"<div class=\"task-card\"><div class=\"task-title\">{html.escape(str(task['title']))}</div>{desc_html}<div class=\"task-meta\"><span class=\"pill pill-priority-{task['priority']}\">Priority: {task['priority'].title()}</span><span class=\"pill pill-category\">{html.escape(str(task['category']))}</span><span class=\"pill pill-status pill-status-{task['status']}\">{status_label(task['status'])}</span>{attention_pill}<span class=\"pill\">Due {format_due_badge(task)}</span><span class=\"pill\">At {format_schedule_badge(task)}</span><span class=\"pill\">Repeat {format_recurrence_badge(task)}</span></div></div>"
+    st.html(card_html)
     cols = st.columns(3)
     with cols[0]:
         if task["status"] != "completed" and st.button("Mark complete", key=f"{key_prefix}_complete_{task['id']}"):
