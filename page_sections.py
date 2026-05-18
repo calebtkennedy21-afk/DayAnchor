@@ -89,6 +89,15 @@ def render_overview_control_tower(
     metric_cols[2].metric("Overdue", len(overdue_tasks_today))
     metric_cols[3].metric("Scheduled", len(scheduled_tasks))
 
+    due_today_count = len(due_today_tasks)
+    scheduled_today_count = len(today_plan["scheduled_today"])
+    due_and_scheduled_today_count = len([task for task in due_today_tasks if task.get("scheduled_date") == today])
+    counts_cols = st_module.columns(3)
+    counts_cols[0].metric("Due Today", due_today_count)
+    counts_cols[1].metric("Scheduled Today", scheduled_today_count)
+    counts_cols[2].metric("Due + Scheduled Today", due_and_scheduled_today_count)
+    st_module.caption("Use this strip to quickly separate what is time-blocked today from what is simply due.")
+
     top_left, top_right = st_module.columns([1.25, 0.85], gap="large")
     with top_left:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
