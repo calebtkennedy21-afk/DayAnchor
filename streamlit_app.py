@@ -2762,7 +2762,6 @@ def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, pane
             chosen = next((task for task in summary["focus_tasks"] if task["title"] == selected_focus), None)
             if chosen:
                 set_task_status(chosen["id"], "in_progress")
-                st.session_state[focus_key] = chosen["title"]
                 st.success(f"Pulled '{chosen['title']}' into in-progress for a {sprint_minutes}-minute sprint.")
                 st.rerun()
 
