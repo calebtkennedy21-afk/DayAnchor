@@ -4596,32 +4596,59 @@ def fetch_health_news(news_api_key, max_articles=5):
         return []
     
     try:
+        now_utc = datetime.utcnow()
+        window_start = now_utc - timedelta(hours=36)
+        from_iso = window_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        to_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        request_headers = {
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
+        page_size = max(max_articles * 2, 20)
+
         # Fetch primary medical & surgical news
         medical_url = "https://newsapi.org/v2/everything"
         medical_params = {
             "q": "medical surgery orthopedic healthcare treatment procedure clinical",
             "sortBy": "publishedAt",
+            "searchIn": "title,description",
             "language": "en",
-            "pageSize": max_articles,
+            "from": from_iso,
+            "to": to_iso,
+            "pageSize": page_size,
             "apiKey": news_api_key,
         }
-        medical_response = requests.get(medical_url, params=medical_params, timeout=5)
-        medical_articles = medical_response.json().get("articles", [])[:int(max_articles * 0.65)]
+        medical_response = requests.get(medical_url, params=medical_params, headers=request_headers, timeout=8)
+        medical_articles = medical_response.json().get("articles", [])[: max(1, int(max_articles * 0.65))]
         
         # Fetch nutrition & health science news
         nutrition_url = "https://newsapi.org/v2/everything"
         nutrition_params = {
             "q": "nutrition health science wellness diet research medical",
             "sortBy": "publishedAt",
+            "searchIn": "title,description",
             "language": "en",
-            "pageSize": max_articles,
+            "from": from_iso,
+            "to": to_iso,
+            "pageSize": page_size,
             "apiKey": news_api_key,
         }
-        nutrition_response = requests.get(nutrition_url, params=nutrition_params, timeout=5)
-        nutrition_articles = nutrition_response.json().get("articles", [])[:int(max_articles * 0.35)]
+        nutrition_response = requests.get(nutrition_url, params=nutrition_params, headers=request_headers, timeout=8)
+        nutrition_articles = nutrition_response.json().get("articles", [])[: max(1, int(max_articles * 0.35))]
+
+        # Fetch top health headlines as a freshness fallback.
+        headlines_url = "https://newsapi.org/v2/top-headlines"
+        headlines_params = {
+            "category": "health",
+            "language": "en",
+            "pageSize": page_size,
+            "apiKey": news_api_key,
+        }
+        headlines_response = requests.get(headlines_url, params=headlines_params, headers=request_headers, timeout=8)
+        headline_articles = headlines_response.json().get("articles", [])[: max(1, int(max_articles * 0.35))]
         
         # Combine and deduplicate by title
-        all_articles = medical_articles + nutrition_articles
+        all_articles = medical_articles + nutrition_articles + headline_articles
         seen_titles = set()
         unique_articles = []
         for article in all_articles:
@@ -4629,6 +4656,16 @@ def fetch_health_news(news_api_key, max_articles=5):
             if title not in seen_titles:
                 seen_titles.add(title)
                 unique_articles.append(article)
+
+        # Keep the most recent entries first in case APIs return mixed ordering.
+        def published_key(item):
+            raw = (item.get("publishedAt") or "").replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                return datetime.min
+
+        unique_articles.sort(key=published_key, reverse=True)
         
         return unique_articles[:max_articles]
     except Exception as e:
