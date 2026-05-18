@@ -5279,7 +5279,7 @@ if current_page == "Overview":
         render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_task_calendar_panel(filtered_tasks, "overview_tasks_calendar", "Overview Calendar", "Month view for due, scheduled, and completed tasks")
+    render_task_calendar_panel(tasks, "overview_tasks_calendar", "Overview Calendar", "Month view for due, scheduled, and completed tasks")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_overview_tuning_panel(app_settings, panel_key="overview_page")
@@ -5321,7 +5321,7 @@ elif current_page == "Schedule":
     render_timeline_panel(scheduled_tasks, timeline_days)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_task_calendar_panel(filtered_tasks, "schedule_tasks_calendar", "Schedule Calendar", "Month view for workload timing and follow-through", app_settings=app_settings)
+    render_task_calendar_panel(tasks, "schedule_tasks_calendar", "Schedule Calendar", "Month view for workload timing and follow-through", app_settings=app_settings)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     unscheduled_tasks = [task for task in active_tasks if not (task.get("scheduled_date") and task.get("scheduled_time"))]
