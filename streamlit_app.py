@@ -5320,6 +5320,7 @@ app_bootstrap.run_app(
         "status_label": status_label,
         "render_page_banner": render_page_banner,
         "overview_runtime_settings": overview_runtime_settings,
+        "add_task": add_task,
         "render_overview_control_tower": render_overview_control_tower,
         "render_add_task_panel": render_add_task_panel,
         "render_personal_focus_panel": render_personal_focus_panel,
@@ -5381,51 +5382,70 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Navigation")
-    current_page = st.radio(
-        "Go to",
-        ["Overview", "Personal", "Clinic", "Cases", "Schedule", "Anatomy", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
-        label_visibility="collapsed",
-    )
+    core_pages = ["Overview", "Personal", "Clinic", "Schedule"]
+    secondary_pages = ["Cases", "Anatomy", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
+    page_label_map = {f"Core - {page}": page for page in core_pages}
+    page_label_map.update({f"More - {page}": page for page in secondary_pages})
+    nav_labels = list(page_label_map.keys())
+    current_nav_label = st.radio("Go to", nav_labels, label_visibility="collapsed")
+    current_page = page_label_map[current_nav_label]
 
     st.markdown("---")
-    st.markdown("### Data Controls")
-    health_state, health_message = db_health_status()
-    detected_names = configured_database_env_names()
-    if detected_names:
-        st.caption(f"Detected DB vars: {', '.join(detected_names)}")
-    else:
-        st.caption("Detected DB vars: none")
-        st.caption("Tip: ensure the web app service has DATABASE_URL or DATABASE_PUBLIC_URL set in Railway.")
-    if health_state == "ok":
-        st.success(f"DB Health: {health_message}")
-    elif health_state == "error":
-        st.warning(f"DB Health: {health_message}")
-    else:
-        st.info(f"DB Health: {health_message}")
-
-    if st.button("Seed Sample Tasks", use_container_width=True):
-        seed_sample_tasks()
-        st.success("Sample tasks added.")
-        st.rerun()
+    with st.expander("Quick capture", expanded=False):
+        with st.form("sidebar_quick_capture", clear_on_submit=True):
+            quick_title = st.text_input("Task title", placeholder="What needs to get done?")
+            quick_category = st.selectbox("Category", ["Personal", "Clinic"])
+            quick_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+            quick_due = st.date_input("Due date", value=date.today())
+            quick_submit = st.form_submit_button("Add task", type="primary")
+        if quick_submit:
+            if not quick_title.strip():
+                st.warning("Add a task title first.")
+            else:
+                add_task(quick_title.strip(), "", quick_category, quick_priority, quick_due)
+                st.success("Quick task added.")
+                st.rerun()
 
     st.markdown("---")
-    st.markdown("### View Controls")
+    with st.expander("Data health", expanded=False):
+        health_state, health_message = db_health_status()
+        detected_names = configured_database_env_names()
+        if detected_names:
+            st.caption(f"Detected DB vars: {', '.join(detected_names)}")
+        else:
+            st.caption("Detected DB vars: none")
+            st.caption("Tip: ensure the web app service has DATABASE_URL or DATABASE_PUBLIC_URL set in Railway.")
+        if health_state == "ok":
+            st.success(f"DB Health: {health_message}")
+        elif health_state == "error":
+            st.warning(f"DB Health: {health_message}")
+        else:
+            st.info(f"DB Health: {health_message}")
+
+        if st.button("Seed Sample Tasks", use_container_width=True):
+            seed_sample_tasks()
+            st.success("Sample tasks added.")
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### View")
     search_query = st.text_input("Search tasks", placeholder="Title or description")
-    category_filter = st.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
-    priority_filter = st.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
-    status_filter = st.multiselect(
-        "Status",
-        ["todo", "in_progress", "blocked", "completed"],
-        default=["todo", "in_progress", "blocked", "completed"],
-        format_func=status_label,
-    )
-    scheduled_only = st.checkbox("Scheduled tasks only", value=False)
-    timeline_days = st.slider(
-        "Timeline window (days)",
-        min_value=3,
-        max_value=21,
-        value=int(app_settings.get("timeline_days", 7)),
-    )
+    with st.expander("Advanced filters", expanded=False):
+        category_filter = st.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
+        priority_filter = st.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
+        status_filter = st.multiselect(
+            "Status",
+            ["todo", "in_progress", "blocked", "completed"],
+            default=["todo", "in_progress", "blocked", "completed"],
+            format_func=status_label,
+        )
+        scheduled_only = st.checkbox("Scheduled tasks only", value=False)
+        timeline_days = st.slider(
+            "Timeline window (days)",
+            min_value=3,
+            max_value=21,
+            value=int(app_settings.get("timeline_days", 7)),
+        )
 
     st.markdown("---")
     st.markdown("### AI")
@@ -5485,17 +5505,14 @@ if current_page == "Overview":
     render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    cols = st.columns(2, gap="large")
-    with cols[0]:
-        render_add_task_panel("add_task_form_overview", app_settings)
-    with cols[1]:
-        render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.")
+    render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_task_calendar_panel(tasks, "overview_tasks_calendar", "Overview Calendar", "Month view for due, scheduled, and completed tasks")
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_overview_tuning_panel(app_settings, panel_key="overview_page")
+    with st.expander("Today's setup", expanded=False):
+        render_overview_tuning_panel(app_settings, panel_key="overview_page")
 
 elif current_page == "Personal":
     render_page_banner("personal", "Personal Lane", "Private tasks, self-management, and low-friction planning.")
@@ -5503,11 +5520,7 @@ elif current_page == "Personal":
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="personal_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    left, right = st.columns([1, 1.2], gap="large")
-    with left:
-        render_add_task_panel("add_task_form_personal", app_settings, default_category="Personal")
-    with right:
-        render_task_list_panel("Personal Tasks", "Your personal workflow", personal_tasks, "personal_page", "No personal tasks match your filters.")
+    render_task_list_panel("Personal Tasks", "Your personal workflow", personal_tasks, "personal_page", "No personal tasks match your filters.")
 
 elif current_page == "Clinic":
     render_page_banner("clinic", "Clinic Lane", "Operational work, patient-facing tasks, and service flow.")
@@ -5515,11 +5528,7 @@ elif current_page == "Clinic":
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    left, right = st.columns([1, 1.2], gap="large")
-    with left:
-        render_add_task_panel("add_task_form_clinic", app_settings, default_category="Clinic")
-    with right:
-        render_task_list_panel("Clinic Tasks", "Operational and patient-facing work", clinic_tasks, "clinic_page", "No clinic tasks match your filters.")
+    render_task_list_panel("Clinic Tasks", "Operational and patient-facing work", clinic_tasks, "clinic_page", "No clinic tasks match your filters.")
 
 elif current_page == "Cases":
     render_page_banner("clinic", "Surgical Cases", "Track surgery and TenJet case scheduling without PHI.")

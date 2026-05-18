@@ -99,12 +99,17 @@ def _parse_date_overrides_text(text):
     return dict(sorted(overrides.items())), None
 
 
-def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_text, render_task_card_fn, st_module=st):
+def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_text, render_task_card_fn, st_module=st, max_items=None):
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
     if tasks_to_render:
-        for task in tasks_to_render:
+        visible_tasks = tasks_to_render
+        if isinstance(max_items, int) and max_items > 0:
+            visible_tasks = tasks_to_render[:max_items]
+        for task in visible_tasks:
             render_task_card_fn(task, key_prefix=key_prefix)
+        if len(visible_tasks) < len(tasks_to_render):
+            st_module.caption(f"Showing {len(visible_tasks)} of {len(tasks_to_render)} tasks.")
     else:
         st_module.markdown(f'<div class="empty-state">{empty_text}</div>', unsafe_allow_html=True)
     st_module.markdown('</div>', unsafe_allow_html=True)

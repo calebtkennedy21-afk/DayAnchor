@@ -89,35 +89,6 @@ def render_overview_control_tower(
     metric_cols[2].metric("Overdue", len(overdue_tasks_today))
     metric_cols[3].metric("Scheduled", len(scheduled_tasks))
 
-    due_today_count = len(due_today_tasks)
-    scheduled_today_count = len(today_plan["scheduled_today"])
-    due_and_scheduled_today_tasks = [task for task in due_today_tasks if task.get("scheduled_date") == today]
-    due_and_scheduled_today_count = len(due_and_scheduled_today_tasks)
-    counts_cols = st_module.columns(3)
-    counts_cols[0].metric("Due Today", due_today_count)
-    counts_cols[1].metric("Scheduled Today", scheduled_today_count)
-    counts_cols[2].metric("Due + Scheduled Today", due_and_scheduled_today_count)
-    st_module.caption("Use this strip to quickly separate what is time-blocked today from what is simply due.")
-
-    list_cols = st_module.columns(3)
-    list_sections = [
-        ("Due Today", due_today_tasks),
-        ("Scheduled Today", today_plan["scheduled_today"]),
-        ("Due + Scheduled", due_and_scheduled_today_tasks),
-    ]
-    for col, (label, items) in zip(list_cols, list_sections):
-        with col:
-            st_module.markdown(f"**{label} tasks**")
-            if items:
-                for task in items[:4]:
-                    st_module.markdown(
-                        f"- {task['title']} ({task['priority'].title()})"
-                    )
-                if len(items) > 4:
-                    st_module.caption(f"+ {len(items) - 4} more")
-            else:
-                st_module.caption("None")
-
     top_left, top_right = st_module.columns([1.25, 0.85], gap="large")
     with top_left:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -217,20 +188,12 @@ def render_overview_control_tower(
 
     with lower_right:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Quick Capture</h3><span>Add a task without leaving the overview</span></div>', unsafe_allow_html=True)
-        with st_module.form(f"{panel_key}_quick_capture"):
-            quick_title = st_module.text_input("Task title")
-            quick_category = st_module.selectbox("Category", ["Personal", "Clinic"], index=0 if lens_choice == "Personal focus" else 1 if lens_choice in ("Clinic day", "Procedure Friday") else 0)
-            quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
-            quick_due = st_module.date_input("Due date", value=date.today())
-            quick_submit = st_module.form_submit_button("Add quick task")
-        if quick_submit:
-            if not quick_title.strip():
-                st_module.warning("Add a task title first.")
-            else:
-                deps["add_task"](quick_title, "", quick_category, quick_priority, quick_due)
-                st_module.success("Quick task added.")
-                st_module.rerun()
+        st_module.markdown('<div class="panel-title"><h3>Capture</h3><span>Use one shared entry point</span></div>', unsafe_allow_html=True)
+        default_lane = "Clinic" if lens_choice in ("Clinic day", "Procedure Friday") else "Personal"
+        st_module.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>Quick capture moved to the sidebar.</strong><br />Open <strong>Quick capture</strong> to add tasks from any page.<br /><strong>Suggested lane right now:</strong> {default_lane}</div>",
+            unsafe_allow_html=True,
+        )
         st_module.markdown('</div>', unsafe_allow_html=True)
 
 

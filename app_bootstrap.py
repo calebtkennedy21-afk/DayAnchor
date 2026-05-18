@@ -98,11 +98,33 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        current_page = st_module.radio(
-            "Go to",
-            ["Overview", "Personal", "Clinic", "Cases", "Schedule", "Anatomy", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"],
-            label_visibility="collapsed",
-        )
+        core_pages = ["Overview", "Personal", "Clinic", "Schedule"]
+        secondary_pages = ["Cases", "Anatomy", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
+        page_label_map = {f"Core - {page}": page for page in core_pages}
+        page_label_map.update({f"More - {page}": page for page in secondary_pages})
+        nav_labels = list(page_label_map.keys())
+        nav_key = "sidebar_nav_label"
+        if nav_key not in st_module.session_state or st_module.session_state.get(nav_key) not in nav_labels:
+            st_module.session_state[nav_key] = "Core - Overview"
+        current_nav_label = st_module.radio("Go to", nav_labels, label_visibility="collapsed", key=nav_key)
+        current_page = page_label_map.get(current_nav_label, "Overview")
+        st_module.session_state["current_page"] = current_page
+
+        st_module.markdown("---")
+        with st_module.expander("Quick capture", expanded=False):
+            with st_module.form("sidebar_quick_capture", clear_on_submit=True):
+                quick_title = st_module.text_input("Task title", placeholder="What needs to get done?")
+                quick_category = st_module.selectbox("Category", ["Personal", "Clinic"])
+                quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
+                quick_due = st_module.date_input("Due date", value=date.today())
+                quick_submit = st_module.form_submit_button("Add task", type="primary")
+            if quick_submit:
+                if not quick_title.strip():
+                    st_module.warning("Add a task title first.")
+                else:
+                    context["add_task"](quick_title.strip(), "", quick_category, quick_priority, quick_due)
+                    st_module.success("Quick task added.")
+                    st_module.rerun()
 
         st_module.markdown("---")
         st_module.markdown("### Data Controls")
@@ -143,6 +165,20 @@ def run_app(context, st_module=st):
             max_value=21,
             value=int(app_settings.get("timeline_days", 7)),
         )
+
+        st_module.markdown("---")
+        st_module.markdown("### Display")
+        focus_mode = st_module.toggle(
+            "Focus mode",
+            value=bool(st_module.session_state.get("focus_mode", False)),
+            help="Show only core execution panels and hide secondary context.",
+        )
+        st_module.session_state["focus_mode"] = bool(focus_mode)
+        density_options = ["Comfortable", "Compact"]
+        density_key = "density_preset"
+        if st_module.session_state.get(density_key) not in density_options:
+            st_module.session_state[density_key] = "Comfortable"
+        density_preset = st_module.selectbox("Density", density_options, key=density_key)
 
         st_module.markdown("---")
         st_module.markdown("### AI")
@@ -256,51 +292,55 @@ def run_app(context, st_module=st):
     if len(filtered_tasks) != len(tasks):
         st_module.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
+    base_list_limit = 7 if density_preset == "Comfortable" else 4
+    list_preview_limit = min(base_list_limit, 3) if focus_mode else base_list_limit
+
     if current_page == "Overview":
         render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day's most important work.")
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_add_task_panel("overview_add_task", app_settings, default_category="Clinic")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
-        if render_morning_digest_panel and news_articles:
+        render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.", max_items=list_preview_limit)
+
+        if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-            render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
+            render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
+            if render_morning_digest_panel and news_articles:
+                st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+                render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_quick_capture("personal_quick_capture", app_settings)
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_goals_panel(personal_goals, panel_key="personal_goals")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        personal_goal_cols = st_module.columns(2, gap="large")
-        with personal_goal_cols[0]:
-            render_personal_goal_reminders_panel(personal_goals, panel_key="personal_goal_reminders")
-        with personal_goal_cols[1]:
-            render_personal_goal_review_panel(personal_goals, panel_key="personal_goal_review")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.")
+        if not focus_mode:
+            render_personal_goals_panel(personal_goals, panel_key="personal_goals")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            personal_goal_cols = st_module.columns(2, gap="large")
+            with personal_goal_cols[0]:
+                render_personal_goal_reminders_panel(personal_goals, panel_key="personal_goal_reminders")
+            with personal_goal_cols[1]:
+                render_personal_goal_review_panel(personal_goals, panel_key="personal_goal_review")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history")
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.", max_items=list_preview_limit)
     elif current_page == "Clinic":
         render_page_banner("clinic", "Clinic Command Center", "Track outpatient load, follow-up flow, and clinic-first work.")
-        render_add_task_panel("clinic_add_task", app_settings, default_category="Clinic")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        if not focus_mode:
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_task_list_panel(
             "Clinic Tasks",
             "All clinic-related tasks, including completed work",
             clinic_tasks_all,
             "clinic_task",
             "No clinic tasks match the current filters.",
+            max_items=list_preview_limit,
         )
     elif current_page == "Cases":
         render_page_banner("clinic", "Surgical Cases", "Non-PHI case tracking with protocol support and OR cadence.")
@@ -308,8 +348,9 @@ def run_app(context, st_module=st):
     elif current_page == "Schedule":
         render_page_banner("schedule", "Schedule Builder", "Plan work and personal blocks, then pin them into real time.")
         render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
+        if not focus_mode:
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
     elif current_page == "Anatomy":
         render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
         context["render_msk_anatomy_panel"](surgical_cases, protocol_documents, panel_key="anatomy_page")
