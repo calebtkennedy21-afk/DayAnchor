@@ -2815,6 +2815,11 @@ def render_personal_one_thing(personal_tasks, panel_key):
     pin_key = f"{panel_key}_pinned_id"
     pinned_id = st.session_state.get(pin_key)
     pinned_task = next((t for t in personal_tasks if t.get("id") == pinned_id), None) if pinned_id else None
+    ready = [t for t in personal_tasks if t.get("status") != "completed"]
+    pick_key = f"{panel_key}_pick"
+
+    if ready and pick_key not in st.session_state:
+        st.session_state[pick_key] = ready[0]["title"]
 
     st.markdown(
         '<div class="panel" style="background: linear-gradient(135deg, rgba(15,118,110,0.10), rgba(29,78,216,0.09)); border: 1.5px solid rgba(15,118,110,0.22);">',
@@ -2851,12 +2856,21 @@ def render_personal_one_thing(personal_tasks, panel_key):
             if st.button("Unpin", key=f"{panel_key}_unpin"):
                 st.session_state.pop(pin_key, None)
                 st.rerun()
-    else:
-        ready = [t for t in personal_tasks if t.get("status") != "completed"]
         if ready:
-            pick_key = f"{panel_key}_pick"
             options = [t["title"] for t in ready]
-            if pick_key not in st.session_state:
+            if st.session_state.get(pick_key) not in options:
+                st.session_state[pick_key] = options[0]
+            st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
+            selected = st.selectbox("Switch pinned task", options, key=pick_key)
+            selected_task = next((t for t in ready if t["title"] == selected), None)
+            can_repin = bool(selected_task) and selected_task.get("id") != pinned_task.get("id")
+            if st.button("Pin selected task", key=f"{panel_key}_repin_btn", type="secondary", disabled=not can_repin):
+                st.session_state[pin_key] = selected_task["id"]
+                st.rerun()
+    else:
+        if ready:
+            options = [t["title"] for t in ready]
+            if st.session_state.get(pick_key) not in options:
                 st.session_state[pick_key] = options[0]
             selected = st.selectbox("Choose your one thing for today", options, key=pick_key)
             if st.button("Pin this →", key=f"{panel_key}_pin_btn", type="primary"):
