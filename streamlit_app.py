@@ -4722,6 +4722,18 @@ def render_full_news_page(articles, summary, takeaways, panel_key="news_page"):
     """Render a full page dedicated to news."""
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>📰 Health & Medical News</h3><span>Curated news on health, fitness, and surgical topics</span></div>', unsafe_allow_html=True)
+
+    refresh_cols = st.columns([1, 1.8])
+    with refresh_cols[0]:
+        if st.button("Refresh news now", key=f"{panel_key}_refresh_news", type="secondary"):
+            st.session_state["news_force_refresh"] = True
+            st.rerun()
+    with refresh_cols[1]:
+        last_refreshed = st.session_state.get("news_last_refreshed_at")
+        if last_refreshed:
+            st.caption(f"Last refreshed: {last_refreshed}")
+        else:
+            st.caption("No refresh timestamp yet.")
     
     if not articles:
         st.info("No news articles available. Check your NewsAPI key configuration.")

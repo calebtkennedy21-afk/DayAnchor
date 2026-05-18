@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import streamlit as st
 
@@ -51,6 +51,7 @@ def run_app(context, st_module=st):
     summarize_news_with_ai = context.get("summarize_news_with_ai")
     render_morning_digest_panel = context.get("render_morning_digest_panel")
     render_full_news_page = context.get("render_full_news_page")
+    news_manual_refresh_requested = False
 
     initialize_database()
     app_settings = load_app_settings()
@@ -151,6 +152,15 @@ def run_app(context, st_module=st):
             st_module.info("AI disabled. Set OPENAI_API_KEY to enable.")
 
         st_module.markdown("---")
+        st_module.markdown("### News")
+        last_news_refresh = st_module.session_state.get("news_last_refreshed_at")
+        if last_news_refresh:
+            st_module.caption(f"Last refreshed: {last_news_refresh}")
+        else:
+            st_module.caption("News has not been refreshed in this session yet.")
+        news_manual_refresh_requested = st_module.button("Refresh News Now", use_container_width=True)
+
+        st_module.markdown("---")
         st_module.markdown("### My Apps")
         st_module.link_button("📊 Signal Scanner", "https://tradingbot-production-ed44.up.railway.app/?auth=eyJlbWFpbCI6ImNhbGViLnQua2VubmVkeTIxQGdtYWlsLmNvbSIsImV4cCI6MTc3OTkzODAxNX0.2zIv6Ip3AFgaTsAHNWzYU9GhlKIGUq8f_B_gA-7nBKE", use_container_width=True)
         st_module.link_button("💰 Budgeting Bot", "https://budgetingbot-production.up.railway.app/", use_container_width=True)
@@ -161,18 +171,34 @@ def run_app(context, st_module=st):
     surgical_cases = load_surgical_cases()
     protocol_documents = load_protocol_documents()
     
-    # Fetch and cache news for the day
+    # Fetch and cache news for the day (auto-refresh each morning + manual refresh option)
     import os
     news_api_key = os.getenv("NEWSAPI_KEY")
-    if "news_articles_cache" not in st_module.session_state:
+    today_key = date.today().isoformat()
+    force_news_refresh = news_manual_refresh_requested or bool(st_module.session_state.pop("news_force_refresh", False))
+    needs_daily_refresh = st_module.session_state.get("news_cache_date") != today_key
+    cache_missing = "news_articles_cache" not in st_module.session_state
+
+    if cache_missing or needs_daily_refresh or force_news_refresh:
         if fetch_health_news:
             st_module.session_state.news_articles_cache = fetch_health_news(news_api_key, max_articles=10)
         else:
             st_module.session_state.news_articles_cache = []
+        st_module.session_state.news_cache_date = today_key
+        st_module.session_state.news_last_refreshed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # Recompute summary/takeaways whenever articles are refreshed.
+        if summarize_news_with_ai and st_module.session_state.news_articles_cache and ai_enabled():
+            summary, takeaways = summarize_news_with_ai(st_module.session_state.news_articles_cache, ai_model_name, ai_enabled)
+            st_module.session_state.news_summary_cache = summary
+            st_module.session_state.news_takeaways_cache = takeaways
+        else:
+            st_module.session_state.news_summary_cache = None
+            st_module.session_state.news_takeaways_cache = None
     
     news_articles = st_module.session_state.news_articles_cache
     
-    # Summarize news with AI (cached in session)
+    # Backfill summary cache if missing but articles are present.
     if "news_summary_cache" not in st_module.session_state or "news_takeaways_cache" not in st_module.session_state:
         if summarize_news_with_ai and news_articles and ai_enabled():
             summary, takeaways = summarize_news_with_ai(news_articles, ai_model_name, ai_enabled)
