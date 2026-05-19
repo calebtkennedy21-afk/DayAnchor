@@ -1,6 +1,5 @@
 from datetime import date, time, timedelta
 import calendar
-import base64
 
 import streamlit as st
 
@@ -17,21 +16,31 @@ def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, he
         st_module.caption("Inline preview is available for PDF files.")
         return
 
-    encoded = base64.b64encode(file_bytes).decode("ascii")
-    preview_html = (
-        "<div style='border:1px solid #d0d7de; border-radius:0.5rem; overflow:hidden;'>"
-        f"<embed src='data:application/pdf;base64,{encoded}' type='application/pdf' width='100%' height='{height}' />"
-        f"<object data='data:application/pdf;base64,{encoded}' type='application/pdf' width='100%' height='{height}'>"
-        "<div style='padding:0.75rem;'>"
-        "PDF preview is not available in this browser context. Use Download selected to open the file locally."
-        "</div>"
-        "</object>"
-        "</div>"
-    )
-    if hasattr(st_module, "components") and hasattr(st_module.components, "v1"):
-        st_module.components.v1.html(preview_html, height=height + 24, scrolling=False)
-    else:
-        st_module.markdown(preview_html, unsafe_allow_html=True)
+    try:
+        import pypdfium2 as pdfium
+    except Exception:
+        st_module.info("PDF preview dependency is not available yet. Use Download selected for now.")
+        return
+
+    try:
+        pdf_document = pdfium.PdfDocument(file_bytes)
+        total_pages = len(pdf_document)
+        if total_pages == 0:
+            st_module.caption("This PDF has no pages to preview.")
+            return
+
+        preview_pages = min(total_pages, 5)
+        st_module.caption(f"Previewing {preview_pages} of {total_pages} page(s).")
+        for page_index in range(preview_pages):
+            page = pdf_document[page_index]
+            bitmap = page.render(scale=1.4)
+            image = bitmap.to_pil()
+            st_module.image(image, caption=f"Page {page_index + 1}", use_container_width=True)
+
+        if total_pages > preview_pages:
+            st_module.caption("Download the file to view additional pages.")
+    except Exception:
+        st_module.warning("Unable to render PDF preview in-app. Use Download selected to open it locally.")
 
 
 def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
