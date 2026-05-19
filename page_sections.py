@@ -384,23 +384,36 @@ def render_surgical_cases_panel(
             suggestions = deps["suggest_protocols_for_case"](item, protocol_documents, max_items=3)
             if suggestions:
                 st_module.markdown("**Suggested Protocols**")
+                protocol_labels = []
+                protocol_map = {}
                 for score, overlap_terms, doc in suggestions:
-                    doc_id = doc.get("id")
-                    doc_bytes = doc.get("file_bytes")
-                    if isinstance(doc_bytes, memoryview):
-                        doc_bytes = bytes(doc_bytes)
-                    st_module.markdown(
-                        f"- **{doc.get('protocol_name')}** (match score: {score}) · keywords: {', '.join(overlap_terms)}",
-                        unsafe_allow_html=True,
+                    label = f"{doc.get('protocol_name')} (score: {score})"
+                    protocol_labels.append(label)
+                    protocol_map[label] = (score, overlap_terms, doc)
+
+                selected_protocol_label = st_module.selectbox(
+                    "Select protocol",
+                    protocol_labels,
+                    key=f"{panel_key}_case_protocol_select_{case_id}",
+                    label_visibility="collapsed",
+                )
+                selected_score, selected_overlap_terms, selected_doc = protocol_map[selected_protocol_label]
+                st_module.caption(
+                    f"Selected: {selected_doc.get('protocol_name')} · keywords: {', '.join(selected_overlap_terms)} · file: {selected_doc.get('file_name')}"
+                )
+                if selected_doc.get("notes"):
+                    st_module.write(selected_doc.get("notes"))
+                selected_doc_bytes = selected_doc.get("file_bytes")
+                if isinstance(selected_doc_bytes, memoryview):
+                    selected_doc_bytes = bytes(selected_doc_bytes)
+                if selected_doc_bytes:
+                    st_module.download_button(
+                        label="Download selected",
+                        data=selected_doc_bytes,
+                        file_name=selected_doc.get("file_name") or "protocol.pdf",
+                        mime=selected_doc.get("file_mime") or "application/octet-stream",
+                        key=f"{panel_key}_case_suggested_download_selected_{case_id}_{selected_doc.get('id')}",
                     )
-                    if doc_bytes:
-                        st_module.download_button(
-                            label=f"Download {doc.get('file_name')}",
-                            data=doc_bytes,
-                            file_name=doc.get("file_name") or "protocol.pdf",
-                            mime=doc.get("file_mime") or "application/octet-stream",
-                            key=f"{panel_key}_case_suggested_download_{case_id}_{doc_id}",
-                        )
             row_cols = st_module.columns([1, 1, 1])
             with row_cols[0]:
                 new_status = st_module.selectbox(
