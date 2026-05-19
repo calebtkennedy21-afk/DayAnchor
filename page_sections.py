@@ -18,18 +18,20 @@ def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, he
         return
 
     encoded = base64.b64encode(file_bytes).decode("ascii")
-    iframe_html = (
-        "<iframe "
-        f"src='data:application/pdf;base64,{encoded}' "
-        "width='100%' "
-        f"height='{height}' "
-        "style='border:1px solid #d0d7de; border-radius:0.5rem;'"
-        "></iframe>"
+    preview_html = (
+        "<div style='border:1px solid #d0d7de; border-radius:0.5rem; overflow:hidden;'>"
+        f"<embed src='data:application/pdf;base64,{encoded}' type='application/pdf' width='100%' height='{height}' />"
+        f"<object data='data:application/pdf;base64,{encoded}' type='application/pdf' width='100%' height='{height}'>"
+        "<div style='padding:0.75rem;'>"
+        "PDF preview is not available in this browser context. Use Download selected to open the file locally."
+        "</div>"
+        "</object>"
+        "</div>"
     )
     if hasattr(st_module, "components") and hasattr(st_module.components, "v1"):
-        st_module.components.v1.html(iframe_html, height=height + 16, scrolling=True)
+        st_module.components.v1.html(preview_html, height=height + 24, scrolling=False)
     else:
-        st_module.markdown(iframe_html, unsafe_allow_html=True)
+        st_module.markdown(preview_html, unsafe_allow_html=True)
 
 
 def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
