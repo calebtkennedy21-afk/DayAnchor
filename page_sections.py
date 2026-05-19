@@ -1,7 +1,35 @@
 from datetime import date, time, timedelta
 import calendar
+import base64
 
 import streamlit as st
+
+
+def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, height=420):
+    if isinstance(file_bytes, memoryview):
+        file_bytes = bytes(file_bytes)
+    if not file_bytes:
+        st_module.caption("No file available for preview.")
+        return
+
+    looks_like_pdf = (file_mime or "").lower() == "application/pdf" or str(file_name or "").lower().endswith(".pdf")
+    if not looks_like_pdf:
+        st_module.caption("Inline preview is available for PDF files.")
+        return
+
+    encoded = base64.b64encode(file_bytes).decode("ascii")
+    iframe_html = (
+        "<iframe "
+        f"src='data:application/pdf;base64,{encoded}' "
+        "width='100%' "
+        f"height='{height}' "
+        "style='border:1px solid #d0d7de; border-radius:0.5rem;'"
+        "></iframe>"
+    )
+    if hasattr(st_module, "components") and hasattr(st_module.components, "v1"):
+        st_module.components.v1.html(iframe_html, height=height + 16, scrolling=True)
+    else:
+        st_module.markdown(iframe_html, unsafe_allow_html=True)
 
 
 def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
@@ -280,6 +308,14 @@ def render_surgical_cases_panel(
                     deps["delete_protocol_document"](doc_id)
                     st_module.success("Protocol deleted.")
                     st_module.rerun()
+            with st_module.expander("View PDF", expanded=False):
+                _render_protocol_pdf_preview(
+                    st_module,
+                    doc_bytes,
+                    doc.get("file_mime"),
+                    doc.get("file_name"),
+                    height=460,
+                )
     else:
         st_module.markdown('<div class="empty-state">No protocols uploaded yet. Add BB protocols to reference during case prep.</div>', unsafe_allow_html=True)
 
@@ -406,6 +442,24 @@ def render_surgical_cases_panel(
                 selected_doc_bytes = selected_doc.get("file_bytes")
                 if isinstance(selected_doc_bytes, memoryview):
                     selected_doc_bytes = bytes(selected_doc_bytes)
+                selected_doc_id = selected_doc.get("id")
+                preview_visible_key = f"{panel_key}_case_preview_visible_{case_id}_{selected_doc_id}"
+                preview_controls = st_module.columns([1, 1, 3])
+                with preview_controls[0]:
+                    if st_module.button("View selected protocol", key=f"{panel_key}_case_preview_show_{case_id}_{selected_doc_id}"):
+                        st_module.session_state[preview_visible_key] = True
+                with preview_controls[1]:
+                    if st_module.button("Hide preview", key=f"{panel_key}_case_preview_hide_{case_id}_{selected_doc_id}"):
+                        st_module.session_state[preview_visible_key] = False
+
+                if st_module.session_state.get(preview_visible_key, False):
+                    _render_protocol_pdf_preview(
+                        st_module,
+                        selected_doc_bytes,
+                        selected_doc.get("file_mime"),
+                        selected_doc.get("file_name"),
+                        height=420,
+                    )
                 if selected_doc_bytes:
                     st_module.download_button(
                         label="Download selected",
