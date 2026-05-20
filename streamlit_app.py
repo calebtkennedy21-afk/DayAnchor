@@ -17,6 +17,7 @@ from clinical_reference import (
     anatomy_bones_map as ref_anatomy_bones_map,
     anatomy_fractures_map as ref_anatomy_fractures_map,
     render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
+    suggest_cpt_codes_for_case as ref_suggest_cpt_codes_for_case,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
 import ai_workflows
@@ -720,6 +721,7 @@ def initialize_database():
                     )
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_url TEXT")
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_notes TEXT NOT NULL DEFAULT ''")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS cpt_codes TEXT NOT NULL DEFAULT ''")
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS or_facility TEXT NOT NULL DEFAULT 'Mercy OR'")
                     cur.execute(
                         """
@@ -5283,6 +5285,7 @@ page_shared_deps = {
     "add_task": add_task,
     "predicted_or_days": predicted_or_days,
     "render_or_calendar_compact": render_or_calendar_compact,
+    "suggest_cpt_codes_for_case": ref_suggest_cpt_codes_for_case,
     "suggest_protocols_for_case": ref_suggest_protocols_for_case,
     "status_label": status_label,
     "generate_ai_plan": generate_ai_plan,

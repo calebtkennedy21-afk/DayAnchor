@@ -29,6 +29,7 @@ def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
         [
             str(case_item.get("procedure_name") or ""),
             str(case_item.get("anatomical_location") or ""),
+            str(case_item.get("cpt_codes") or ""),
             str(case_item.get("education_notes") or ""),
             str(case_item.get("notes") or ""),
         ]
@@ -57,6 +58,93 @@ def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
     return ranked[:max_items]
 
 
+def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3):
+    target_procedure = str(case_item.get("procedure_name") or "").strip().lower()
+    target_location = str(case_item.get("anatomical_location") or "").strip().lower()
+    target_stream = str(case_item.get("case_stream") or "").strip().lower()
+    target_terms = set(
+        text_keywords(
+            " ".join(
+                [
+                    str(case_item.get("procedure_name") or ""),
+                    str(case_item.get("anatomical_location") or ""),
+                    str(case_item.get("education_notes") or ""),
+                    str(case_item.get("notes") or ""),
+                ]
+            )
+        )
+    )
+
+    if not target_procedure and not target_location and not target_terms:
+        return []
+
+    ranked = []
+    for item in surgical_cases:
+        cpt_codes = str(item.get("cpt_codes") or "").strip()
+        if not cpt_codes:
+            continue
+
+        prior_procedure = str(item.get("procedure_name") or "").strip().lower()
+        prior_location = str(item.get("anatomical_location") or "").strip().lower()
+        prior_stream = str(item.get("case_stream") or "").strip().lower()
+        prior_terms = set(
+            text_keywords(
+                " ".join(
+                    [
+                        str(item.get("procedure_name") or ""),
+                        str(item.get("anatomical_location") or ""),
+                        str(item.get("education_notes") or ""),
+                        str(item.get("notes") or ""),
+                    ]
+                )
+            )
+        )
+
+        overlap_terms = sorted(list(target_terms.intersection(prior_terms)))
+        score = 0
+        if target_procedure and target_procedure == prior_procedure:
+            score += 6
+        if target_location and target_location == prior_location:
+            score += 3
+        score += len(overlap_terms) * 2
+        if target_stream and target_stream == prior_stream:
+            score += 1
+
+        if score <= 0:
+            continue
+
+        ranked.append(
+            (
+                score,
+                overlap_terms[:6],
+                cpt_codes,
+                item,
+            )
+        )
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+
+    deduped = []
+    seen_codes = set()
+    for score, overlap_terms, cpt_codes, item in ranked:
+        if cpt_codes in seen_codes:
+            continue
+        seen_codes.add(cpt_codes)
+        deduped.append(
+            {
+                "cpt_codes": cpt_codes,
+                "score": score,
+                "overlap_terms": overlap_terms,
+                "matched_case_id": item.get("id"),
+                "matched_procedure_name": item.get("procedure_name") or "",
+            }
+        )
+        if len(deduped) >= max_items:
+            break
+
+    return deduped
+
+
 def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_documents, max_items=4):
     topic_set = set(text_keywords(" ".join(topic_terms)))
 
@@ -66,6 +154,7 @@ def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_
             [
                 str(item.get("procedure_name") or ""),
                 str(item.get("anatomical_location") or ""),
+                str(item.get("cpt_codes") or ""),
                 str(item.get("education_notes") or ""),
                 str(item.get("notes") or ""),
             ]

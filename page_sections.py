@@ -258,7 +258,7 @@ def render_surgical_cases_panel(
 
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
-    st_module.caption("Store procedure name, date, and anatomical location only. Do not enter patient identifiers.")
+    st_module.caption("Store procedure details (including CPT codes) only. Do not enter patient identifiers.")
 
     st_module.markdown('<div class="panel-title" style="margin-top:0.5rem;"><h3>Protocol Library</h3><span>Upload and reference BB protocols</span></div>', unsafe_allow_html=True)
     with st_module.form(f"{panel_key}_protocol_upload_form"):
@@ -482,31 +482,112 @@ def render_surgical_cases_panel(
 
     top_left, top_right = st_module.columns([1.1, 0.9], gap="large")
     with top_left:
-        with st_module.form(f"{panel_key}_new_case_form"):
-            case_date = st_module.date_input("Case date", value=date.today())
-            case_stream = st_module.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"])
-            procedure_name = st_module.text_input("Procedure performed")
-            anatomical_location = st_module.text_input("Anatomical location")
-            status = st_module.selectbox("Status", ["planned", "completed", "canceled"])
-            notes = st_module.text_area("Notes (non-PHI)", height=80)
-            education_url = st_module.text_input("Education link (optional)", placeholder="https://...")
-            education_notes = st_module.text_area("Educational description", height=90, placeholder="What the case is, key anatomy, technical pearls, postop points...")
-            submit_case = st_module.form_submit_button("Add surgical case", type="primary")
+        date_key = f"{panel_key}_new_case_date"
+        stream_key = f"{panel_key}_new_case_stream"
+        procedure_key = f"{panel_key}_new_case_procedure"
+        location_key = f"{panel_key}_new_case_location"
+        cpt_key = f"{panel_key}_new_case_cpt"
+        status_key = f"{panel_key}_new_case_status"
+        notes_key = f"{panel_key}_new_case_notes"
+        education_url_key = f"{panel_key}_new_case_education_url"
+        education_notes_key = f"{panel_key}_new_case_education_notes"
+
+        if date_key not in st_module.session_state:
+            st_module.session_state[date_key] = date.today()
+        if stream_key not in st_module.session_state:
+            st_module.session_state[stream_key] = "Main OR"
+        if status_key not in st_module.session_state:
+            st_module.session_state[status_key] = "planned"
+
+        case_date = st_module.date_input("Case date", key=date_key)
+        case_stream = st_module.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"], key=stream_key)
+        procedure_name = st_module.text_input("Procedure performed", key=procedure_key)
+        anatomical_location = st_module.text_input("Anatomical location", key=location_key)
+        cpt_codes = st_module.text_input("CPT code(s)", key=cpt_key, placeholder="e.g., 27658, 29898")
+
+        cpt_suggestions = []
+        if procedure_name.strip() or anatomical_location.strip():
+            cpt_suggestions = deps["suggest_cpt_codes_for_case"](
+                {
+                    "procedure_name": procedure_name,
+                    "anatomical_location": anatomical_location,
+                    "case_stream": case_stream,
+                    "education_notes": st_module.session_state.get(education_notes_key, ""),
+                    "notes": st_module.session_state.get(notes_key, ""),
+                },
+                surgical_cases,
+                max_items=3,
+            )
+
+        if cpt_suggestions:
+            st_module.caption("Suggested CPT code(s) from similar prior cases")
+            for idx, suggestion in enumerate(cpt_suggestions):
+                suggestion_cols = st_module.columns([2.2, 1.4, 0.9])
+                with suggestion_cols[0]:
+                    st_module.write(f"{suggestion['cpt_codes']}")
+                with suggestion_cols[1]:
+                    st_module.caption(
+                        f"match {suggestion['score']} · {suggestion['matched_procedure_name'] or 'Prior case'}"
+                    )
+                with suggestion_cols[2]:
+                    if st_module.button("Use", key=f"{panel_key}_cpt_suggestion_use_{idx}_{suggestion['matched_case_id']}"):
+                        st_module.session_state[cpt_key] = suggestion["cpt_codes"]
+                        st_module.rerun()
+        elif procedure_name.strip() or anatomical_location.strip():
+            st_module.caption("No close CPT matches found in prior cases yet.")
+
+        status = st_module.selectbox("Status", ["planned", "completed", "canceled"], key=status_key)
+        notes = st_module.text_area("Notes (non-PHI)", height=80, key=notes_key)
+        education_url = st_module.text_input("Education link (optional)", key=education_url_key, placeholder="https://...")
+        education_notes = st_module.text_area(
+            "Educational description",
+            height=90,
+            key=education_notes_key,
+            placeholder="What the case is, key anatomy, technical pearls, postop points...",
+        )
+        submit_case = st_module.button("Add surgical case", key=f"{panel_key}_new_case_submit", type="primary")
 
         if submit_case:
             if not procedure_name.strip():
                 st_module.warning("Add the procedure name before saving.")
             else:
+                cpt_codes_to_save = cpt_codes.strip()
+                if not cpt_codes_to_save:
+                    cpt_suggestions = deps["suggest_cpt_codes_for_case"](
+                        {
+                            "procedure_name": procedure_name,
+                            "anatomical_location": anatomical_location,
+                            "case_stream": case_stream,
+                            "education_notes": education_notes,
+                            "notes": notes,
+                        },
+                        surgical_cases,
+                        max_items=1,
+                    )
+                    if cpt_suggestions:
+                        best_match = cpt_suggestions[0]
+                        cpt_codes_to_save = best_match["cpt_codes"]
+                        st_module.info(
+                            f"Auto-filled CPT code(s) from a similar case: {cpt_codes_to_save}"
+                        )
+
                 deps["add_surgical_case"](
                     case_date=case_date,
                     case_stream=case_stream,
                     procedure_name=procedure_name,
                     anatomical_location=anatomical_location,
+                    cpt_codes=cpt_codes_to_save,
                     status=status,
                     notes=notes,
                     education_url=education_url,
                     education_notes=education_notes,
                 )
+                st_module.session_state[procedure_key] = ""
+                st_module.session_state[location_key] = ""
+                st_module.session_state[cpt_key] = ""
+                st_module.session_state[notes_key] = ""
+                st_module.session_state[education_url_key] = ""
+                st_module.session_state[education_notes_key] = ""
                 st_module.success("Surgical case saved.")
                 st_module.rerun()
 
@@ -560,6 +641,8 @@ def render_surgical_cases_panel(
                 f"<p style='margin-top:0.6rem;'>{item.get('notes') or ''}</p></div>",
                 unsafe_allow_html=True,
             )
+            if item.get("cpt_codes"):
+                st_module.caption(f"CPT code(s): {item.get('cpt_codes')}")
             if item.get("education_url"):
                 st_module.markdown(f"[Case Education Link]({item.get('education_url')})")
             if item.get("education_notes"):
@@ -617,7 +700,7 @@ def render_surgical_cases_panel(
                         mime=selected_doc.get("file_mime") or "application/octet-stream",
                         key=f"{panel_key}_case_suggested_download_selected_{case_id}_{selected_doc.get('id')}",
                     )
-            row_cols = st_module.columns([1, 1, 1])
+            row_cols = st_module.columns([1, 1, 1, 1])
             with row_cols[0]:
                 new_status = st_module.selectbox(
                     "Status",
@@ -627,11 +710,19 @@ def render_surgical_cases_panel(
                     label_visibility="collapsed",
                 )
             with row_cols[1]:
-                if st_module.button("Update", key=f"{panel_key}_update_{case_id}"):
-                    deps["update_surgical_case"](case_id, status=new_status)
-                    st_module.success("Case status updated.")
-                    st_module.rerun()
+                updated_cpt_codes = st_module.text_input(
+                    "CPT",
+                    value=item.get("cpt_codes") or "",
+                    key=f"{panel_key}_cpt_codes_{case_id}",
+                    label_visibility="collapsed",
+                    placeholder="CPT code(s)",
+                )
             with row_cols[2]:
+                if st_module.button("Update", key=f"{panel_key}_update_{case_id}"):
+                    deps["update_surgical_case"](case_id, status=new_status, cpt_codes=updated_cpt_codes)
+                    st_module.success("Case updated.")
+                    st_module.rerun()
+            with row_cols[3]:
                 if st_module.button("Delete", key=f"{panel_key}_delete_{case_id}"):
                     deps["delete_surgical_case"](case_id)
                     st_module.success("Case deleted.")

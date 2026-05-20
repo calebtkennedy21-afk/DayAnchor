@@ -71,6 +71,7 @@ def load_surgical_cases(db_enabled_fn, get_connection_fn, st_module=st):
                         case_stream,
                         procedure_name,
                         anatomical_location,
+                        cpt_codes,
                         status,
                         notes,
                         education_url,
@@ -90,6 +91,7 @@ def add_surgical_case(
     case_stream,
     procedure_name,
     anatomical_location,
+    cpt_codes="",
     status="planned",
     notes="",
     education_url="",
@@ -101,6 +103,7 @@ def add_surgical_case(
     stream_value = case_stream.strip()
     procedure_value = procedure_name.strip()
     location_value = anatomical_location.strip()
+    cpt_codes_value = cpt_codes.strip()
     notes_value = notes.strip()
     education_url_value = education_url.strip()
     education_notes_value = education_notes.strip()
@@ -117,18 +120,20 @@ def add_surgical_case(
                         case_stream,
                         procedure_name,
                         anatomical_location,
+                        cpt_codes,
                         status,
                         notes,
                         education_url,
                         education_notes,
                         created_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         case_date,
                         stream_value,
                         procedure_value,
                         location_value,
+                        cpt_codes_value,
                         status,
                         notes_value,
                         education_url_value,
@@ -146,6 +151,7 @@ def add_surgical_case(
             "case_stream": stream_value,
             "procedure_name": procedure_value,
             "anatomical_location": location_value,
+            "cpt_codes": cpt_codes_value,
             "status": status,
             "notes": notes_value,
             "education_url": education_url_value,
@@ -161,6 +167,7 @@ def update_surgical_case(case_id, db_enabled_fn=None, get_connection_fn=None, st
         "case_stream",
         "procedure_name",
         "anatomical_location",
+        "cpt_codes",
         "status",
         "notes",
         "education_url",
