@@ -282,6 +282,50 @@ def add_protocol_document(
     )
 
 
+def update_protocol_document(
+    doc_id,
+    surgeon_label,
+    protocol_name,
+    notes="",
+    upload_name=None,
+    upload_mime=None,
+    upload_bytes=None,
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    surgeon_value = (surgeon_label or "").strip() or "Dr. Braden Boyer (BB)"
+    protocol_value = (protocol_name or "").strip()
+    notes_value = (notes or "").strip()
+
+    if db_enabled_fn and db_enabled_fn():
+        set_parts = [
+            "surgeon_label = %s",
+            "protocol_name = %s",
+            "notes = %s",
+        ]
+        values = [surgeon_value, protocol_value, notes_value]
+        if upload_bytes:
+            set_parts.extend(["file_name = %s", "file_mime = %s", "file_bytes = %s"])
+            values.extend([upload_name, upload_mime, upload_bytes])
+        values.append(doc_id)
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE protocol_documents SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    for item in st_module.session_state.protocol_documents:
+        if item.get("id") == doc_id:
+            item["surgeon_label"] = surgeon_value
+            item["protocol_name"] = protocol_value
+            item["notes"] = notes_value
+            if upload_bytes:
+                item["file_name"] = upload_name
+                item["file_mime"] = upload_mime
+                item["file_bytes"] = upload_bytes
+            return
+
+
 def delete_protocol_document(doc_id, db_enabled_fn=None, get_connection_fn=None, st_module=st):
     if db_enabled_fn and db_enabled_fn():
         with get_connection_fn() as conn:

@@ -5252,6 +5252,7 @@ update_surgical_case = partial(data_access.update_surgical_case, db_enabled_fn=d
 delete_surgical_case = partial(data_access.delete_surgical_case, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 load_protocol_documents = partial(data_access.load_protocol_documents, db_enabled, get_connection, st_module=st)
 add_protocol_document = partial(data_access.add_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_protocol_document = partial(data_access.update_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 delete_protocol_document = partial(data_access.delete_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
@@ -5293,7 +5294,7 @@ page_shared_deps = {
 }
 
 render_overview_control_tower = partial(page_sections.render_overview_control_tower, deps=page_shared_deps, st_module=st)
-render_surgical_cases_panel = partial(page_sections.render_surgical_cases_panel, deps={**page_shared_deps, "add_surgical_case": add_surgical_case, "update_surgical_case": update_surgical_case, "delete_surgical_case": delete_surgical_case, "add_protocol_document": add_protocol_document, "delete_protocol_document": delete_protocol_document}, st_module=st)
+render_surgical_cases_panel = partial(page_sections.render_surgical_cases_panel, deps={**page_shared_deps, "add_surgical_case": add_surgical_case, "update_surgical_case": update_surgical_case, "delete_surgical_case": delete_surgical_case, "add_protocol_document": add_protocol_document, "update_protocol_document": update_protocol_document, "delete_protocol_document": delete_protocol_document}, st_module=st)
 render_ai_panel = partial(page_sections.render_ai_panel, deps=page_shared_deps, st_module=st)
 
 app_bootstrap.run_app(
