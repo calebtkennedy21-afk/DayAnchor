@@ -491,6 +491,8 @@ def render_surgical_cases_panel(
         notes_key = f"{panel_key}_new_case_notes"
         education_url_key = f"{panel_key}_new_case_education_url"
         education_notes_key = f"{panel_key}_new_case_education_notes"
+        cpt_reference_category_key = f"{panel_key}_cpt_reference_category"
+        cpt_reference_select_key = f"{panel_key}_cpt_reference_select"
 
         if date_key not in st_module.session_state:
             st_module.session_state[date_key] = date.today()
@@ -498,6 +500,48 @@ def render_surgical_cases_panel(
             st_module.session_state[stream_key] = "Main OR"
         if status_key not in st_module.session_state:
             st_module.session_state[status_key] = "planned"
+        if cpt_reference_category_key not in st_module.session_state:
+            st_module.session_state[cpt_reference_category_key] = "All"
+
+        cpt_reference = deps.get("cpt_reference", [])
+        reference_categories = ["All"] + sorted({item.get("category") or "Other" for item in cpt_reference})
+
+        with st_module.expander("CPT Reference", expanded=False):
+            st_module.caption("Searchable CPT list for quick lookup and one-click fill.")
+            selected_category = st_module.selectbox(
+                "Category",
+                reference_categories,
+                key=cpt_reference_category_key,
+            )
+            filtered_reference = [
+                item
+                for item in cpt_reference
+                if selected_category == "All" or (item.get("category") or "Other") == selected_category
+            ]
+            reference_options = [""] + [
+                f"{item.get('code', '')} - {item.get('description', '')}"
+                for item in filtered_reference
+            ]
+            selected_reference = st_module.selectbox(
+                "Code and description",
+                reference_options,
+                key=cpt_reference_select_key,
+                help="Type in the dropdown to search by CPT code or description.",
+            )
+
+            if selected_reference:
+                selected_code = selected_reference.split(" - ", 1)[0].strip()
+                selected_item = next(
+                    (item for item in filtered_reference if str(item.get("code") or "").strip() == selected_code),
+                    None,
+                )
+                if selected_item:
+                    st_module.caption(
+                        f"{selected_item.get('category', 'Other')} · {selected_item.get('description', '')}"
+                    )
+                    if st_module.button("Use selected CPT", key=f"{panel_key}_use_reference_cpt"):
+                        st_module.session_state[cpt_key] = selected_code
+                        st_module.rerun()
 
         case_date = st_module.date_input("Case date", key=date_key)
         case_stream = st_module.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"], key=stream_key)
@@ -517,24 +561,28 @@ def render_surgical_cases_panel(
                 },
                 surgical_cases,
                 max_items=3,
+                cpt_reference=cpt_reference,
             )
 
         if cpt_suggestions:
-            st_module.caption("Suggested CPT code(s) from similar prior cases")
+            st_module.caption("Suggested CPT code(s) from prior cases and the reference list")
             for idx, suggestion in enumerate(cpt_suggestions):
                 suggestion_cols = st_module.columns([2.2, 1.4, 0.9])
                 with suggestion_cols[0]:
                     st_module.write(f"{suggestion['cpt_codes']}")
                 with suggestion_cols[1]:
+                    source_label = "Reference" if suggestion["match_source"] == "reference" else "History"
+                    detail_label = suggestion["matched_category"] or suggestion["matched_procedure_name"] or "Prior case"
                     st_module.caption(
-                        f"match {suggestion['score']} · {suggestion['matched_procedure_name'] or 'Prior case'}"
+                        f"{source_label} · match {suggestion['score']} · {detail_label}"
                     )
                 with suggestion_cols[2]:
-                    if st_module.button("Use", key=f"{panel_key}_cpt_suggestion_use_{idx}_{suggestion['matched_case_id']}"):
+                    suggestion_key = suggestion["matched_case_id"] if suggestion["matched_case_id"] is not None else suggestion["cpt_codes"]
+                    if st_module.button("Use", key=f"{panel_key}_cpt_suggestion_use_{idx}_{suggestion_key}"):
                         st_module.session_state[cpt_key] = suggestion["cpt_codes"]
                         st_module.rerun()
         elif procedure_name.strip() or anatomical_location.strip():
-            st_module.caption("No close CPT matches found in prior cases yet.")
+            st_module.caption("No close CPT matches found in history or the reference list yet.")
 
         status = st_module.selectbox("Status", ["planned", "completed", "canceled"], key=status_key)
         notes = st_module.text_area("Notes (non-PHI)", height=80, key=notes_key)
@@ -563,12 +611,14 @@ def render_surgical_cases_panel(
                         },
                         surgical_cases,
                         max_items=1,
+                        cpt_reference=cpt_reference,
                     )
                     if cpt_suggestions:
                         best_match = cpt_suggestions[0]
                         cpt_codes_to_save = best_match["cpt_codes"]
+                        source_label = "reference" if best_match["match_source"] == "reference" else "a similar case"
                         st_module.info(
-                            f"Auto-filled CPT code(s) from a similar case: {cpt_codes_to_save}"
+                            f"Auto-filled CPT code(s) from {source_label}: {cpt_codes_to_save}"
                         )
 
                 deps["add_surgical_case"](

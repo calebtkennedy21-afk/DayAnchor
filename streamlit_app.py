@@ -20,6 +20,7 @@ from clinical_reference import (
     suggest_cpt_codes_for_case as ref_suggest_cpt_codes_for_case,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
+from cpt_reference import CPT_REFERENCE
 import ai_workflows
 import app_bootstrap
 import data_access
@@ -5287,6 +5288,7 @@ page_shared_deps = {
     "render_or_calendar_compact": render_or_calendar_compact,
     "suggest_cpt_codes_for_case": ref_suggest_cpt_codes_for_case,
     "suggest_protocols_for_case": ref_suggest_protocols_for_case,
+    "cpt_reference": CPT_REFERENCE,
     "status_label": status_label,
     "generate_ai_plan": generate_ai_plan,
     "generate_ai_schedule": generate_ai_schedule,

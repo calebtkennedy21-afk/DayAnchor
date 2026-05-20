@@ -24,6 +24,21 @@ def text_keywords(value):
     return [item for item in tokens if item not in stop_words]
 
 
+def _cpt_case_terms(item):
+    return set(
+        text_keywords(
+            " ".join(
+                [
+                    str(item.get("procedure_name") or ""),
+                    str(item.get("anatomical_location") or ""),
+                    str(item.get("education_notes") or ""),
+                    str(item.get("notes") or ""),
+                ]
+            )
+        )
+    )
+
+
 def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
     case_text = " ".join(
         [
@@ -58,22 +73,11 @@ def suggest_protocols_for_case(case_item, protocol_documents, max_items=3):
     return ranked[:max_items]
 
 
-def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3):
+def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3, cpt_reference=None):
     target_procedure = str(case_item.get("procedure_name") or "").strip().lower()
     target_location = str(case_item.get("anatomical_location") or "").strip().lower()
     target_stream = str(case_item.get("case_stream") or "").strip().lower()
-    target_terms = set(
-        text_keywords(
-            " ".join(
-                [
-                    str(case_item.get("procedure_name") or ""),
-                    str(case_item.get("anatomical_location") or ""),
-                    str(case_item.get("education_notes") or ""),
-                    str(case_item.get("notes") or ""),
-                ]
-            )
-        )
-    )
+    target_terms = _cpt_case_terms(case_item)
 
     if not target_procedure and not target_location and not target_terms:
         return []
@@ -87,18 +91,7 @@ def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3):
         prior_procedure = str(item.get("procedure_name") or "").strip().lower()
         prior_location = str(item.get("anatomical_location") or "").strip().lower()
         prior_stream = str(item.get("case_stream") or "").strip().lower()
-        prior_terms = set(
-            text_keywords(
-                " ".join(
-                    [
-                        str(item.get("procedure_name") or ""),
-                        str(item.get("anatomical_location") or ""),
-                        str(item.get("education_notes") or ""),
-                        str(item.get("notes") or ""),
-                    ]
-                )
-            )
-        )
+        prior_terms = _cpt_case_terms(item)
 
         overlap_terms = sorted(list(target_terms.intersection(prior_terms)))
         score = 0
@@ -118,7 +111,45 @@ def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3):
                 score,
                 overlap_terms[:6],
                 cpt_codes,
-                item,
+                {
+                    "matched_case_id": item.get("id"),
+                    "matched_procedure_name": item.get("procedure_name") or "",
+                    "matched_category": "Historical case",
+                    "match_source": "historical",
+                },
+            )
+        )
+
+    for ref_item in cpt_reference or []:
+        code = str(ref_item.get("code") or "").strip()
+        description = str(ref_item.get("description") or "").strip()
+        category = str(ref_item.get("category") or "").strip()
+        if not code or not description:
+            continue
+
+        combined_reference_text = f"{category} {description}".lower()
+        reference_terms = set(text_keywords(combined_reference_text))
+        overlap_terms = sorted(list(target_terms.intersection(reference_terms)))
+        score = len(overlap_terms) * 2
+        if target_location and target_location in combined_reference_text:
+            score += 2
+        if target_procedure and target_procedure in description.lower():
+            score += 6
+
+        if score <= 0:
+            continue
+
+        ranked.append(
+            (
+                score,
+                overlap_terms[:6],
+                code,
+                {
+                    "matched_case_id": None,
+                    "matched_procedure_name": description,
+                    "matched_category": category,
+                    "match_source": "reference",
+                },
             )
         )
 
@@ -135,8 +166,10 @@ def suggest_cpt_codes_for_case(case_item, surgical_cases, max_items=3):
                 "cpt_codes": cpt_codes,
                 "score": score,
                 "overlap_terms": overlap_terms,
-                "matched_case_id": item.get("id"),
-                "matched_procedure_name": item.get("procedure_name") or "",
+                "matched_case_id": item.get("matched_case_id"),
+                "matched_procedure_name": item.get("matched_procedure_name") or "",
+                "matched_category": item.get("matched_category") or "",
+                "match_source": item.get("match_source") or "historical",
             }
         )
         if len(deduped) >= max_items:

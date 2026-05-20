@@ -124,3 +124,34 @@ def test_suggest_cpt_codes_for_case_skips_cases_without_cpt_codes():
     assert len(suggestions) == 1
     assert suggestions[0]["cpt_codes"] == "29898"
     assert suggestions[0]["matched_case_id"] == 2
+
+
+def test_suggest_cpt_codes_for_case_falls_back_to_reference_list():
+    case_item = {
+        "procedure_name": "Ankle arthroscopy with extensive debridement",
+        "anatomical_location": "Ankle",
+        "case_stream": "Main OR",
+    }
+
+    suggestions = suggest_cpt_codes_for_case(
+        case_item,
+        surgical_cases=[],
+        max_items=2,
+        cpt_reference=[
+            {
+                "code": "29898",
+                "description": "Arthroscopy, ankle (tibiotalar and fibulotalar joints), surgical; debridement, extensive",
+                "category": "ARTHROSCOPY",
+            },
+            {
+                "code": "28080",
+                "description": "Excision, interdigital (Morton) neuroma, single, each",
+                "category": "FOREFOOT",
+            },
+        ],
+    )
+
+    assert len(suggestions) == 1
+    assert suggestions[0]["cpt_codes"] == "29898"
+    assert suggestions[0]["match_source"] == "reference"
+    assert suggestions[0]["matched_category"] == "ARTHROSCOPY"
