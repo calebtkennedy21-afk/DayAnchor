@@ -89,6 +89,8 @@ if "surgical_cases" not in st.session_state:
     st.session_state.surgical_cases = []
 if "protocol_documents" not in st.session_state:
     st.session_state.protocol_documents = []
+if "case_protocol_links" not in st.session_state:
+    st.session_state.case_protocol_links = []
 if "personal_goals" not in st.session_state:
     st.session_state.personal_goals = []
 if "personal_goal_checkins" not in st.session_state:
@@ -738,6 +740,17 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS surgical_case_protocol_links (
+                            id BIGSERIAL PRIMARY KEY,
+                            case_id BIGINT NOT NULL REFERENCES surgical_cases(id) ON DELETE CASCADE,
+                            protocol_id BIGINT NOT NULL REFERENCES protocol_documents(id) ON DELETE CASCADE,
+                            created_date DATE NOT NULL,
+                            UNIQUE(case_id, protocol_id)
+                        )
+                        """
+                    )
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -941,6 +954,7 @@ def delete_surgical_case(case_id):
                 cur.execute("DELETE FROM surgical_cases WHERE id = %s", (case_id,))
         return
     st.session_state.surgical_cases = [item for item in st.session_state.surgical_cases if item.get("id") != case_id]
+    st.session_state.case_protocol_links = [item for item in st.session_state.case_protocol_links if item.get("case_id") != case_id]
 
 
 def load_protocol_documents():
@@ -990,6 +1004,7 @@ def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime
                         notes,
                         created_date
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                     """,
                     (
                         surgeon_value,
@@ -1001,7 +1016,8 @@ def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime
                         date.today(),
                     ),
                 )
-        return
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
 
     next_id = max([item.get("id", 0) for item in st.session_state.protocol_documents], default=0) + 1
     st.session_state.protocol_documents.append(
@@ -1016,6 +1032,89 @@ def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime
             "created_date": date.today(),
         }
     )
+    return next_id
+
+
+def update_protocol_document(doc_id, surgeon_label, protocol_name, notes="", upload_name=None, upload_mime=None, upload_bytes=None):
+    surgeon_value = (surgeon_label or "").strip() or "Dr. Braden Boyer (BB)"
+    protocol_value = (protocol_name or "").strip()
+    notes_value = (notes or "").strip()
+
+    if db_enabled():
+        set_parts = [
+            "surgeon_label = %s",
+            "protocol_name = %s",
+            "notes = %s",
+        ]
+        values = [surgeon_value, protocol_value, notes_value]
+        if upload_bytes:
+            set_parts.extend(["file_name = %s", "file_mime = %s", "file_bytes = %s"])
+            values.extend([upload_name, upload_mime, upload_bytes])
+        values.append(doc_id)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE protocol_documents SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    for item in st.session_state.protocol_documents:
+        if item.get("id") == doc_id:
+            item["surgeon_label"] = surgeon_value
+            item["protocol_name"] = protocol_value
+            item["notes"] = notes_value
+            if upload_bytes:
+                item["file_name"] = upload_name
+                item["file_mime"] = upload_mime
+                item["file_bytes"] = upload_bytes
+            return
+
+
+def load_case_protocol_links():
+    if not db_enabled():
+        return st.session_state.case_protocol_links
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT case_id, protocol_id
+                    FROM surgical_case_protocol_links
+                    ORDER BY protocol_id, case_id
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st.session_state.case_protocol_links
+
+
+def set_protocol_case_links(protocol_id, case_ids):
+    normalized_case_ids = sorted({int(item) for item in (case_ids or []) if item is not None})
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM surgical_case_protocol_links WHERE protocol_id = %s", (protocol_id,))
+                for case_id in normalized_case_ids:
+                    cur.execute(
+                        """
+                        INSERT INTO surgical_case_protocol_links (case_id, protocol_id, created_date)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (case_id, protocol_id) DO NOTHING
+                        """,
+                        (case_id, protocol_id, date.today()),
+                    )
+        return
+
+    st.session_state.case_protocol_links = [
+        item
+        for item in st.session_state.case_protocol_links
+        if item.get("protocol_id") != protocol_id
+    ]
+    st.session_state.case_protocol_links.extend(
+        [
+            {"case_id": case_id, "protocol_id": protocol_id}
+            for case_id in normalized_case_ids
+        ]
+    )
 
 
 def delete_protocol_document(doc_id):
@@ -1025,6 +1124,7 @@ def delete_protocol_document(doc_id):
                 cur.execute("DELETE FROM protocol_documents WHERE id = %s", (doc_id,))
         return
     st.session_state.protocol_documents = [item for item in st.session_state.protocol_documents if item.get("id") != doc_id]
+    st.session_state.case_protocol_links = [item for item in st.session_state.case_protocol_links if item.get("protocol_id") != doc_id]
 
 
 def text_keywords(value):
@@ -5464,6 +5564,8 @@ page_shared_deps = {
     "set_task_status": set_task_status,
     "load_surgical_cases": load_surgical_cases,
     "load_protocol_documents": load_protocol_documents,
+    "load_case_protocol_links": load_case_protocol_links,
+    "set_protocol_case_links": set_protocol_case_links,
     "update_surgical_case": update_surgical_case,
     "predicted_or_days": predicted_or_days,
     "render_or_calendar_compact": render_or_calendar_compact,
@@ -5646,6 +5748,7 @@ st.markdown('<p class="section-lead">Navigate by lane and workflow area from the
 tasks = load_tasks()
 surgical_cases = load_surgical_cases()
 protocol_documents = load_protocol_documents()
+case_protocol_links = load_case_protocol_links()
 query = (search_query or "").strip().lower()
 all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
 all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
@@ -5747,20 +5850,43 @@ elif current_page == "Anatomy":
 
 # --- Physical Therapy Protocols Page ---
 elif current_page == "Physical Therapy Protocols":
-    render_page_banner("pt", "Physical Therapy Protocols", "Upload, search, and view PT protocols for surgical and non-operative care.")
+    render_page_banner("pt", "Physical Therapy Protocols", "Upload, edit, and link PT protocols with surgical and non-operative cases.")
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
-    # Upload form
+    sorted_cases = sorted(
+        surgical_cases,
+        key=lambda item: (item.get("case_date") or date.min, item.get("id") or 0),
+        reverse=True,
+    )
+    case_options = [item.get("id") for item in sorted_cases if item.get("id") is not None]
+    case_label_map = {}
+    for item in sorted_cases:
+        case_id = item.get("id")
+        if case_id is None:
+            continue
+        case_date_value = item.get("case_date")
+        case_date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else "No date"
+        case_label_map[case_id] = f"{case_date_label} - {item.get('procedure_name') or 'Unnamed case'} ({item.get('case_stream') or 'Unknown stream'})"
+
     with st.form("pt_protocol_upload_form"):
-        pt_protocol_name = st.text_input("Protocol title")
-        pt_protocol_notes = st.text_area("Protocol notes", height=80, placeholder="Indications, steps, restrictions, pearls...")
-        pt_protocol_file = st.file_uploader(
-            "Protocol file",
-            type=["pdf", "doc", "docx", "txt", "md"],
-            key="pt_protocol_file",
-            help="Upload non-PHI PT protocol documents only."
+        upload_cols = st.columns(2)
+        with upload_cols[0]:
+            pt_protocol_name = st.text_input("Protocol title")
+        with upload_cols[1]:
+            pt_protocol_file = st.file_uploader(
+                "Protocol file",
+                type=["pdf", "doc", "docx", "txt", "md"],
+                key="pt_protocol_file",
+                help="Upload non-PHI PT protocol documents only.",
+            )
+        pt_protocol_notes = st.text_area("Protocol notes", height=90, placeholder="Indications, milestones, restrictions, and progression cues...")
+        pt_linked_case_ids = st.multiselect(
+            "Link to cases (optional)",
+            options=case_options,
+            format_func=lambda case_id: case_label_map.get(case_id, f"Case {case_id}"),
+            help="Choose one or more cases this PT protocol should be attached to.",
         )
-        pt_protocol_submit = st.form_submit_button("Upload protocol", type="primary")
+        pt_protocol_submit = st.form_submit_button("Upload PT protocol", type="primary")
 
     if pt_protocol_submit:
         if not pt_protocol_file:
@@ -5770,8 +5896,7 @@ elif current_page == "Physical Therapy Protocols":
             if len(file_bytes) > 12 * 1024 * 1024:
                 st.warning("File is too large. Keep uploads under 12 MB.")
             else:
-                # Use a special surgeon_label to distinguish PT protocols
-                add_protocol_document(
+                new_doc_id = add_protocol_document(
                     surgeon_label="Physical Therapy",
                     protocol_name=pt_protocol_name,
                     upload_name=pt_protocol_file.name,
@@ -5779,15 +5904,29 @@ elif current_page == "Physical Therapy Protocols":
                     upload_bytes=file_bytes,
                     notes=pt_protocol_notes,
                 )
+                if new_doc_id and pt_linked_case_ids:
+                    set_protocol_case_links(new_doc_id, pt_linked_case_ids)
                 st.success("PT protocol uploaded.")
                 st.rerun()
 
-    # Search and filter
+    st.markdown('<div style="height: 0.75rem;"></div>', unsafe_allow_html=True)
     pt_query = st.text_input("Search PT protocols", placeholder="Title, filename, or notes")
     pt_protocols = [doc for doc in protocol_documents if str(doc.get("surgeon_label")).strip().lower() == "physical therapy"]
     if pt_query.strip():
         q = pt_query.strip().lower()
-        pt_protocols = [doc for doc in pt_protocols if q in (str(doc.get("protocol_name") or "") + " " + str(doc.get("file_name") or "") + " " + str(doc.get("notes") or "")).lower()]
+        pt_protocols = [
+            doc
+            for doc in pt_protocols
+            if q in (str(doc.get("protocol_name") or "") + " " + str(doc.get("file_name") or "") + " " + str(doc.get("notes") or "")).lower()
+        ]
+
+    links_by_protocol = {}
+    for item in case_protocol_links:
+        protocol_id = item.get("protocol_id")
+        case_id = item.get("case_id")
+        if protocol_id is None or case_id is None:
+            continue
+        links_by_protocol.setdefault(protocol_id, []).append(case_id)
 
     if pt_protocols:
         for doc in pt_protocols:
@@ -5795,11 +5934,20 @@ elif current_page == "Physical Therapy Protocols":
             doc_bytes = doc.get("file_bytes")
             if isinstance(doc_bytes, memoryview):
                 doc_bytes = bytes(doc_bytes)
-            st.markdown(f"- **{doc.get('protocol_name')}** · {doc.get('file_name')}", unsafe_allow_html=True)
-            if doc.get("notes"):
-                st.caption(doc.get("notes"))
-            doc_cols = st.columns([1, 1, 1])
-            with doc_cols[0]:
+
+            linked_case_ids = [case_id for case_id in links_by_protocol.get(doc_id, []) if case_id in case_label_map]
+            linked_case_text = ", ".join(case_label_map[case_id] for case_id in linked_case_ids) if linked_case_ids else "No linked cases"
+
+            st.markdown(
+                "<div style='border:1px solid #d8dee7; border-radius:14px; padding:1rem; margin:0.75rem 0; background:#ffffff;'>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"### {doc.get('protocol_name') or 'Untitled protocol'}")
+            st.caption(f"File: {doc.get('file_name') or 'Unknown'}")
+            st.caption(f"Linked cases: {linked_case_text}")
+
+            action_cols = st.columns([1, 1, 2])
+            with action_cols[0]:
                 if doc_bytes:
                     st.download_button(
                         label="Download",
@@ -5808,22 +5956,59 @@ elif current_page == "Physical Therapy Protocols":
                         mime=doc.get("file_mime") or "application/octet-stream",
                         key=f"pt_protocol_download_{doc_id}",
                     )
-            with doc_cols[1]:
-                if st.button("Delete", key=f"pt_protocol_delete_{doc_id}"):
-                    delete_protocol_document(doc_id)
-                    st.success("Protocol deleted.")
-                    st.rerun()
-            with doc_cols[2]:
-                with st.expander("View PDF", expanded=False):
+            with action_cols[1]:
+                with st.expander("Preview", expanded=False):
                     page_sections._render_protocol_pdf_preview(
                         st,
                         file_bytes=doc_bytes,
                         file_mime=doc.get("file_mime"),
                         file_name=doc.get("file_name") or "protocol.pdf",
-                        height=460,
+                        height=420,
                     )
+
+            with st.form(f"pt_protocol_card_edit_{doc_id}"):
+                edit_name = st.text_input("Protocol title", value=doc.get("protocol_name") or "")
+                edit_notes = st.text_area("Protocol notes", value=doc.get("notes") or "", height=90)
+                edit_linked_case_ids = st.multiselect(
+                    "Linked cases",
+                    options=case_options,
+                    default=linked_case_ids,
+                    format_func=lambda case_id: case_label_map.get(case_id, f"Case {case_id}"),
+                )
+                replacement_file = st.file_uploader(
+                    "Replace file (optional)",
+                    type=["pdf", "doc", "docx", "txt", "md"],
+                    key=f"pt_protocol_replace_file_{doc_id}",
+                )
+
+                form_cols = st.columns([1, 1, 2])
+                save_clicked = form_cols[0].form_submit_button("Save changes", type="primary")
+                delete_clicked = form_cols[1].form_submit_button("Delete")
+
+            if save_clicked:
+                replacement_bytes = replacement_file.getvalue() if replacement_file else None
+                update_protocol_document(
+                    doc_id=doc_id,
+                    surgeon_label="Physical Therapy",
+                    protocol_name=edit_name,
+                    notes=edit_notes,
+                    upload_name=replacement_file.name if replacement_file else None,
+                    upload_mime=getattr(replacement_file, "type", None) if replacement_file else None,
+                    upload_bytes=replacement_bytes,
+                )
+                set_protocol_case_links(doc_id, edit_linked_case_ids)
+                st.success("PT protocol updated.")
+                st.rerun()
+
+            if delete_clicked:
+                delete_protocol_document(doc_id)
+                st.success("PT protocol deleted.")
+                st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
     else:
-        st.markdown('<div class="empty-state">No PT protocols uploaded yet. Add physical therapy protocols for surgical and non-operative care.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state">No PT protocols uploaded yet. Add your first protocol above, then link it to one or more cases.</div>', unsafe_allow_html=True)
+
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
 elif current_page == "AI":

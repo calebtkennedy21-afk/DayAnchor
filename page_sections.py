@@ -702,6 +702,29 @@ def render_surgical_cases_panel(
 
     st_module.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
     st_module.markdown('<div class="panel-title"><h3>Case Library</h3><span>All logged surgical cases organized by status</span></div>', unsafe_allow_html=True)
+
+    case_protocol_links = []
+    if deps.get("load_case_protocol_links"):
+        try:
+            case_protocol_links = deps["load_case_protocol_links"]() or []
+        except Exception:
+            case_protocol_links = []
+
+    links_by_case = {}
+    links_by_protocol = {}
+    for item in case_protocol_links:
+        case_id = item.get("case_id")
+        protocol_id = item.get("protocol_id")
+        if case_id is None or protocol_id is None:
+            continue
+        links_by_case.setdefault(case_id, set()).add(protocol_id)
+        links_by_protocol.setdefault(protocol_id, set()).add(case_id)
+
+    protocol_by_id = {
+        item.get("id"): item
+        for item in protocol_documents
+        if item.get("id") is not None
+    }
     
     if surgical_cases:
         planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
@@ -761,6 +784,62 @@ def render_surgical_cases_panel(
                 if item.get("education_notes"):
                     with st_module_ref.expander("Educational Description", expanded=False):
                         st_module_ref.write(item.get("education_notes"))
+
+                linked_protocol_ids = sorted(links_by_case.get(case_id, set()))
+                linked_pt_docs = [
+                    protocol_by_id.get(protocol_id)
+                    for protocol_id in linked_protocol_ids
+                    if protocol_by_id.get(protocol_id)
+                    and str(protocol_by_id.get(protocol_id).get("surgeon_label")).strip().lower() == "physical therapy"
+                ]
+                if linked_pt_docs:
+                    with st_module_ref.expander(f"Linked PT Protocols ({len(linked_pt_docs)})", expanded=False):
+                        for linked_doc in linked_pt_docs:
+                            linked_doc_id = linked_doc.get("id")
+                            linked_doc_bytes = linked_doc.get("file_bytes")
+                            if isinstance(linked_doc_bytes, memoryview):
+                                linked_doc_bytes = bytes(linked_doc_bytes)
+
+                            st_module_ref.markdown(f"**{linked_doc.get('protocol_name') or 'Untitled PT Protocol'}**")
+                            if linked_doc.get("notes"):
+                                st_module_ref.caption(linked_doc.get("notes"))
+
+                            linked_cols = st_module_ref.columns([1, 1, 1, 2])
+                            with linked_cols[0]:
+                                if linked_doc_bytes:
+                                    st_module_ref.download_button(
+                                        label="Download",
+                                        data=linked_doc_bytes,
+                                        file_name=linked_doc.get("file_name") or "protocol.pdf",
+                                        mime=linked_doc.get("file_mime") or "application/octet-stream",
+                                        key=f"{panel_key_ref}_case_linked_download_{case_id}_{linked_doc_id}",
+                                    )
+                            with linked_cols[1]:
+                                preview_key = f"{panel_key_ref}_case_linked_preview_{case_id}_{linked_doc_id}"
+                                if st_module_ref.button("Preview", key=f"{panel_key_ref}_case_linked_preview_btn_{case_id}_{linked_doc_id}"):
+                                    st_module_ref.session_state[preview_key] = not st_module_ref.session_state.get(preview_key, False)
+                            with linked_cols[2]:
+                                if st_module_ref.button("Unlink", key=f"{panel_key_ref}_case_linked_unlink_{case_id}_{linked_doc_id}"):
+                                    if deps_ref.get("set_protocol_case_links") and linked_doc_id is not None:
+                                        remaining_case_ids = sorted(
+                                            case_link_id
+                                            for case_link_id in links_by_protocol.get(linked_doc_id, set())
+                                            if case_link_id != case_id
+                                        )
+                                        deps_ref["set_protocol_case_links"](linked_doc_id, remaining_case_ids)
+                                        st_module_ref.success("PT protocol unlinked from this case.")
+                                        st_module_ref.rerun()
+                                    else:
+                                        st_module_ref.warning("Unable to unlink protocol in this view.")
+
+                            if st_module_ref.session_state.get(preview_key, False):
+                                _render_protocol_pdf_preview(
+                                    st_module_ref,
+                                    linked_doc_bytes,
+                                    linked_doc.get("file_mime"),
+                                    linked_doc.get("file_name"),
+                                    height=380,
+                                )
                 
                 # Filter PT and non-PT protocols for suggestions
                 suggestions = deps_ref["suggest_protocols_for_case"](item, protocol_docs, max_items=6)
