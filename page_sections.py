@@ -1152,6 +1152,173 @@ def render_surgical_cases_panel(
     st_module.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_physical_therapy_protocols_panel(surgical_cases, protocol_documents, panel_key, deps, st_module=st):
+    st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+    st_module.markdown('<div class="panel-title"><h3>PT Protocol Library</h3><span>Upload, edit, and link PT protocols to cases</span></div>', unsafe_allow_html=True)
+    st_module.caption("Store only non-PHI rehabilitation protocols.")
+
+    case_protocol_links = []
+    if deps.get("load_case_protocol_links"):
+        try:
+            case_protocol_links = deps["load_case_protocol_links"]() or []
+        except Exception:
+            case_protocol_links = []
+
+    sorted_cases = sorted(
+        surgical_cases,
+        key=lambda item: (item.get("case_date") or date.min, item.get("id") or 0),
+        reverse=True,
+    )
+    case_options = [item.get("id") for item in sorted_cases if item.get("id") is not None]
+    case_label_map = {}
+    for item in sorted_cases:
+        case_id = item.get("id")
+        if case_id is None:
+            continue
+        case_date_value = item.get("case_date")
+        case_date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else "No date"
+        case_label_map[case_id] = f"{case_date_label} - {item.get('procedure_name') or 'Unnamed case'} ({item.get('case_stream') or 'Unknown stream'})"
+
+    with st_module.form(f"{panel_key}_pt_upload_form"):
+        pt_cols = st_module.columns(2)
+        with pt_cols[0]:
+            pt_protocol_name = st_module.text_input("Protocol title")
+        with pt_cols[1]:
+            pt_protocol_file = st_module.file_uploader(
+                "Protocol file",
+                type=["pdf", "doc", "docx", "txt", "md"],
+                key=f"{panel_key}_pt_upload_file",
+            )
+        pt_protocol_notes = st_module.text_area("Protocol notes", height=90)
+        pt_linked_case_ids = st_module.multiselect(
+            "Link to cases (optional)",
+            options=case_options,
+            format_func=lambda case_id: case_label_map.get(case_id, f"Case {case_id}"),
+        )
+        pt_submit = st_module.form_submit_button("Upload PT protocol", type="primary")
+
+    if pt_submit:
+        if not pt_protocol_file:
+            st_module.warning("Select a protocol file to upload.")
+        else:
+            file_bytes = pt_protocol_file.getvalue()
+            if len(file_bytes) > 12 * 1024 * 1024:
+                st_module.warning("File is too large. Keep uploads under 12 MB.")
+            else:
+                new_doc_id = deps["add_protocol_document"](
+                    surgeon_label="Physical Therapy",
+                    protocol_name=pt_protocol_name,
+                    upload_name=pt_protocol_file.name,
+                    upload_mime=getattr(pt_protocol_file, "type", None),
+                    upload_bytes=file_bytes,
+                    notes=pt_protocol_notes,
+                )
+                if new_doc_id and deps.get("set_protocol_case_links"):
+                    deps["set_protocol_case_links"](new_doc_id, pt_linked_case_ids)
+                st_module.success("PT protocol uploaded.")
+                st_module.rerun()
+
+    pt_query = st_module.text_input("Search PT protocols", placeholder="Title, filename, or notes")
+    pt_protocols = [doc for doc in protocol_documents if str(doc.get("surgeon_label")).strip().lower() == "physical therapy"]
+    if pt_query.strip():
+        q = pt_query.strip().lower()
+        pt_protocols = [
+            doc
+            for doc in pt_protocols
+            if q in (str(doc.get("protocol_name") or "") + " " + str(doc.get("file_name") or "") + " " + str(doc.get("notes") or "")).lower()
+        ]
+
+    links_by_protocol = {}
+    for item in case_protocol_links:
+        protocol_id = item.get("protocol_id")
+        case_id = item.get("case_id")
+        if protocol_id is None or case_id is None:
+            continue
+        links_by_protocol.setdefault(protocol_id, set()).add(case_id)
+
+    if pt_protocols:
+        for doc in pt_protocols:
+            doc_id = doc.get("id")
+            doc_bytes = doc.get("file_bytes")
+            if isinstance(doc_bytes, memoryview):
+                doc_bytes = bytes(doc_bytes)
+
+            linked_case_ids = sorted(case_id for case_id in links_by_protocol.get(doc_id, set()) if case_id in case_label_map)
+            linked_case_text = ", ".join(case_label_map[case_id] for case_id in linked_case_ids) if linked_case_ids else "No linked cases"
+
+            st_module.markdown(
+                "<div style='border:1px solid #d8dee7; border-radius:14px; padding:1rem; margin:0.75rem 0; background:#ffffff;'>",
+                unsafe_allow_html=True,
+            )
+            st_module.markdown(f"### {doc.get('protocol_name') or 'Untitled protocol'}")
+            st_module.caption(f"File: {doc.get('file_name') or 'Unknown'}")
+            st_module.caption(f"Linked cases: {linked_case_text}")
+
+            action_cols = st_module.columns([1, 1, 2])
+            with action_cols[0]:
+                if doc_bytes:
+                    st_module.download_button(
+                        label="Download",
+                        data=doc_bytes,
+                        file_name=doc.get("file_name") or "protocol.pdf",
+                        mime=doc.get("file_mime") or "application/octet-stream",
+                        key=f"{panel_key}_pt_download_{doc_id}",
+                    )
+            with action_cols[1]:
+                with st_module.expander("Preview", expanded=False):
+                    _render_protocol_pdf_preview(
+                        st_module,
+                        doc_bytes,
+                        doc.get("file_mime"),
+                        doc.get("file_name") or "protocol.pdf",
+                        height=380,
+                    )
+
+            with st_module.form(f"{panel_key}_pt_edit_form_{doc_id}"):
+                edit_name = st_module.text_input("Protocol title", value=doc.get("protocol_name") or "")
+                edit_notes = st_module.text_area("Protocol notes", value=doc.get("notes") or "", height=90)
+                edit_linked_case_ids = st_module.multiselect(
+                    "Linked cases",
+                    options=case_options,
+                    default=linked_case_ids,
+                    format_func=lambda case_id: case_label_map.get(case_id, f"Case {case_id}"),
+                )
+                replacement_file = st_module.file_uploader(
+                    "Replace file (optional)",
+                    type=["pdf", "doc", "docx", "txt", "md"],
+                    key=f"{panel_key}_pt_replace_{doc_id}",
+                )
+                edit_cols = st_module.columns([1, 1, 2])
+                save_clicked = edit_cols[0].form_submit_button("Save changes", type="primary")
+                delete_clicked = edit_cols[1].form_submit_button("Delete")
+
+            if save_clicked:
+                replacement_bytes = replacement_file.getvalue() if replacement_file else None
+                deps["update_protocol_document"](
+                    doc_id=doc_id,
+                    surgeon_label="Physical Therapy",
+                    protocol_name=edit_name,
+                    notes=edit_notes,
+                    upload_name=replacement_file.name if replacement_file else None,
+                    upload_mime=getattr(replacement_file, "type", None) if replacement_file else None,
+                    upload_bytes=replacement_bytes,
+                )
+                if deps.get("set_protocol_case_links"):
+                    deps["set_protocol_case_links"](doc_id, edit_linked_case_ids)
+                st_module.success("PT protocol updated.")
+                st_module.rerun()
+
+            if delete_clicked:
+                deps["delete_protocol_document"](doc_id)
+                st_module.success("PT protocol deleted.")
+                st_module.rerun()
+
+            st_module.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st_module.markdown('<div class="empty-state">No PT protocols uploaded yet. Add one above and link it to relevant cases.</div>', unsafe_allow_html=True)
+
+    st_module.markdown('</div>', unsafe_allow_html=True)
+
 
 def render_ai_panel(tasks, active_tasks, panel_key, deps, st_module=st):
     summary = deps["ai_workbench_summary"](tasks, active_tasks)

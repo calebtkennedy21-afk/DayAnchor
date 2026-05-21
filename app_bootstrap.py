@@ -32,6 +32,7 @@ def run_app(context, st_module=st):
     render_personal_goal_history_panel = context["render_personal_goal_history_panel"]
     render_clinic_command_center = context["render_clinic_command_center"]
     render_surgical_cases_panel = context["render_surgical_cases_panel"]
+    render_physical_therapy_protocols_panel = context["render_physical_therapy_protocols_panel"]
     render_task_calendar_panel = context["render_task_calendar_panel"]
     render_schedule_builder_panel = context["render_schedule_builder_panel"]
     render_task_list_panel = context["render_task_list_panel"]
@@ -99,7 +100,7 @@ def run_app(context, st_module=st):
         st_module.markdown("---")
         st_module.markdown("### Navigation")
         core_pages = ["Overview", "Personal", "Clinic", "Schedule"]
-        secondary_pages = ["Cases", "Anatomy", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
+        secondary_pages = ["Cases", "Anatomy", "Physical Therapy Protocols", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
         page_label_map = {f"Core - {page}": page for page in core_pages}
         page_label_map.update({f"More - {page}": page for page in secondary_pages})
         nav_labels = list(page_label_map.keys())
@@ -358,6 +359,9 @@ def run_app(context, st_module=st):
     elif current_page == "Anatomy":
         render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
         context["render_msk_anatomy_panel"](surgical_cases, protocol_documents, panel_key="anatomy_page")
+    elif current_page == "Physical Therapy Protocols":
+        render_page_banner("pt", "Physical Therapy Protocols", "Upload, edit, and link PT protocols with surgical and non-operative cases.")
+        render_physical_therapy_protocols_panel(surgical_cases, protocol_documents, panel_key="pt_page")
     elif current_page == "News":
         render_page_banner("overview", "Morning News", "Health, fitness, and medical news curated for you.")
         if render_full_news_page:

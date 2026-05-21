@@ -202,6 +202,9 @@ def delete_surgical_case(case_id, db_enabled_fn=None, get_connection_fn=None, st
                 cur.execute("DELETE FROM surgical_cases WHERE id = %s", (case_id,))
         return
     st_module.session_state.surgical_cases = [item for item in st_module.session_state.surgical_cases if item.get("id") != case_id]
+    st_module.session_state["case_protocol_links"] = [
+        item for item in st_module.session_state.get("case_protocol_links", []) if item.get("case_id") != case_id
+    ]
 
 
 def load_protocol_documents(db_enabled_fn, get_connection_fn, st_module=st):
@@ -261,6 +264,7 @@ def add_protocol_document(
                         notes,
                         created_date
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                     """,
                     (
                         surgeon_value,
@@ -272,7 +276,8 @@ def add_protocol_document(
                         date.today(),
                     ),
                 )
-        return
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
 
     next_id = max([item.get("id", 0) for item in st_module.session_state.protocol_documents], default=0) + 1
     st_module.session_state.protocol_documents.append(
@@ -286,6 +291,54 @@ def add_protocol_document(
             "notes": notes_value,
             "created_date": date.today(),
         }
+    )
+    return next_id
+
+
+def load_case_protocol_links(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return st_module.session_state.get("case_protocol_links", [])
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT case_id, protocol_id
+                    FROM surgical_case_protocol_links
+                    ORDER BY protocol_id, case_id
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st_module.session_state.get("case_protocol_links", [])
+
+
+def set_protocol_case_links(protocol_id, case_ids, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    normalized_case_ids = sorted({int(item) for item in (case_ids or []) if item is not None})
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM surgical_case_protocol_links WHERE protocol_id = %s", (protocol_id,))
+                for case_id in normalized_case_ids:
+                    cur.execute(
+                        """
+                        INSERT INTO surgical_case_protocol_links (case_id, protocol_id, created_date)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (case_id, protocol_id) DO NOTHING
+                        """,
+                        (case_id, protocol_id, date.today()),
+                    )
+        return
+
+    existing = st_module.session_state.get("case_protocol_links", [])
+    st_module.session_state["case_protocol_links"] = [
+        item
+        for item in existing
+        if item.get("protocol_id") != protocol_id
+    ]
+    st_module.session_state["case_protocol_links"].extend(
+        [{"case_id": case_id, "protocol_id": protocol_id} for case_id in normalized_case_ids]
     )
 
 
@@ -340,3 +393,6 @@ def delete_protocol_document(doc_id, db_enabled_fn=None, get_connection_fn=None,
                 cur.execute("DELETE FROM protocol_documents WHERE id = %s", (doc_id,))
         return
     st_module.session_state.protocol_documents = [item for item in st_module.session_state.protocol_documents if item.get("id") != doc_id]
+    st_module.session_state["case_protocol_links"] = [
+        item for item in st_module.session_state.get("case_protocol_links", []) if item.get("protocol_id") != doc_id
+    ]

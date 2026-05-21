@@ -5533,6 +5533,8 @@ load_protocol_documents = partial(data_access.load_protocol_documents, db_enable
 add_protocol_document = partial(data_access.add_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 update_protocol_document = partial(data_access.update_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 delete_protocol_document = partial(data_access.delete_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_case_protocol_links = partial(data_access.load_case_protocol_links, db_enabled, get_connection, st_module=st)
+set_protocol_case_links = partial(data_access.set_protocol_case_links, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
 parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
@@ -5583,6 +5585,7 @@ page_shared_deps = {
 
 render_overview_control_tower = partial(page_sections.render_overview_control_tower, deps=page_shared_deps, st_module=st)
 render_surgical_cases_panel = partial(page_sections.render_surgical_cases_panel, deps={**page_shared_deps, "add_surgical_case": add_surgical_case, "update_surgical_case": update_surgical_case, "delete_surgical_case": delete_surgical_case, "add_protocol_document": add_protocol_document, "update_protocol_document": update_protocol_document, "delete_protocol_document": delete_protocol_document}, st_module=st)
+render_physical_therapy_protocols_panel = partial(page_sections.render_physical_therapy_protocols_panel, deps={**page_shared_deps, "add_protocol_document": add_protocol_document, "update_protocol_document": update_protocol_document, "delete_protocol_document": delete_protocol_document}, st_module=st)
 render_ai_panel = partial(page_sections.render_ai_panel, deps=page_shared_deps, st_module=st)
 
 app_bootstrap.run_app(
@@ -5619,6 +5622,7 @@ app_bootstrap.run_app(
         "render_personal_goal_history_panel": render_personal_goal_history_panel,
         "render_clinic_command_center": render_clinic_command_center,
         "render_surgical_cases_panel": render_surgical_cases_panel,
+        "render_physical_therapy_protocols_panel": render_physical_therapy_protocols_panel,
         "render_task_calendar_panel": render_task_calendar_panel,
         "render_schedule_builder_panel": render_schedule_builder_panel,
         "render_task_list_panel": render_task_list_panel,
