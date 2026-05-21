@@ -4300,10 +4300,346 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
 
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot, ankle, lower leg, and knee reference for clinical context</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot and ankle first, with related orthopedic pathways and chain context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab = st.tabs(["Foot", "Ankle", "Lower Leg", "Knee", "Bones", "Fractures"])
+    pathways_tab, differential_tab, foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab, exam_tab, imaging_tab = st.tabs([
+        "Clinical Pathways",
+        "Differential Builder",
+        "Foot",
+        "Ankle",
+        "Lower Leg",
+        "Knee",
+        "Bones",
+        "Fractures",
+        "Exam Library",
+        "Imaging Helper",
+    ])
+
+    with pathways_tab:
+        st.markdown("### Foot and Ankle Clinical Pathways")
+        st.caption("Start with foot and ankle patterns, then extend to related structures when needed.")
+
+        pathway_map = {
+            "Plantar heel pain": {
+                "region": "Foot",
+                "differentials": ["Plantar fasciitis", "Calcaneal stress injury", "Baxter neuritis", "Insertional Achilles overlap"],
+                "exam": ["Windlass test", "First-step pain pattern", "Calcaneal squeeze", "Achilles insertion palpation"],
+                "imaging": "Weight-bearing foot X-ray first if bony concern; ultrasound or MRI for persistent soft-tissue or stress-injury concern.",
+                "related": ["Calf tightness", "Hip abductor weakness", "Lumbar referred pain"],
+                "terms": ["heel", "plantar", "fascia", "calcaneus", "achilles"],
+            },
+            "Medial ankle pain": {
+                "region": "Ankle",
+                "differentials": ["Posterior tibial tendon dysfunction", "Deltoid sprain", "Spring ligament injury", "Tarsal tunnel irritation"],
+                "exam": ["Single-leg heel raise", "Too-many-toes sign", "Deltoid tenderness", "Tinel at tarsal tunnel"],
+                "imaging": "Weight-bearing ankle/foot radiographs for alignment; MRI when tendon-ligament injury staging is needed.",
+                "related": ["Knee valgus pattern", "Hip rotation control", "Gait chain overload"],
+                "terms": ["medial ankle", "posterior tibial", "deltoid", "spring ligament", "flatfoot"],
+            },
+            "Lateral ankle instability": {
+                "region": "Ankle",
+                "differentials": ["ATFL/CFL insufficiency", "Peroneal tendon pathology", "Syndesmotic injury", "Osteochondral lesion"],
+                "exam": ["Anterior drawer", "Talar tilt", "Peroneal subluxation assessment", "Syndesmosis squeeze"],
+                "imaging": "X-ray first for fracture/alignment, then MRI when instability is recurrent or associated intra-articular injury is suspected.",
+                "related": ["Proprioception deficits", "Core/hip neuromuscular control", "Return-to-sport progression"],
+                "terms": ["atfl", "cfl", "ankle sprain", "peroneal", "syndesmosis"],
+            },
+            "Forefoot overload": {
+                "region": "Foot",
+                "differentials": ["Metatarsalgia", "Second MTP synovitis", "Morton neuroma", "Transfer metatarsalgia"],
+                "exam": ["Web-space compression", "Plantar plate stress", "First-ray mobility", "Callus distribution"],
+                "imaging": "Weight-bearing forefoot radiographs for alignment, ultrasound/MRI for neuroma or plantar-plate detail.",
+                "related": ["Hallux mechanics", "Gastrocnemius tightness", "Knee and hip loading strategy"],
+                "terms": ["metatarsal", "forefoot", "neuroma", "plantar plate", "hallux"],
+            },
+        }
+
+        pathway_choice = st.selectbox("Presentation pattern", list(pathway_map.keys()), key=f"{panel_key}_pathway_choice")
+        pathway = pathway_map[pathway_choice]
+
+        p_cols = st.columns(2)
+        with p_cols[0]:
+            st.markdown(f"**Primary region:** {pathway['region']}")
+            st.markdown("**Likely differentials**")
+            for item in pathway["differentials"]:
+                st.markdown(f"- {item}")
+            st.markdown("**Exam focus**")
+            for item in pathway["exam"]:
+                st.markdown(f"- {item}")
+        with p_cols[1]:
+            st.markdown("**Initial imaging strategy**")
+            st.write(pathway["imaging"])
+            st.markdown("**Related orthopedics to screen**")
+            for item in pathway["related"]:
+                st.markdown(f"- {item}")
+
+        ref_render_anatomy_related_widget(
+            f"{pathway['region']} Pathway",
+            pathway["terms"],
+            surgical_cases,
+            protocol_documents,
+            panel_key=f"{panel_key}_pathways_related",
+        )
+
+    with differential_tab:
+        st.markdown("### Foot and Ankle Differential Builder")
+        st.caption("Build a ranked differential from symptom pattern and exam findings, then jump to related cases and protocols.")
+
+        differential_library = [
+            {
+                "name": "Plantar fasciitis",
+                "locations": {"Plantar heel", "Medial heel"},
+                "onsets": {"Overuse/chronic"},
+                "behaviors": {"First-step morning pain", "Pain after prolonged standing", "Pain with running/push-off"},
+                "exam": {"Windlass positive", "Point tenderness at plantar heel"},
+                "imaging": "Weight-bearing foot radiographs first if bony concern; ultrasound can support plantar fascia thickening.",
+                "terms": ["plantar", "heel", "fascia", "foot"],
+            },
+            {
+                "name": "Posterior tibial tendon dysfunction",
+                "locations": {"Medial ankle", "Medial midfoot"},
+                "onsets": {"Overuse/chronic"},
+                "behaviors": {"Pain after prolonged standing", "Progressive arch collapse"},
+                "exam": {"Single-leg heel raise weakness", "Too-many-toes sign"},
+                "imaging": "Weight-bearing foot/ankle radiographs for alignment, MRI for tendon and spring-ligament staging.",
+                "terms": ["posterior tibial", "medial ankle", "flatfoot", "arch"],
+            },
+            {
+                "name": "Lateral ankle ligament injury",
+                "locations": {"Lateral ankle"},
+                "onsets": {"Acute traumatic"},
+                "behaviors": {"Pain with running/push-off", "Instability/giving-way"},
+                "exam": {"Anterior drawer laxity", "Talar tilt asymmetry"},
+                "imaging": "Weight-bearing ankle radiographs first; MRI if recurrent instability or persistent pain.",
+                "terms": ["lateral ankle", "atfl", "cfl", "ankle sprain"],
+            },
+            {
+                "name": "Syndesmotic injury",
+                "locations": {"High ankle"},
+                "onsets": {"Acute traumatic"},
+                "behaviors": {"Pain with running/push-off", "Instability/giving-way"},
+                "exam": {"Squeeze test positive", "External rotation stress pain"},
+                "imaging": "Ankle radiographs and stress views; MRI if high ankle sprain severity is unclear.",
+                "terms": ["syndesmosis", "high ankle", "aitfl", "ankle"],
+            },
+            {
+                "name": "Achilles tendinopathy",
+                "locations": {"Posterior heel", "Posterior ankle"},
+                "onsets": {"Overuse/chronic", "Subacute"},
+                "behaviors": {"Pain with running/push-off", "Morning stiffness"},
+                "exam": {"Achilles insertion tenderness", "Pain with resisted plantarflexion"},
+                "imaging": "Ultrasound is useful for tendon morphology; MRI for insertional or partial-thickness concern.",
+                "terms": ["achilles", "posterior heel", "tendon"],
+            },
+            {
+                "name": "Morton neuroma / intermetatarsal neuritis",
+                "locations": {"Forefoot", "Plantar forefoot"},
+                "onsets": {"Overuse/chronic", "Subacute"},
+                "behaviors": {"Forefoot numbness/tingling", "Pain after prolonged standing"},
+                "exam": {"Web-space compression pain", "Mulder click"},
+                "imaging": "Weight-bearing forefoot radiographs first; ultrasound or MRI for neuroma confirmation.",
+                "terms": ["neuroma", "forefoot", "intermetatarsal", "metatarsal"],
+            },
+            {
+                "name": "Calcaneal or metatarsal stress injury",
+                "locations": {"Plantar heel", "Forefoot", "Midfoot"},
+                "onsets": {"Overuse/chronic", "Subacute"},
+                "behaviors": {"Pain with running/push-off", "Night pain"},
+                "exam": {"Calcaneal squeeze pain", "Focal bony tenderness"},
+                "imaging": "Start with weight-bearing radiographs; MRI when stress reaction is suspected despite negative X-ray.",
+                "terms": ["stress", "calcaneus", "metatarsal", "fracture"],
+            },
+        ]
+
+        input_cols = st.columns(2)
+        with input_cols[0]:
+            pain_location = st.selectbox(
+                "Primary pain location",
+                [
+                    "Plantar heel",
+                    "Medial heel",
+                    "Medial ankle",
+                    "Lateral ankle",
+                    "High ankle",
+                    "Posterior heel",
+                    "Posterior ankle",
+                    "Forefoot",
+                    "Plantar forefoot",
+                    "Midfoot",
+                    "Medial midfoot",
+                ],
+                key=f"{panel_key}_diff_pain_location",
+            )
+            onset = st.selectbox(
+                "Onset pattern",
+                ["Acute traumatic", "Subacute", "Overuse/chronic"],
+                key=f"{panel_key}_diff_onset",
+            )
+        with input_cols[1]:
+            pain_behaviors = st.multiselect(
+                "Pain behavior",
+                [
+                    "First-step morning pain",
+                    "Pain after prolonged standing",
+                    "Pain with running/push-off",
+                    "Instability/giving-way",
+                    "Forefoot numbness/tingling",
+                    "Morning stiffness",
+                    "Progressive arch collapse",
+                    "Night pain",
+                ],
+                key=f"{panel_key}_diff_behaviors",
+            )
+            exam_findings = st.multiselect(
+                "Exam findings",
+                [
+                    "Windlass positive",
+                    "Point tenderness at plantar heel",
+                    "Single-leg heel raise weakness",
+                    "Too-many-toes sign",
+                    "Anterior drawer laxity",
+                    "Talar tilt asymmetry",
+                    "Squeeze test positive",
+                    "External rotation stress pain",
+                    "Achilles insertion tenderness",
+                    "Pain with resisted plantarflexion",
+                    "Web-space compression pain",
+                    "Mulder click",
+                    "Calcaneal squeeze pain",
+                    "Focal bony tenderness",
+                ],
+                key=f"{panel_key}_diff_exam",
+            )
+
+        ranked = []
+        selected_behaviors = set(pain_behaviors)
+        selected_exam = set(exam_findings)
+        for item in differential_library:
+            score = 0
+            if pain_location in item["locations"]:
+                score += 4
+            if onset in item["onsets"]:
+                score += 2
+            score += len(selected_behaviors.intersection(item["behaviors"])) * 2
+            score += len(selected_exam.intersection(item["exam"])) * 3
+            if score > 0:
+                matched_behaviors = sorted(selected_behaviors.intersection(item["behaviors"]))
+                matched_exam = sorted(selected_exam.intersection(item["exam"]))
+                ranked.append((score, item, matched_behaviors, matched_exam))
+
+        ranked.sort(key=lambda entry: entry[0], reverse=True)
+        top_matches = ranked[:5]
+
+        if top_matches:
+            st.markdown("#### Ranked Differential")
+            for rank_index, (score, item, matched_behaviors, matched_exam) in enumerate(top_matches, start=1):
+                confidence = "High" if score >= 10 else "Moderate" if score >= 6 else "Low"
+                with st.expander(f"{rank_index}. {item['name']} (score {score} · {confidence})", expanded=(rank_index == 1)):
+                    if matched_behaviors:
+                        st.markdown(f"**Matched behavior cues:** {', '.join(matched_behaviors)}")
+                    if matched_exam:
+                        st.markdown(f"**Matched exam cues:** {', '.join(matched_exam)}")
+                    st.markdown(f"**Initial imaging strategy:** {item['imaging']}")
+
+            top_terms = top_matches[0][1]["terms"]
+            ref_render_anatomy_related_widget(
+                "Differential Match",
+                top_terms,
+                surgical_cases,
+                protocol_documents,
+                panel_key=f"{panel_key}_differential_related",
+            )
+        else:
+            st.markdown('<div class="empty-state">Choose a pain location, behavior, and exam clues to generate ranked differentials.</div>', unsafe_allow_html=True)
+
+        st.markdown("#### Suggested PT Protocol Links for a Case")
+        st.caption("Select a case to surface matching PT protocols and link them in one click.")
+
+        case_options = [item.get("id") for item in surgical_cases if item.get("id") is not None]
+        case_label_map = {}
+        case_by_id = {}
+        for item in sorted(surgical_cases, key=lambda row: (row.get("case_date") or date.min, row.get("id") or 0), reverse=True):
+            case_id = item.get("id")
+            if case_id is None:
+                continue
+            case_date_value = item.get("case_date")
+            case_date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else "No date"
+            case_label_map[case_id] = f"{case_date_label} - {item.get('procedure_name') or 'Unnamed case'} ({item.get('case_stream') or 'Unknown stream'})"
+            case_by_id[case_id] = item
+
+        if not case_options:
+            st.markdown('<div class="empty-state">No cases available yet. Add a case first to link PT protocols.</div>', unsafe_allow_html=True)
+        else:
+            selected_case_id = st.selectbox(
+                "Case",
+                options=case_options,
+                key=f"{panel_key}_diff_selected_case",
+                format_func=lambda case_id: case_label_map.get(case_id, f"Case {case_id}"),
+            )
+            selected_case = case_by_id.get(selected_case_id)
+
+            case_protocol_links = []
+            try:
+                case_protocol_links = load_case_protocol_links() or []
+            except Exception:
+                case_protocol_links = []
+
+            links_by_protocol = {}
+            linked_protocol_ids_for_case = set()
+            for link_item in case_protocol_links:
+                protocol_id = link_item.get("protocol_id")
+                case_id = link_item.get("case_id")
+                if protocol_id is None or case_id is None:
+                    continue
+                links_by_protocol.setdefault(protocol_id, set()).add(case_id)
+                if case_id == selected_case_id:
+                    linked_protocol_ids_for_case.add(protocol_id)
+
+            pt_suggestions = []
+            if selected_case:
+                raw_suggestions = ref_suggest_protocols_for_case(selected_case, protocol_documents, max_items=10)
+                pt_suggestions = [
+                    (score, overlap_terms, doc)
+                    for score, overlap_terms, doc in raw_suggestions
+                    if str(doc.get("surgeon_label")).strip().lower() == "physical therapy"
+                ]
+
+            if pt_suggestions:
+                auto_link_cols = st.columns([1, 2])
+                with auto_link_cols[0]:
+                    if st.button("Auto-link top 3 PT suggestions", key=f"{panel_key}_diff_auto_link_pt"):
+                        for score, overlap_terms, doc in pt_suggestions[:3]:
+                            protocol_id = doc.get("id")
+                            if protocol_id is None:
+                                continue
+                            existing_case_ids = set(links_by_protocol.get(protocol_id, set()))
+                            existing_case_ids.add(selected_case_id)
+                            set_protocol_case_links(protocol_id, sorted(existing_case_ids))
+                        st.success("Top PT protocol suggestions linked to selected case.")
+                        st.rerun()
+
+                for idx, (score, overlap_terms, doc) in enumerate(pt_suggestions[:6], start=1):
+                    protocol_id = doc.get("id")
+                    linked_already = protocol_id in linked_protocol_ids_for_case
+                    row_cols = st.columns([2.4, 1.6, 1.2])
+                    with row_cols[0]:
+                        st.markdown(f"**{idx}. {doc.get('protocol_name') or 'Unnamed PT Protocol'}**")
+                        st.caption(f"Keywords: {', '.join(overlap_terms) if overlap_terms else 'No overlap terms'}")
+                    with row_cols[1]:
+                        status_text = "Linked" if linked_already else "Not linked"
+                        st.caption(f"Match score: {score} · {status_text}")
+                    with row_cols[2]:
+                        if linked_already:
+                            st.button("Linked", key=f"{panel_key}_diff_linked_{selected_case_id}_{protocol_id}", disabled=True)
+                        elif st.button("Link", key=f"{panel_key}_diff_link_{selected_case_id}_{protocol_id}"):
+                            existing_case_ids = set(links_by_protocol.get(protocol_id, set()))
+                            existing_case_ids.add(selected_case_id)
+                            set_protocol_case_links(protocol_id, sorted(existing_case_ids))
+                            st.success("PT protocol linked to selected case.")
+                            st.rerun()
+            else:
+                st.markdown('<div class="empty-state">No PT protocol suggestions found for this case yet. Add PT protocol notes with matching anatomy/procedure terms.</div>', unsafe_allow_html=True)
 
     with foot_tab:
         ref_render_anatomy_structure_spotlight("Foot", ref_anatomy_structure_map("Foot"), panel_key=f"{panel_key}_foot_spotlight")
@@ -4534,6 +4870,72 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 protocol_documents,
                 panel_key=f"{panel_key}_fractures_foot_related",
             )
+
+    with exam_tab:
+        st.markdown("### Orthopedic Exam Library")
+        st.caption("Foot and ankle emphasized, with adjacent-joint and kinetic-chain screening.")
+
+        exam_library = {
+            "Foot": [
+                ("Windlass test", "Plantar fascia irritability", "Reproduction of medial plantar heel pain with hallux dorsiflexion"),
+                ("Mulder click", "Morton neuroma", "Forefoot squeeze with symptomatic web-space click/pain"),
+                ("Single-leg heel rise", "Posterior tibial tendon function", "Pain, weakness, or inability suggests dysfunction"),
+            ],
+            "Ankle": [
+                ("Anterior drawer", "ATFL laxity", "Increased anterior talar translation versus contralateral side"),
+                ("Talar tilt", "CFL/lateral complex", "Excess inversion tilt compared to opposite ankle"),
+                ("Squeeze test", "Syndesmosis", "Pain over distal tibiofibular syndesmosis with proximal squeeze"),
+            ],
+            "Related Chain (Knee/Hip/Spine)": [
+                ("Single-leg squat", "Dynamic valgus control", "Poor frontal-plane control can drive foot/ankle overload"),
+                ("Hip abductor endurance", "Pelvic control in gait", "Trendelenburg pattern may increase distal load"),
+                ("Neurodynamic screen", "Lumbar referred symptoms", "Radicular symptoms can mimic distal pain patterns"),
+            ],
+        }
+
+        exam_region = st.radio(
+            "Exam region",
+            list(exam_library.keys()),
+            horizontal=True,
+            key=f"{panel_key}_exam_region",
+        )
+        for test_name, target, positive_clue in exam_library[exam_region]:
+            with st.expander(test_name, expanded=False):
+                st.markdown(f"**Targets:** {target}")
+                st.markdown(f"**Helpful positive clue:** {positive_clue}")
+
+    with imaging_tab:
+        st.markdown("### Imaging Helper")
+        st.caption("Quick orthopedic imaging pathways anchored to foot and ankle practice.")
+
+        imaging_scenarios = {
+            "Acute ankle injury": {
+                "first": "Weight-bearing ankle radiographs (or Ottawa-rule directed views).",
+                "next": "MRI if persistent pain/instability, osteochondral concern, or unclear soft tissue injury.",
+                "notes": "Always correlate with syndesmosis and deltoid exam findings.",
+            },
+            "Chronic heel pain": {
+                "first": "Weight-bearing foot radiographs.",
+                "next": "Ultrasound for plantar fascia/Achilles; MRI for stress injury or refractory symptoms.",
+                "notes": "Check proximal kinetic-chain drivers when imaging is not proportional to symptoms.",
+            },
+            "Medial arch collapse": {
+                "first": "Weight-bearing AP/lateral foot and ankle radiographs.",
+                "next": "MRI when posterior tibial tendon or spring ligament staging is needed.",
+                "notes": "Useful for operative planning and protocol selection.",
+            },
+            "Forefoot neurologic pain": {
+                "first": "Weight-bearing forefoot radiographs.",
+                "next": "Ultrasound or MRI for neuroma/plantar plate differentiation.",
+                "notes": "Combine with footwear and biomechanical assessment.",
+            },
+        }
+
+        imaging_choice = st.selectbox("Scenario", list(imaging_scenarios.keys()), key=f"{panel_key}_imaging_scenario")
+        selected_plan = imaging_scenarios[imaging_choice]
+        st.markdown(f"**First-line imaging:** {selected_plan['first']}")
+        st.markdown(f"**Escalation:** {selected_plan['next']}")
+        st.markdown(f"**Clinical note:** {selected_plan['notes']}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
