@@ -5570,7 +5570,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Navigation")
     core_pages = ["Overview", "Personal", "Clinic", "Schedule"]
-    secondary_pages = ["Cases", "Anatomy", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
+    secondary_pages = ["Cases", "Anatomy", "Physical Therapy Protocols", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
     page_label_map = {f"Core - {page}": page for page in core_pages}
     page_label_map.update({f"More - {page}": page for page in secondary_pages})
     nav_labels = list(page_label_map.keys())
@@ -5740,9 +5740,91 @@ elif current_page == "Schedule":
     with cols[1]:
         render_task_list_panel("Unscheduled Tasks", "Good candidates for AI auto-schedule", unscheduled_tasks, "unscheduled_page", "Everything is scheduled.")
 
+
 elif current_page == "Anatomy":
     render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
     render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy_page")
+
+# --- Physical Therapy Protocols Page ---
+elif current_page == "Physical Therapy Protocols":
+    render_page_banner("pt", "Physical Therapy Protocols", "Upload, search, and view PT protocols for surgical and non-operative care.")
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    # Upload form
+    with st.form("pt_protocol_upload_form"):
+        pt_protocol_name = st.text_input("Protocol title")
+        pt_protocol_notes = st.text_area("Protocol notes", height=80, placeholder="Indications, steps, restrictions, pearls...")
+        pt_protocol_file = st.file_uploader(
+            "Protocol file",
+            type=["pdf", "doc", "docx", "txt", "md"],
+            key="pt_protocol_file",
+            help="Upload non-PHI PT protocol documents only."
+        )
+        pt_protocol_submit = st.form_submit_button("Upload protocol", type="primary")
+
+    if pt_protocol_submit:
+        if not pt_protocol_file:
+            st.warning("Select a protocol file to upload.")
+        else:
+            file_bytes = pt_protocol_file.getvalue()
+            if len(file_bytes) > 12 * 1024 * 1024:
+                st.warning("File is too large. Keep uploads under 12 MB.")
+            else:
+                # Use a special surgeon_label to distinguish PT protocols
+                add_protocol_document(
+                    surgeon_label="Physical Therapy",
+                    protocol_name=pt_protocol_name,
+                    upload_name=pt_protocol_file.name,
+                    upload_mime=getattr(pt_protocol_file, "type", None),
+                    upload_bytes=file_bytes,
+                    notes=pt_protocol_notes,
+                )
+                st.success("PT protocol uploaded.")
+                st.rerun()
+
+    # Search and filter
+    pt_query = st.text_input("Search PT protocols", placeholder="Title, filename, or notes")
+    pt_protocols = [doc for doc in protocol_documents if str(doc.get("surgeon_label")).strip().lower() == "physical therapy"]
+    if pt_query.strip():
+        q = pt_query.strip().lower()
+        pt_protocols = [doc for doc in pt_protocols if q in (str(doc.get("protocol_name") or "") + " " + str(doc.get("file_name") or "") + " " + str(doc.get("notes") or "")).lower()]
+
+    if pt_protocols:
+        for doc in pt_protocols:
+            doc_id = doc.get("id")
+            doc_bytes = doc.get("file_bytes")
+            if isinstance(doc_bytes, memoryview):
+                doc_bytes = bytes(doc_bytes)
+            st.markdown(f"- **{doc.get('protocol_name')}** · {doc.get('file_name')}", unsafe_allow_html=True)
+            if doc.get("notes"):
+                st.caption(doc.get("notes"))
+            doc_cols = st.columns([1, 1, 1])
+            with doc_cols[0]:
+                if doc_bytes:
+                    st.download_button(
+                        label="Download",
+                        data=doc_bytes,
+                        file_name=doc.get("file_name") or "protocol.pdf",
+                        mime=doc.get("file_mime") or "application/octet-stream",
+                        key=f"pt_protocol_download_{doc_id}",
+                    )
+            with doc_cols[1]:
+                if st.button("Delete", key=f"pt_protocol_delete_{doc_id}"):
+                    delete_protocol_document(doc_id)
+                    st.success("Protocol deleted.")
+                    st.rerun()
+            with doc_cols[2]:
+                with st.expander("View PDF", expanded=False):
+                    page_sections._render_protocol_pdf_preview(
+                        st,
+                        file_bytes=doc_bytes,
+                        file_mime=doc.get("file_mime"),
+                        file_name=doc.get("file_name") or "protocol.pdf",
+                        height=460,
+                    )
+    else:
+        st.markdown('<div class="empty-state">No PT protocols uploaded yet. Add physical therapy protocols for surgical and non-operative care.</div>', unsafe_allow_html=True)
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
 elif current_page == "AI":
     render_page_banner("ai", "AI Workbench", "Plan, schedule, and review from one dedicated command center.")
