@@ -4213,6 +4213,20 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         else:
             bones_data = ref_anatomy_bones_map("Knee")
 
+        for bone_name, bone_info in bones_data.items():
+            with st.expander(f"**{bone_name}**", expanded=False):
+                st.markdown(f"**Summary:** {bone_info.get('summary', '')}")
+                
+                for key in ["anatomy", "landmarks", "function", "imaging", "procedure"]:
+                    if key in bone_info:
+                        label = key.replace("_", " ").title()
+                        st.markdown(f"**{label}:** {bone_info[key]}")
+                
+                if "pearls" in bone_info:
+                    st.markdown("**Pearls**")
+                    for pearl in bone_info["pearls"]:
+                        st.markdown(f"- {pearl}")
+
         if bones_region == "Foot Bones":
             st.markdown("### Related Foot Cases & Protocols")
             ref_render_anatomy_related_widget(
@@ -4238,20 +4252,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 protocol_documents,
                 panel_key=f"{panel_key}_bones_foot_related",
             )
-        
-        for bone_name, bone_info in bones_data.items():
-            with st.expander(f"**{bone_name}**", expanded=False):
-                st.markdown(f"**Summary:** {bone_info.get('summary', '')}")
-                
-                for key in ["anatomy", "landmarks", "function", "imaging", "procedure"]:
-                    if key in bone_info:
-                        label = key.replace("_", " ").title()
-                        st.markdown(f"**{label}:** {bone_info[key]}")
-                
-                if "pearls" in bone_info:
-                    st.markdown("**Pearls**")
-                    for pearl in bone_info["pearls"]:
-                        st.markdown(f"- {pearl}")
 
     with fractures_tab:
         st.markdown("### Fracture Types and Locations")
@@ -4272,6 +4272,18 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             fractures_data = ref_anatomy_fractures_map("Lower Leg")
         else:
             fractures_data = ref_anatomy_fractures_map("Knee")
+
+        for fracture_name, fracture_info in fractures_data.items():
+            with st.expander(f"**{fracture_name}**", expanded=False):
+                for key in ["location", "mechanism", "types", "clinical", "imaging", "treatment", "complications"]:
+                    if key in fracture_info:
+                        label = key.replace("_", " ").title()
+                        st.markdown(f"**{label}:** {fracture_info[key]}")
+                
+                if "pearls" in fracture_info:
+                    st.markdown("**Pearls**")
+                    for pearl in fracture_info["pearls"]:
+                        st.markdown(f"- {pearl}")
 
         if fracture_region == "Foot Fractures":
             st.markdown("### Related Foot Cases & Protocols")
@@ -4298,18 +4310,6 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 protocol_documents,
                 panel_key=f"{panel_key}_fractures_foot_related",
             )
-        
-        for fracture_name, fracture_info in fractures_data.items():
-            with st.expander(f"**{fracture_name}**", expanded=False):
-                for key in ["location", "mechanism", "types", "clinical", "imaging", "treatment", "complications"]:
-                    if key in fracture_info:
-                        label = key.replace("_", " ").title()
-                        st.markdown(f"**{label}:** {fracture_info[key]}")
-                
-                if "pearls" in fracture_info:
-                    st.markdown("**Pearls**")
-                    for pearl in fracture_info["pearls"]:
-                        st.markdown(f"- {pearl}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
