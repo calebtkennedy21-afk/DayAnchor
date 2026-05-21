@@ -4212,6 +4212,32 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             bones_data = ref_anatomy_bones_map("Lower Leg")
         else:
             bones_data = ref_anatomy_bones_map("Knee")
+
+        if bones_region == "Foot Bones":
+            st.markdown("### Related Foot Cases & Protocols")
+            ref_render_anatomy_related_widget(
+                "Foot Bone and Fracture",
+                [
+                    "foot",
+                    "hindfoot",
+                    "midfoot",
+                    "forefoot",
+                    "metatarsal",
+                    "phalanges",
+                    "sesamoid",
+                    "talus",
+                    "calcaneus",
+                    "navicular",
+                    "cuboid",
+                    "cuneiform",
+                    "fracture",
+                    "jones",
+                    "lisfranc",
+                ],
+                surgical_cases,
+                protocol_documents,
+                panel_key=f"{panel_key}_bones_foot_related",
+            )
         
         for bone_name, bone_info in bones_data.items():
             with st.expander(f"**{bone_name}**", expanded=False):
@@ -4246,6 +4272,32 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
             fractures_data = ref_anatomy_fractures_map("Lower Leg")
         else:
             fractures_data = ref_anatomy_fractures_map("Knee")
+
+        if fracture_region == "Foot Fractures":
+            st.markdown("### Related Foot Cases & Protocols")
+            ref_render_anatomy_related_widget(
+                "Foot Bone and Fracture",
+                [
+                    "foot",
+                    "hindfoot",
+                    "midfoot",
+                    "forefoot",
+                    "metatarsal",
+                    "phalanges",
+                    "sesamoid",
+                    "talus",
+                    "calcaneus",
+                    "navicular",
+                    "cuboid",
+                    "cuneiform",
+                    "fracture",
+                    "jones",
+                    "lisfranc",
+                ],
+                surgical_cases,
+                protocol_documents,
+                panel_key=f"{panel_key}_fractures_foot_related",
+            )
         
         for fracture_name, fracture_info in fractures_data.items():
             with st.expander(f"**{fracture_name}**", expanded=False):
