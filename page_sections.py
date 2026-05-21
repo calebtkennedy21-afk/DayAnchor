@@ -677,106 +677,163 @@ def render_surgical_cases_panel(
     deps["render_or_calendar_compact"](surgical_cases, predicted_labels, st_module.session_state[month_key], panel_key)
 
     st_module.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
-    st_module.markdown('<div class="panel-title"><h3>Recent Cases</h3><span>Track what was scheduled and what was done</span></div>', unsafe_allow_html=True)
+    st_module.markdown('<div class="panel-title"><h3>Case Library</h3><span>All logged surgical cases organized by status</span></div>', unsafe_allow_html=True)
+    
     if surgical_cases:
-        for item in surgical_cases[:20]:
-            case_id = item.get("id")
-            case_date_value = item.get("case_date")
-            date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
-            or_hint = predicted_labels.get(case_date_value)
-            hint_suffix = f" · {or_hint}" if or_hint else ""
-            st_module.markdown(
-                f"<div class='task-card'><div class='task-title'>{item.get('procedure_name')}</div>"
-                f"<div class='task-meta'><span class='pill'>{date_label}{hint_suffix}</span><span class='pill pill-category'>{item.get('case_stream')}</span><span class='pill pill-status'>{str(item.get('status', 'planned')).title()}</span><span class='pill'>{item.get('anatomical_location') or 'Location not specified'}</span></div>"
-                f"<p style='margin-top:0.6rem;'>{item.get('notes') or ''}</p></div>",
-                unsafe_allow_html=True,
-            )
-            if item.get("cpt_codes"):
-                st_module.caption(f"CPT code(s): {item.get('cpt_codes')}")
-            if item.get("education_url"):
-                st_module.markdown(f"[Case Education Link]({item.get('education_url')})")
-            if item.get("education_notes"):
-                with st_module.expander("Educational Description", expanded=False):
-                    st_module.write(item.get("education_notes"))
-
-            suggestions = deps["suggest_protocols_for_case"](item, protocol_documents, max_items=3)
-            if suggestions:
-                st_module.markdown("**Suggested Protocols**")
-                protocol_labels = []
-                protocol_map = {}
-                for score, overlap_terms, doc in suggestions:
-                    label = f"{doc.get('protocol_name')} (score: {score})"
-                    protocol_labels.append(label)
-                    protocol_map[label] = (score, overlap_terms, doc)
-
-                selected_protocol_label = st_module.selectbox(
-                    "Select protocol",
-                    protocol_labels,
-                    key=f"{panel_key}_case_protocol_select_{case_id}",
-                    label_visibility="collapsed",
+        planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
+        completed_cases = [item for item in surgical_cases if item.get("status") == "completed"]
+        canceled_cases = [item for item in surgical_cases if item.get("status") == "canceled"]
+        
+        planned_tab, completed_tab, canceled_tab = st_module.tabs([
+            f"📋 Planned ({len(planned_cases)})",
+            f"✓ Completed ({len(completed_cases)})",
+            f"⊘ Canceled ({len(canceled_cases)})"
+        ])
+        
+        def _render_case_card(case_list, st_module_ref, deps_ref, protocol_docs, predicted_labels_ref, panel_key_ref):
+            if not case_list:
+                st_module_ref.markdown('<div class="empty-state">No cases in this category.</div>', unsafe_allow_html=True)
+                return
+            
+            for item in case_list[:20]:
+                case_id = item.get("id")
+                case_date_value = item.get("case_date")
+                date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
+                or_hint = predicted_labels_ref.get(case_date_value)
+                hint_suffix = f" · {or_hint}" if or_hint else ""
+                
+                status = item.get("status", "planned")
+                status_color_map = {
+                    "planned": "#FFA500",
+                    "completed": "#28A745",
+                    "canceled": "#DC3545"
+                }
+                status_color = status_color_map.get(status, "#6C757D")
+                
+                stream = item.get("case_stream", "Unknown")
+                stream_icon_map = {
+                    "Main OR": "🏥",
+                    "DSC OR": "🚑",
+                    "TenJet": "⚡"
+                }
+                stream_icon = stream_icon_map.get(stream, "📍")
+                
+                st_module_ref.markdown(
+                    f"<div style='border-left: 4px solid {status_color}; padding: 1.2rem; margin: 0.8rem 0; background: #f9f9f9; border-radius: 0.4rem;'>"
+                    f"<div style='display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.8rem;'>"
+                    f"<div><div style='font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem;'>{item.get('procedure_name')}</div>"
+                    f"<div style='font-size: 0.9rem; color: #666;'>{item.get('anatomical_location') or 'Location not specified'}</div></div>"
+                    f"<div style='text-align: right;'>"
+                    f"<span style='display: inline-block; background: {status_color}; color: white; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; font-weight: 600; margin-left: 0.5rem;'>{str(status).title()}</span>"
+                    f"<span style='display: inline-block; background: #E3F2FD; color: #1976D2; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; margin-left: 0.5rem;'>{stream_icon} {stream}</span>"
+                    f"</div></div>"
+                    f"<div style='font-size: 0.9rem; color: #555; margin-bottom: 0.8rem;'>📅 {date_label}{hint_suffix}</div>",
+                    unsafe_allow_html=True,
                 )
-                selected_score, selected_overlap_terms, selected_doc = protocol_map[selected_protocol_label]
-                st_module.caption(
-                    f"Selected: {selected_doc.get('protocol_name')} · keywords: {', '.join(selected_overlap_terms)} · file: {selected_doc.get('file_name')}"
-                )
-                if selected_doc.get("notes"):
-                    st_module.write(selected_doc.get("notes"))
-                selected_doc_bytes = selected_doc.get("file_bytes")
-                if isinstance(selected_doc_bytes, memoryview):
-                    selected_doc_bytes = bytes(selected_doc_bytes)
-                selected_doc_id = selected_doc.get("id")
-                preview_visible_key = f"{panel_key}_case_preview_visible_{case_id}_{selected_doc_id}"
-                preview_controls = st_module.columns([1, 1, 3])
-                with preview_controls[0]:
-                    if st_module.button("View selected protocol", key=f"{panel_key}_case_preview_show_{case_id}_{selected_doc_id}"):
-                        st_module.session_state[preview_visible_key] = True
-                with preview_controls[1]:
-                    if st_module.button("Hide preview", key=f"{panel_key}_case_preview_hide_{case_id}_{selected_doc_id}"):
-                        st_module.session_state[preview_visible_key] = False
+                
+                if item.get("cpt_codes"):
+                    st_module_ref.markdown(f"**CPT Code(s):** `{item.get('cpt_codes')}`")
+                
+                if item.get("notes"):
+                    st_module_ref.markdown(f"**Notes:** {item.get('notes')}")
+                
+                if item.get("education_url"):
+                    st_module_ref.markdown(f"🔗 [Case Education Link]({item.get('education_url')})")
+                
+                if item.get("education_notes"):
+                    with st_module_ref.expander("📚 Educational Description", expanded=False):
+                        st_module_ref.write(item.get("education_notes"))
+                
+                suggestions = deps_ref["suggest_protocols_for_case"](item, protocol_docs, max_items=3)
+                if suggestions:
+                    with st_module_ref.expander("📋 Suggested Protocols", expanded=False):
+                        protocol_labels = []
+                        protocol_map = {}
+                        for score, overlap_terms, doc in suggestions:
+                            label = f"{doc.get('protocol_name')} (score: {score})"
+                            protocol_labels.append(label)
+                            protocol_map[label] = (score, overlap_terms, doc)
 
-                if st_module.session_state.get(preview_visible_key, False):
-                    _render_protocol_pdf_preview(
-                        st_module,
-                        selected_doc_bytes,
-                        selected_doc.get("file_mime"),
-                        selected_doc.get("file_name"),
-                        height=420,
+                        selected_protocol_label = st_module_ref.selectbox(
+                            "Select protocol",
+                            protocol_labels,
+                            key=f"{panel_key_ref}_case_protocol_select_{case_id}",
+                            label_visibility="collapsed",
+                        )
+                        selected_score, selected_overlap_terms, selected_doc = protocol_map[selected_protocol_label]
+                        st_module_ref.caption(
+                            f"Selected: {selected_doc.get('protocol_name')} · keywords: {', '.join(selected_overlap_terms)} · file: {selected_doc.get('file_name')}"
+                        )
+                        if selected_doc.get("notes"):
+                            st_module_ref.write(selected_doc.get("notes"))
+                        selected_doc_bytes = selected_doc.get("file_bytes")
+                        if isinstance(selected_doc_bytes, memoryview):
+                            selected_doc_bytes = bytes(selected_doc_bytes)
+                        selected_doc_id = selected_doc.get("id")
+                        preview_visible_key = f"{panel_key_ref}_case_preview_visible_{case_id}_{selected_doc_id}"
+                        preview_controls = st_module_ref.columns([1, 1, 3])
+                        with preview_controls[0]:
+                            if st_module_ref.button("View selected protocol", key=f"{panel_key_ref}_case_preview_show_{case_id}_{selected_doc_id}"):
+                                st_module_ref.session_state[preview_visible_key] = True
+                        with preview_controls[1]:
+                            if st_module_ref.button("Hide preview", key=f"{panel_key_ref}_case_preview_hide_{case_id}_{selected_doc_id}"):
+                                st_module_ref.session_state[preview_visible_key] = False
+
+                        if st_module_ref.session_state.get(preview_visible_key, False):
+                            _render_protocol_pdf_preview(
+                                st_module_ref,
+                                selected_doc_bytes,
+                                selected_doc.get("file_mime"),
+                                selected_doc.get("file_name"),
+                                height=420,
+                            )
+                        if selected_doc_bytes:
+                            st_module_ref.download_button(
+                                label="Download selected",
+                                data=selected_doc_bytes,
+                                file_name=selected_doc.get("file_name") or "protocol.pdf",
+                                mime=selected_doc.get("file_mime") or "application/octet-stream",
+                                key=f"{panel_key_ref}_case_suggested_download_selected_{case_id}_{selected_doc.get('id')}",
+                            )
+                
+                action_cols = st_module_ref.columns([1, 1, 1, 1])
+                with action_cols[0]:
+                    new_status = st_module_ref.selectbox(
+                        "Status",
+                        ["planned", "completed", "canceled"],
+                        index=["planned", "completed", "canceled"].index(item.get("status", "planned")) if item.get("status", "planned") in ["planned", "completed", "canceled"] else 0,
+                        key=f"{panel_key_ref}_status_{case_id}",
+                        label_visibility="collapsed",
                     )
-                if selected_doc_bytes:
-                    st_module.download_button(
-                        label="Download selected",
-                        data=selected_doc_bytes,
-                        file_name=selected_doc.get("file_name") or "protocol.pdf",
-                        mime=selected_doc.get("file_mime") or "application/octet-stream",
-                        key=f"{panel_key}_case_suggested_download_selected_{case_id}_{selected_doc.get('id')}",
+                with action_cols[1]:
+                    updated_cpt_codes = st_module_ref.text_input(
+                        "CPT",
+                        value=item.get("cpt_codes") or "",
+                        key=f"{panel_key_ref}_cpt_codes_{case_id}",
+                        label_visibility="collapsed",
+                        placeholder="CPT code(s)",
                     )
-            row_cols = st_module.columns([1, 1, 1, 1])
-            with row_cols[0]:
-                new_status = st_module.selectbox(
-                    "Status",
-                    ["planned", "completed", "canceled"],
-                    index=["planned", "completed", "canceled"].index(item.get("status", "planned")) if item.get("status", "planned") in ["planned", "completed", "canceled"] else 0,
-                    key=f"{panel_key}_status_{case_id}",
-                    label_visibility="collapsed",
-                )
-            with row_cols[1]:
-                updated_cpt_codes = st_module.text_input(
-                    "CPT",
-                    value=item.get("cpt_codes") or "",
-                    key=f"{panel_key}_cpt_codes_{case_id}",
-                    label_visibility="collapsed",
-                    placeholder="CPT code(s)",
-                )
-            with row_cols[2]:
-                if st_module.button("Update", key=f"{panel_key}_update_{case_id}"):
-                    deps["update_surgical_case"](case_id, status=new_status, cpt_codes=updated_cpt_codes)
-                    st_module.success("Case updated.")
-                    st_module.rerun()
-            with row_cols[3]:
-                if st_module.button("Delete", key=f"{panel_key}_delete_{case_id}"):
-                    deps["delete_surgical_case"](case_id)
-                    st_module.success("Case deleted.")
-                    st_module.rerun()
+                with action_cols[2]:
+                    if st_module_ref.button("💾 Update", key=f"{panel_key_ref}_update_{case_id}", use_container_width=True):
+                        deps_ref["update_surgical_case"](case_id, status=new_status, cpt_codes=updated_cpt_codes)
+                        st_module_ref.success("Case updated.")
+                        st_module_ref.rerun()
+                with action_cols[3]:
+                    if st_module_ref.button("🗑️ Delete", key=f"{panel_key_ref}_delete_{case_id}", use_container_width=True):
+                        deps_ref["delete_surgical_case"](case_id)
+                        st_module_ref.success("Case deleted.")
+                        st_module_ref.rerun()
+                
+                st_module_ref.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
+        
+        with planned_tab:
+            _render_case_card(planned_cases, st_module, deps, protocol_documents, predicted_labels, panel_key)
+        
+        with completed_tab:
+            _render_case_card(completed_cases, st_module, deps, protocol_documents, predicted_labels, panel_key)
+        
+        with canceled_tab:
+            _render_case_card(canceled_cases, st_module, deps, protocol_documents, predicted_labels, panel_key)
     else:
         st_module.markdown('<div class="empty-state">No surgical cases logged yet.</div>', unsafe_allow_html=True)
 
