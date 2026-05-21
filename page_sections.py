@@ -685,9 +685,9 @@ def render_surgical_cases_panel(
         canceled_cases = [item for item in surgical_cases if item.get("status") == "canceled"]
         
         planned_tab, completed_tab, canceled_tab = st_module.tabs([
-            f"📋 Planned ({len(planned_cases)})",
-            f"✓ Completed ({len(completed_cases)})",
-            f"⊘ Canceled ({len(canceled_cases)})"
+            f"Planned ({len(planned_cases)})",
+            f"Completed ({len(completed_cases)})",
+            f"Canceled ({len(canceled_cases)})"
         ])
         
         def _render_case_card(case_list, st_module_ref, deps_ref, protocol_docs, predicted_labels_ref, panel_key_ref):
@@ -711,23 +711,17 @@ def render_surgical_cases_panel(
                 status_color = status_color_map.get(status, "#6C757D")
                 
                 stream = item.get("case_stream", "Unknown")
-                stream_icon_map = {
-                    "Main OR": "🏥",
-                    "DSC OR": "🚑",
-                    "TenJet": "⚡"
-                }
-                stream_icon = stream_icon_map.get(stream, "📍")
                 
                 st_module_ref.markdown(
-                    f"<div style='border-left: 4px solid {status_color}; padding: 1.2rem; margin: 0.8rem 0; background: #f9f9f9; border-radius: 0.4rem;'>"
+                    f"<div style='border-left: 4px solid {status_color}; padding: 1.2rem; margin: 0.8rem 0; background: #fff; border: 1px solid #e0e0e0; border-left: 4px solid {status_color}; border-radius: 0.4rem;'>"
                     f"<div style='display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.8rem;'>"
-                    f"<div><div style='font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem;'>{item.get('procedure_name')}</div>"
-                    f"<div style='font-size: 0.9rem; color: #666;'>{item.get('anatomical_location') or 'Location not specified'}</div></div>"
+                    f"<div><div style='font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; color: #1a1a1a;'>{item.get('procedure_name')}</div>"
+                    f"<div style='font-size: 0.9rem; color: #333;'>{item.get('anatomical_location') or 'Location not specified'}</div></div>"
                     f"<div style='text-align: right;'>"
                     f"<span style='display: inline-block; background: {status_color}; color: white; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; font-weight: 600; margin-left: 0.5rem;'>{str(status).title()}</span>"
-                    f"<span style='display: inline-block; background: #E3F2FD; color: #1976D2; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; margin-left: 0.5rem;'>{stream_icon} {stream}</span>"
+                    f"<span style='display: inline-block; background: #f0f0f0; color: #333; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; margin-left: 0.5rem;'>{stream}</span>"
                     f"</div></div>"
-                    f"<div style='font-size: 0.9rem; color: #555; margin-bottom: 0.8rem;'>📅 {date_label}{hint_suffix}</div>",
+                    f"<div style='font-size: 0.9rem; color: #555; margin-bottom: 0.8rem;'>{date_label}{hint_suffix}</div>",
                     unsafe_allow_html=True,
                 )
                 
@@ -738,15 +732,15 @@ def render_surgical_cases_panel(
                     st_module_ref.markdown(f"**Notes:** {item.get('notes')}")
                 
                 if item.get("education_url"):
-                    st_module_ref.markdown(f"🔗 [Case Education Link]({item.get('education_url')})")
+                    st_module_ref.markdown(f"[Case Education Link]({item.get('education_url')})")
                 
                 if item.get("education_notes"):
-                    with st_module_ref.expander("📚 Educational Description", expanded=False):
+                    with st_module_ref.expander("Educational Description", expanded=False):
                         st_module_ref.write(item.get("education_notes"))
                 
                 suggestions = deps_ref["suggest_protocols_for_case"](item, protocol_docs, max_items=3)
                 if suggestions:
-                    with st_module_ref.expander("📋 Suggested Protocols", expanded=False):
+                    with st_module_ref.expander("Suggested Protocols", expanded=False):
                         protocol_labels = []
                         protocol_map = {}
                         for score, overlap_terms, doc in suggestions:
@@ -814,12 +808,12 @@ def render_surgical_cases_panel(
                         placeholder="CPT code(s)",
                     )
                 with action_cols[2]:
-                    if st_module_ref.button("💾 Update", key=f"{panel_key_ref}_update_{case_id}", use_container_width=True):
+                    if st_module_ref.button("Update", key=f"{panel_key_ref}_update_{case_id}", use_container_width=True):
                         deps_ref["update_surgical_case"](case_id, status=new_status, cpt_codes=updated_cpt_codes)
                         st_module_ref.success("Case updated.")
                         st_module_ref.rerun()
                 with action_cols[3]:
-                    if st_module_ref.button("🗑️ Delete", key=f"{panel_key_ref}_delete_{case_id}", use_container_width=True):
+                    if st_module_ref.button("Delete", key=f"{panel_key_ref}_delete_{case_id}", use_container_width=True):
                         deps_ref["delete_surgical_case"](case_id)
                         st_module_ref.success("Case deleted.")
                         st_module_ref.rerun()
