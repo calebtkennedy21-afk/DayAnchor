@@ -4,7 +4,7 @@ import calendar
 import streamlit as st
 
 
-def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, height=420):
+def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, height=420, start_page=1, max_preview_pages=5):
     if isinstance(file_bytes, memoryview):
         file_bytes = bytes(file_bytes)
     if not file_bytes:
@@ -29,18 +29,41 @@ def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, he
             st_module.caption("This PDF has no pages to preview.")
             return
 
-        preview_pages = min(total_pages, 5)
-        st_module.caption(f"Previewing {preview_pages} of {total_pages} page(s).")
-        for page_index in range(preview_pages):
+        first_page = max(1, int(start_page or 1))
+        if first_page > total_pages:
+            first_page = total_pages
+        start_index = first_page - 1
+        preview_pages = max(1, int(max_preview_pages or 5))
+        end_index = min(total_pages, start_index + preview_pages)
+
+        st_module.caption(
+            f"Previewing pages {start_index + 1}-{end_index} of {total_pages}."
+        )
+        for page_index in range(start_index, end_index):
             page = pdf_document[page_index]
             bitmap = page.render(scale=1.4)
             image = bitmap.to_pil()
             st_module.image(image, caption=f"Page {page_index + 1}", use_container_width=True)
 
-        if total_pages > preview_pages:
-            st_module.caption("Download the file to view additional pages.")
+        if end_index < total_pages:
+            st_module.caption("Use the page jump control to continue previewing later pages.")
     except Exception:
-        st_module.warning("Unable to render PDF preview in-app. Use Download selected to open it locally.")
+        st_module.warning("Unable to render PDF preview in-app.")
+
+
+def _resolve_default_schedule_time(value):
+    raw_value = str(value or "09:00").strip()
+    chunks = raw_value.split(":")
+    if len(chunks) < 2:
+        return time(9, 0)
+    try:
+        hour = int(chunks[0])
+        minute = int(chunks[1])
+    except ValueError:
+        return time(9, 0)
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    return time(hour, minute)
 
 
 def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
@@ -121,6 +144,215 @@ def render_overview_control_tower(
     next_scheduled = scheduled_tasks[:4]
     clinic_summary = deps["clinic_day_summary"](clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = deps["schedule_workload_snapshot"](active_tasks)
+
+    surgical_cases = []
+    protocol_documents = []
+    if deps.get("load_surgical_cases"):
+        try:
+            surgical_cases = deps["load_surgical_cases"]() or []
+        except Exception:
+            surgical_cases = []
+    if deps.get("load_protocol_documents"):
+        try:
+            protocol_documents = deps["load_protocol_documents"]() or []
+        except Exception:
+            protocol_documents = []
+
+    briefing_horizon_key = f"{panel_key}_briefing_horizon_days"
+    briefing_queue_depth_key = f"{panel_key}_briefing_queue_depth"
+    if briefing_horizon_key not in st_module.session_state:
+        st_module.session_state[briefing_horizon_key] = 7
+    if briefing_queue_depth_key not in st_module.session_state:
+        st_module.session_state[briefing_queue_depth_key] = 3
+
+    briefing_horizon_days = int(st_module.session_state.get(briefing_horizon_key, 7) or 7)
+    briefing_queue_depth = int(st_module.session_state.get(briefing_queue_depth_key, 3) or 3)
+
+    upcoming_cases = sorted(
+        [
+            item
+            for item in surgical_cases
+            if item.get("status") == "planned"
+            and item.get("case_date")
+            and item.get("case_date") <= (today + timedelta(days=briefing_horizon_days))
+        ],
+        key=lambda item: item.get("case_date"),
+    )
+
+    case_risk_rows = []
+    for item in upcoming_cases:
+        case_date = item.get("case_date")
+        days_until = (case_date - today).days if case_date else 99
+        has_cpt = bool(str(item.get("cpt_codes") or "").strip())
+        has_protocol_match = bool(
+            protocol_documents
+            and deps["suggest_protocols_for_case"](item, protocol_documents, max_items=1)
+        )
+        risk_score = 0
+        if not has_cpt:
+            risk_score += 10
+        if not has_protocol_match:
+            risk_score += 8
+        risk_score += max(0, 10 - max(days_until, 0))
+        case_risk_rows.append(
+            {
+                "case": item,
+                "risk_score": risk_score,
+                "has_cpt": has_cpt,
+                "has_protocol_match": has_protocol_match,
+                "days_until": days_until,
+            }
+        )
+
+    case_risk_rows.sort(key=lambda item: item["risk_score"], reverse=True)
+    high_risk_cases = [item["case"] for item in case_risk_rows if item["risk_score"] > 0 and not item["has_cpt"]]
+    missing_protocol_cases = [item["case"] for item in case_risk_rows if not item["has_protocol_match"]]
+    top_case_row = case_risk_rows[0] if case_risk_rows else None
+
+    st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+    st_module.markdown(
+        '<div class="panel-title"><h3>Smart Daily Briefing</h3><span>Risk-first summary with one-click fixes</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    with st_module.expander("Briefing controls", expanded=False):
+        st_module.slider(
+            "Case lookahead window (days)",
+            min_value=3,
+            max_value=21,
+            value=briefing_horizon_days,
+            key=briefing_horizon_key,
+            help="Controls how far ahead the case risk scan looks.",
+        )
+        st_module.selectbox(
+            "Recommended sequence depth",
+            [3, 4, 5],
+            index=[3, 4, 5].index(briefing_queue_depth) if briefing_queue_depth in (3, 4, 5) else 0,
+            key=briefing_queue_depth_key,
+            help="How many tasks to include in the sequence list.",
+        )
+
+    briefing_cols = st_module.columns(4)
+    briefing_cols[0].metric("Overdue tasks", len(overdue_tasks_today))
+    briefing_cols[1].metric(f"Upcoming cases ({briefing_horizon_days}d)", len(upcoming_cases))
+    briefing_cols[2].metric("Cases missing CPT", len(high_risk_cases))
+    briefing_cols[3].metric("Cases missing protocol", len(missing_protocol_cases))
+
+    summary_col, actions_col = st_module.columns([1.15, 0.85], gap="large")
+    with summary_col:
+        if overdue_tasks_today:
+            top_overdue = sorted(overdue_tasks_today, key=lambda task: deps["task_attention_sort_key"](task, today))[0]
+            st_module.markdown(
+                f"- Overdue focus: <strong>{top_overdue.get('title')}</strong>",
+                unsafe_allow_html=True,
+            )
+        else:
+            top_overdue = None
+            st_module.markdown("- Overdue focus: none")
+
+        if today_plan["unscheduled_high"]:
+            top_unscheduled_high = today_plan["unscheduled_high"][0]
+            st_module.markdown(
+                f"- Unscheduled high priority: <strong>{top_unscheduled_high.get('title')}</strong>",
+                unsafe_allow_html=True,
+            )
+        else:
+            top_unscheduled_high = None
+            st_module.markdown("- Unscheduled high priority: none")
+
+        if top_case_row:
+            top_case = top_case_row["case"]
+            case_date = top_case.get("case_date")
+            case_date_label = case_date.strftime("%b %d") if hasattr(case_date, "strftime") else str(case_date)
+            risk_reasons = []
+            if not top_case_row["has_cpt"]:
+                risk_reasons.append("missing CPT")
+            if not top_case_row["has_protocol_match"]:
+                risk_reasons.append("missing protocol")
+            if not risk_reasons:
+                risk_reasons.append("near-term case")
+            st_module.markdown(
+                f"- Highest-risk case: <strong>{top_case.get('procedure_name') or 'Untitled case'}</strong> ({case_date_label}) · {', '.join(risk_reasons)} · risk {top_case_row['risk_score']}",
+                unsafe_allow_html=True,
+            )
+        else:
+            top_case = None
+            st_module.markdown("- Highest-risk case: none")
+
+        if missing_protocol_cases:
+            st_module.markdown(f"- Missing protocol links: {len(missing_protocol_cases)} upcoming case(s)")
+        else:
+            st_module.markdown("- Missing protocol links: none")
+
+        st_module.markdown("- Recommended sequence:")
+        if today_plan["ordered"]:
+            for index, task in enumerate(today_plan["ordered"][:briefing_queue_depth], start=1):
+                st_module.markdown(
+                    f"  {index}. <strong>{task.get('title')}</strong> · {task.get('category')} · {task.get('priority', 'medium').title()}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st_module.markdown("  1. No active tasks in queue")
+
+    with actions_col:
+        st_module.markdown('<div class="panel-title"><h3>One-Click Fixes</h3><span>Resolve blockers quickly</span></div>', unsafe_allow_html=True)
+        if top_overdue and deps.get("set_task_status"):
+            if st_module.button("Start top overdue", key=f"{panel_key}_briefing_start_overdue", type="secondary"):
+                deps["set_task_status"](top_overdue.get("id"), "in_progress")
+                st_module.success("Top overdue task moved to In Progress.")
+                st_module.rerun()
+
+        if top_unscheduled_high and deps.get("update_task"):
+            if st_module.button("Schedule top high-priority", key=f"{panel_key}_briefing_schedule_high", type="secondary"):
+                deps["update_task"](
+                    top_unscheduled_high.get("id"),
+                    scheduled_date=today,
+                    scheduled_time=_resolve_default_schedule_time(app_settings.get("default_schedule_time")),
+                    scheduled_minutes=int(app_settings.get("default_duration", 60) or 60),
+                )
+                st_module.success("Top high-priority task scheduled for today.")
+                st_module.rerun()
+
+        if top_case and deps.get("update_surgical_case"):
+            cpt_suggestions = deps["suggest_cpt_codes_for_case"](
+                top_case,
+                surgical_cases,
+                max_items=1,
+                cpt_reference=deps.get("cpt_reference"),
+            )
+            if cpt_suggestions:
+                if st_module.button("Auto-fill top case CPT", key=f"{panel_key}_briefing_autofill_cpt", type="secondary"):
+                    deps["update_surgical_case"](
+                        top_case.get("id"),
+                        cpt_codes=cpt_suggestions[0].get("cpt_codes"),
+                    )
+                    st_module.success("Top case updated with suggested CPT code(s).")
+                    st_module.rerun()
+
+        if missing_protocol_cases and deps.get("add_task"):
+            reminder_title = "Upload or tag missing protocols for upcoming foot/ankle cases"
+            existing_reminder = next(
+                (
+                    task
+                    for task in active_tasks
+                    if str(task.get("title") or "").strip().lower() == reminder_title.lower()
+                ),
+                None,
+            )
+            if existing_reminder:
+                st_module.caption("Protocol reminder task already exists.")
+            elif st_module.button("Create protocol upload reminder", key=f"{panel_key}_briefing_protocol_reminder", type="secondary"):
+                deps["add_task"](
+                    reminder_title,
+                    f"{len(missing_protocol_cases)} upcoming case(s) have no clear protocol match.",
+                    "Clinic",
+                    "high",
+                    today,
+                )
+                st_module.success("Reminder task created.")
+                st_module.rerun()
+
+    st_module.markdown('</div>', unsafe_allow_html=True)
 
     metric_cols = st_module.columns(4)
     metric_cols[0].metric("Active", len(active_tasks))

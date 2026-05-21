@@ -1115,12 +1115,25 @@ def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, proto
             )
             if doc_bytes:
                 with st.expander(f"View {doc.get('file_name') or 'protocol.pdf'}", expanded=False):
+                    looks_like_pdf = (str(doc.get("file_mime") or "").lower() == "application/pdf") or str(doc.get("file_name") or "").lower().endswith(".pdf")
+                    start_page = 1
+                    if looks_like_pdf:
+                        start_page = int(
+                            st.number_input(
+                                "Start page",
+                                min_value=1,
+                                value=1,
+                                step=1,
+                                key=f"{panel_key}_anatomy_protocol_start_page_{doc_id}_{topic_name.lower().replace(' ', '_')}",
+                            )
+                        )
                     page_sections._render_protocol_pdf_preview(
                         st,
                         file_bytes=doc_bytes,
                         file_mime=doc.get("file_mime"),
                         file_name=doc.get("file_name") or "protocol.pdf",
                         height=420,
+                        start_page=start_page,
                     )
 
 
@@ -4074,6 +4087,84 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+    surgical_cases = []
+    protocol_documents = []
+    try:
+        surgical_cases = load_surgical_cases() or []
+    except Exception:
+        surgical_cases = []
+    try:
+        protocol_documents = load_protocol_documents() or []
+    except Exception:
+        protocol_documents = []
+
+    lookback_start = date.today() - timedelta(days=41)
+    recent_cases = [
+        item
+        for item in surgical_cases
+        if item.get("case_date") and item.get("case_date") >= lookback_start
+    ]
+    canceled_recent = [item for item in recent_cases if item.get("status") == "canceled"]
+    cancel_rate = round((len(canceled_recent) / len(recent_cases)) * 100, 1) if recent_cases else 0.0
+
+    coverage_cases = [
+        item
+        for item in surgical_cases
+        if item.get("case_date")
+        and item.get("case_date") >= (date.today() - timedelta(days=90))
+        and item.get("status") in ("planned", "completed")
+    ]
+    covered_cases = 0
+    for item in coverage_cases:
+        if ref_suggest_protocols_for_case(item, protocol_documents, max_items=1):
+            covered_cases += 1
+    protocol_coverage = round((covered_cases / len(coverage_cases)) * 100, 1) if coverage_cases else 0.0
+
+    week_starts = []
+    current_week_start = date.today() - timedelta(days=date.today().weekday())
+    for offset in range(5, -1, -1):
+        week_starts.append(current_week_start - timedelta(days=7 * offset))
+
+    cancel_trend = {}
+    coverage_trend = {}
+    for week_start in week_starts:
+        week_end = week_start + timedelta(days=6)
+        week_label = week_start.strftime("%b %d")
+        week_cases = [
+            item
+            for item in surgical_cases
+            if item.get("case_date") and week_start <= item.get("case_date") <= week_end
+        ]
+        week_canceled = [item for item in week_cases if item.get("status") == "canceled"]
+        week_coverage_candidates = [item for item in week_cases if item.get("status") in ("planned", "completed")]
+        week_covered = 0
+        for item in week_coverage_candidates:
+            if ref_suggest_protocols_for_case(item, protocol_documents, max_items=1):
+                week_covered += 1
+
+        cancel_trend[week_label] = len(week_canceled)
+        coverage_trend[week_label] = round((week_covered / len(week_coverage_candidates)) * 100, 1) if week_coverage_candidates else 0.0
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Case Signal Snapshot</h3><span>Cancellation trend and protocol usage coverage</span></div>', unsafe_allow_html=True)
+
+    case_signal_cols = st.columns(4)
+    case_signal_cols[0].metric("Recent cases (6w)", len(recent_cases))
+    case_signal_cols[1].metric("Canceled (6w)", len(canceled_recent))
+    case_signal_cols[2].metric("Cancel rate", f"{cancel_rate}%")
+    case_signal_cols[3].metric("Protocol coverage (90d)", f"{protocol_coverage}%")
+
+    signal_left, signal_right = st.columns(2)
+    with signal_left:
+        st.subheader("Weekly cancellation trend")
+        st.line_chart(cancel_trend)
+    with signal_right:
+        st.subheader("Weekly protocol coverage (%)")
+        st.line_chart(coverage_trend)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -5337,6 +5428,11 @@ page_shared_deps = {
     "schedule_workload_snapshot": schedule_workload_snapshot,
     "format_due": format_due,
     "add_task": add_task,
+    "update_task": update_task,
+    "set_task_status": set_task_status,
+    "load_surgical_cases": load_surgical_cases,
+    "load_protocol_documents": load_protocol_documents,
+    "update_surgical_case": update_surgical_case,
     "predicted_or_days": predicted_or_days,
     "render_or_calendar_compact": render_or_calendar_compact,
     "suggest_cpt_codes_for_case": ref_suggest_cpt_codes_for_case,
