@@ -762,13 +762,15 @@ def render_surgical_cases_panel(
                     with st_module_ref.expander("Educational Description", expanded=False):
                         st_module_ref.write(item.get("education_notes"))
                 
-                suggestions = deps_ref["suggest_protocols_for_case"](item, protocol_docs, max_items=3)
+                # Filter PT and non-PT protocols for suggestions
+                suggestions = deps_ref["suggest_protocols_for_case"](item, protocol_docs, max_items=6)
                 if suggestions:
                     with st_module_ref.expander("Suggested Protocols", expanded=False):
                         protocol_labels = []
                         protocol_map = {}
                         for score, overlap_terms, doc in suggestions:
-                            label = f"{doc.get('protocol_name')} (score: {score})"
+                            pt_label = "[PT] " if str(doc.get("surgeon_label")).strip().lower() == "physical therapy" else ""
+                            label = f"{pt_label}{doc.get('protocol_name')} (score: {score})"
                             protocol_labels.append(label)
                             protocol_map[label] = (score, overlap_terms, doc)
 
@@ -779,8 +781,9 @@ def render_surgical_cases_panel(
                             label_visibility="collapsed",
                         )
                         selected_score, selected_overlap_terms, selected_doc = protocol_map[selected_protocol_label]
+                        pt_tag = "**Physical Therapy Protocol**\n" if str(selected_doc.get("surgeon_label")).strip().lower() == "physical therapy" else ""
                         st_module_ref.caption(
-                            f"Selected: {selected_doc.get('protocol_name')} · keywords: {', '.join(selected_overlap_terms)} · file: {selected_doc.get('file_name')}"
+                            f"{pt_tag}Selected: {selected_doc.get('protocol_name')} · keywords: {', '.join(selected_overlap_terms)} · file: {selected_doc.get('file_name')}"
                         )
                         if selected_doc.get("notes"):
                             st_module_ref.write(selected_doc.get("notes"))
