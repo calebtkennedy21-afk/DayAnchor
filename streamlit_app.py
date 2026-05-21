@@ -4165,6 +4165,38 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+    performed_cases = [
+        item for item in surgical_cases if item.get("status") == "completed"
+    ]
+    surgery_type_counts = {}
+    for item in performed_cases:
+        procedure_name = str(item.get("procedure_name") or "").strip() or "Unspecified procedure"
+        surgery_type_counts[procedure_name] = surgery_type_counts.get(procedure_name, 0) + 1
+
+    sorted_surgery_counts = sorted(
+        surgery_type_counts.items(),
+        key=lambda entry: entry[1],
+        reverse=True,
+    )
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Surgery Type Counts</h3><span>Completed case count by procedure</span></div>', unsafe_allow_html=True)
+
+    surgery_cols = st.columns(2)
+    surgery_cols[0].metric("Completed cases", len(performed_cases))
+    surgery_cols[1].metric("Unique surgery types", len(sorted_surgery_counts))
+
+    if sorted_surgery_counts:
+        st.bar_chart({name: count for name, count in sorted_surgery_counts})
+        st.markdown("**Count by surgery type**")
+        for procedure_name, count in sorted_surgery_counts:
+            st.markdown(f"- {procedure_name}: {count}")
+    else:
+        st.markdown('<div class="empty-state">No completed surgical cases yet, so surgery type counts are not available.</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anatomy"):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
