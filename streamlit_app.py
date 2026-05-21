@@ -1114,13 +1114,14 @@ def render_anatomy_related_widget(topic_name, topic_terms, surgical_cases, proto
                 unsafe_allow_html=True,
             )
             if doc_bytes:
-                st.download_button(
-                    label=f"Download {doc.get('file_name')}",
-                    data=doc_bytes,
-                    file_name=doc.get("file_name") or "protocol.pdf",
-                    mime=doc.get("file_mime") or "application/octet-stream",
-                    key=f"{panel_key}_anatomy_protocol_download_{doc_id}_{topic_name.lower()}",
-                )
+                with st.expander(f"View {doc.get('file_name') or 'protocol.pdf'}", expanded=False):
+                    page_sections._render_protocol_pdf_preview(
+                        st,
+                        file_bytes=doc_bytes,
+                        file_mime=doc.get("file_mime"),
+                        file_name=doc.get("file_name") or "protocol.pdf",
+                        height=420,
+                    )
 
 
 ref_render_anatomy_related_widget = render_anatomy_related_widget
