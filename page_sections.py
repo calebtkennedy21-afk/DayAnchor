@@ -260,215 +260,7 @@ def render_surgical_cases_panel(
     st_module.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
     st_module.caption("Store procedure details (including CPT codes) only. Do not enter patient identifiers.")
 
-    st_module.markdown('<div class="panel-title" style="margin-top:0.5rem;"><h3>Protocol Library</h3><span>Upload and reference BB protocols</span></div>', unsafe_allow_html=True)
-    with st_module.form(f"{panel_key}_protocol_upload_form"):
-        protocol_surgeon_label = st_module.text_input("Surgeon label", value=app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"))
-        protocol_name = st_module.text_input("Protocol title")
-        protocol_notes = st_module.text_area("Protocol notes", height=80, placeholder="Key steps, pearls, contraindications, follow-up details...")
-        protocol_file = st_module.file_uploader(
-            "Protocol file",
-            type=["pdf", "doc", "docx", "txt", "md"],
-            key=f"{panel_key}_protocol_file",
-            help="Upload non-PHI protocol documents only.",
-        )
-        protocol_submit = st_module.form_submit_button("Upload protocol", type="secondary")
 
-    if protocol_submit:
-        if not protocol_file:
-            st_module.warning("Select a protocol file to upload.")
-        else:
-            file_bytes = protocol_file.getvalue()
-            if len(file_bytes) > 12 * 1024 * 1024:
-                st_module.warning("File is too large. Keep uploads under 12 MB.")
-            else:
-                deps["add_protocol_document"](
-                    surgeon_label=protocol_surgeon_label,
-                    protocol_name=protocol_name,
-                    upload_name=protocol_file.name,
-                    upload_mime=getattr(protocol_file, "type", None),
-                    upload_bytes=file_bytes,
-                    notes=protocol_notes,
-                )
-                st_module.success("Protocol uploaded.")
-                st_module.rerun()
-
-    if protocol_documents:
-        protocol_filter_col, protocol_sort_col, protocol_page_size_col = st_module.columns([2, 1, 1])
-        with protocol_filter_col:
-            protocol_query = st_module.text_input(
-                "Search protocols",
-                key=f"{panel_key}_protocol_search",
-                placeholder="Search title, surgeon, filename, or notes",
-            )
-        with protocol_sort_col:
-            protocol_sort = st_module.selectbox(
-                "Sort",
-                ["Newest", "Oldest", "Title A-Z", "Title Z-A"],
-                index=0,
-                key=f"{panel_key}_protocol_sort",
-            )
-        with protocol_page_size_col:
-            protocol_page_size = st_module.selectbox(
-                "Per page",
-                [10, 25, 50, 100],
-                index=1,
-                key=f"{panel_key}_protocol_page_size",
-            )
-
-        normalized_protocol_query = protocol_query.strip().lower()
-        filtered_protocol_documents = protocol_documents
-        if normalized_protocol_query:
-            filtered_protocol_documents = [
-                item
-                for item in protocol_documents
-                if normalized_protocol_query
-                in " ".join(
-                    [
-                        str(item.get("protocol_name") or ""),
-                        str(item.get("surgeon_label") or ""),
-                        str(item.get("file_name") or ""),
-                        str(item.get("notes") or ""),
-                    ]
-                ).lower()
-            ]
-
-        if protocol_sort == "Oldest":
-            filtered_protocol_documents = sorted(
-                filtered_protocol_documents,
-                key=lambda item: (
-                    item.get("created_date") or date.min,
-                    item.get("id") or 0,
-                ),
-            )
-        elif protocol_sort == "Title A-Z":
-            filtered_protocol_documents = sorted(
-                filtered_protocol_documents,
-                key=lambda item: str(item.get("protocol_name") or "").lower(),
-            )
-        elif protocol_sort == "Title Z-A":
-            filtered_protocol_documents = sorted(
-                filtered_protocol_documents,
-                key=lambda item: str(item.get("protocol_name") or "").lower(),
-                reverse=True,
-            )
-
-        total_filtered_protocols = len(filtered_protocol_documents)
-        protocol_start_index = 0
-        protocol_end_index = 0
-        if not total_filtered_protocols:
-            st_module.caption("No protocols match the current search.")
-        else:
-            total_protocol_pages = (total_filtered_protocols + protocol_page_size - 1) // protocol_page_size
-            protocol_page_number = int(
-                st_module.number_input(
-                    "Protocol page",
-                    min_value=1,
-                    max_value=total_protocol_pages,
-                    value=1,
-                    step=1,
-                    key=f"{panel_key}_protocol_page_number",
-                )
-            )
-            protocol_start_index = (protocol_page_number - 1) * protocol_page_size
-            protocol_end_index = min(protocol_start_index + protocol_page_size, total_filtered_protocols)
-            st_module.caption(
-                f"Showing {protocol_start_index + 1}-{protocol_end_index} of {total_filtered_protocols} matching protocol(s)"
-                f" ({len(protocol_documents)} total)."
-            )
-
-        for doc in filtered_protocol_documents[protocol_start_index:protocol_end_index]:
-            doc_id = doc.get("id")
-            doc_bytes = doc.get("file_bytes")
-            if isinstance(doc_bytes, memoryview):
-                doc_bytes = bytes(doc_bytes)
-            st_module.markdown(
-                f"- <strong>{doc.get('protocol_name')}</strong> · {doc.get('surgeon_label')} · {doc.get('file_name')}",
-                unsafe_allow_html=True,
-            )
-            if doc.get("notes"):
-                st_module.caption(doc.get("notes"))
-            doc_cols = st_module.columns([1, 1, 1])
-            with doc_cols[0]:
-                if doc_bytes:
-                    st_module.download_button(
-                        label="Download",
-                        data=doc_bytes,
-                        file_name=doc.get("file_name") or "protocol.pdf",
-                        mime=doc.get("file_mime") or "application/octet-stream",
-                        key=f"{panel_key}_protocol_download_{doc_id}",
-                    )
-            with doc_cols[1]:
-                if st_module.button("Delete", key=f"{panel_key}_protocol_delete_{doc_id}"):
-                    deps["delete_protocol_document"](doc_id)
-                    st_module.success("Protocol deleted.")
-                    st_module.rerun()
-            with doc_cols[2]:
-                with st_module.expander("Edit protocol", expanded=False):
-                    with st_module.form(f"{panel_key}_protocol_edit_form_{doc_id}"):
-                        edit_surgeon_label = st_module.text_input(
-                            "Surgeon label",
-                            value=doc.get("surgeon_label") or app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"),
-                            key=f"{panel_key}_protocol_edit_surgeon_{doc_id}",
-                        )
-                        edit_protocol_name = st_module.text_input(
-                            "Protocol title",
-                            value=doc.get("protocol_name") or "",
-                            key=f"{panel_key}_protocol_edit_name_{doc_id}",
-                        )
-                        edit_protocol_notes = st_module.text_area(
-                            "Protocol notes",
-                            value=doc.get("notes") or "",
-                            height=80,
-                            key=f"{panel_key}_protocol_edit_notes_{doc_id}",
-                        )
-                        replacement_protocol_file = st_module.file_uploader(
-                            "Replace protocol file (optional)",
-                            type=["pdf", "doc", "docx", "txt", "md"],
-                            key=f"{panel_key}_protocol_edit_file_{doc_id}",
-                            help="Leave empty to keep the current file.",
-                        )
-                        edit_submit = st_module.form_submit_button("Save protocol changes", type="secondary")
-
-                    if edit_submit:
-                        replacement_bytes = None
-                        replacement_name = None
-                        replacement_mime = None
-                        if replacement_protocol_file:
-                            replacement_bytes = replacement_protocol_file.getvalue()
-                            replacement_name = replacement_protocol_file.name
-                            replacement_mime = getattr(replacement_protocol_file, "type", None)
-                            if len(replacement_bytes) > 12 * 1024 * 1024:
-                                st_module.warning("File is too large. Keep uploads under 12 MB.")
-                                replacement_bytes = None
-                                replacement_name = None
-                                replacement_mime = None
-                                edit_submit = False
-
-                        if edit_submit:
-                            final_protocol_name = edit_protocol_name.strip() or (replacement_name or doc.get("file_name") or "Protocol")
-                            deps["update_protocol_document"](
-                                doc_id=doc_id,
-                                surgeon_label=edit_surgeon_label,
-                                protocol_name=final_protocol_name,
-                                notes=edit_protocol_notes,
-                                upload_name=replacement_name,
-                                upload_mime=replacement_mime,
-                                upload_bytes=replacement_bytes,
-                            )
-                            st_module.success("Protocol updated.")
-                            st_module.rerun()
-            with st_module.expander("View PDF", expanded=False):
-                _render_protocol_pdf_preview(
-                    st_module,
-                    doc_bytes,
-                    doc.get("file_mime"),
-                    doc.get("file_name"),
-                    height=460,
-                )
-    else:
-        st_module.markdown('<div class="empty-state">No protocols uploaded yet. Add BB protocols to reference during case prep.</div>', unsafe_allow_html=True)
-
-    st_module.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
 
     metrics = st_module.columns(4)
     planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
@@ -832,6 +624,219 @@ def render_surgical_cases_panel(
         st_module.markdown('<div class="empty-state">No surgical cases logged yet.</div>', unsafe_allow_html=True)
 
     st_module.markdown('</div>', unsafe_allow_html=True)
+
+    st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    with st_module.expander("Protocol Library - Upload and reference BB protocols", expanded=False):
+        with st_module.form(f"{panel_key}_protocol_upload_form"):
+            protocol_surgeon_label = st_module.text_input("Surgeon label", value=app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"))
+            protocol_name = st_module.text_input("Protocol title")
+            protocol_notes = st_module.text_area("Protocol notes", height=80, placeholder="Key steps, pearls, contraindications, follow-up details...")
+            protocol_file = st_module.file_uploader(
+                "Protocol file",
+                type=["pdf", "doc", "docx", "txt", "md"],
+                key=f"{panel_key}_protocol_file",
+                help="Upload non-PHI protocol documents only.",
+            )
+            protocol_submit = st_module.form_submit_button("Upload protocol", type="secondary")
+
+        if protocol_submit:
+            if not protocol_file:
+                st_module.warning("Select a protocol file to upload.")
+            else:
+                file_bytes = protocol_file.getvalue()
+                if len(file_bytes) > 12 * 1024 * 1024:
+                    st_module.warning("File is too large. Keep uploads under 12 MB.")
+                else:
+                    deps["add_protocol_document"](
+                        surgeon_label=protocol_surgeon_label,
+                        protocol_name=protocol_name,
+                        upload_name=protocol_file.name,
+                        upload_mime=getattr(protocol_file, "type", None),
+                        upload_bytes=file_bytes,
+                        notes=protocol_notes,
+                    )
+                    st_module.success("Protocol uploaded.")
+                    st_module.rerun()
+
+        if protocol_documents:
+            protocol_filter_col, protocol_sort_col, protocol_page_size_col = st_module.columns([2, 1, 1])
+            with protocol_filter_col:
+                protocol_query = st_module.text_input(
+                    "Search protocols",
+                    key=f"{panel_key}_protocol_search",
+                    placeholder="Search title, surgeon, filename, or notes",
+                )
+            with protocol_sort_col:
+                protocol_sort = st_module.selectbox(
+                    "Sort",
+                    ["Newest", "Oldest", "Title A-Z", "Title Z-A"],
+                    index=0,
+                    key=f"{panel_key}_protocol_sort",
+                )
+            with protocol_page_size_col:
+                protocol_page_size = st_module.selectbox(
+                    "Per page",
+                    [10, 25, 50, 100],
+                    index=1,
+                    key=f"{panel_key}_protocol_page_size",
+                )
+
+            normalized_protocol_query = protocol_query.strip().lower()
+            filtered_protocol_documents = protocol_documents
+            if normalized_protocol_query:
+                filtered_protocol_documents = [
+                    item
+                    for item in protocol_documents
+                    if normalized_protocol_query
+                    in " ".join(
+                        [
+                            str(item.get("protocol_name") or ""),
+                            str(item.get("surgeon_label") or ""),
+                            str(item.get("file_name") or ""),
+                            str(item.get("notes") or ""),
+                        ]
+                    ).lower()
+                ]
+
+            if protocol_sort == "Oldest":
+                filtered_protocol_documents = sorted(
+                    filtered_protocol_documents,
+                    key=lambda item: (
+                        item.get("created_date") or date.min,
+                        item.get("id") or 0,
+                    ),
+                )
+            elif protocol_sort == "Title A-Z":
+                filtered_protocol_documents = sorted(
+                    filtered_protocol_documents,
+                    key=lambda item: str(item.get("protocol_name") or "").lower(),
+                )
+            elif protocol_sort == "Title Z-A":
+                filtered_protocol_documents = sorted(
+                    filtered_protocol_documents,
+                    key=lambda item: str(item.get("protocol_name") or "").lower(),
+                    reverse=True,
+                )
+
+            total_filtered_protocols = len(filtered_protocol_documents)
+            protocol_start_index = 0
+            protocol_end_index = 0
+            if not total_filtered_protocols:
+                st_module.caption("No protocols match the current search.")
+            else:
+                total_protocol_pages = (total_filtered_protocols + protocol_page_size - 1) // protocol_page_size
+                protocol_page_number = int(
+                    st_module.number_input(
+                        "Protocol page",
+                        min_value=1,
+                        max_value=total_protocol_pages,
+                        value=1,
+                        step=1,
+                        key=f"{panel_key}_protocol_page_number",
+                    )
+                )
+                protocol_start_index = (protocol_page_number - 1) * protocol_page_size
+                protocol_end_index = min(protocol_start_index + protocol_page_size, total_filtered_protocols)
+                st_module.caption(
+                    f"Showing {protocol_start_index + 1}-{protocol_end_index} of {total_filtered_protocols} matching protocol(s)"
+                    f" ({len(protocol_documents)} total)."
+                )
+
+            for doc in filtered_protocol_documents[protocol_start_index:protocol_end_index]:
+                doc_id = doc.get("id")
+                doc_bytes = doc.get("file_bytes")
+                if isinstance(doc_bytes, memoryview):
+                    doc_bytes = bytes(doc_bytes)
+                st_module.markdown(
+                    f"- <strong>{doc.get('protocol_name')}</strong> · {doc.get('surgeon_label')} · {doc.get('file_name')}",
+                    unsafe_allow_html=True,
+                )
+                if doc.get("notes"):
+                    st_module.caption(doc.get("notes"))
+                doc_cols = st_module.columns([1, 1, 1])
+                with doc_cols[0]:
+                    if doc_bytes:
+                        st_module.download_button(
+                            label="Download",
+                            data=doc_bytes,
+                            file_name=doc.get("file_name") or "protocol.pdf",
+                            mime=doc.get("file_mime") or "application/octet-stream",
+                            key=f"{panel_key}_protocol_download_{doc_id}",
+                        )
+                with doc_cols[1]:
+                    if st_module.button("Delete", key=f"{panel_key}_protocol_delete_{doc_id}"):
+                        deps["delete_protocol_document"](doc_id)
+                        st_module.success("Protocol deleted.")
+                        st_module.rerun()
+                with doc_cols[2]:
+                    with st_module.expander("Edit protocol", expanded=False):
+                        with st_module.form(f"{panel_key}_protocol_edit_form_{doc_id}"):
+                            edit_surgeon_label = st_module.text_input(
+                                "Surgeon label",
+                                value=doc.get("surgeon_label") or app_settings.get("default_surgeon_label", "Dr. Braden Boyer (BB)"),
+                                key=f"{panel_key}_protocol_edit_surgeon_{doc_id}",
+                            )
+                            edit_protocol_name = st_module.text_input(
+                                "Protocol title",
+                                value=doc.get("protocol_name") or "",
+                                key=f"{panel_key}_protocol_edit_name_{doc_id}",
+                            )
+                            edit_protocol_notes = st_module.text_area(
+                                "Protocol notes",
+                                value=doc.get("notes") or "",
+                                height=80,
+                                key=f"{panel_key}_protocol_edit_notes_{doc_id}",
+                            )
+                            replacement_protocol_file = st_module.file_uploader(
+                                "Replace protocol file (optional)",
+                                type=["pdf", "doc", "docx", "txt", "md"],
+                                key=f"{panel_key}_protocol_edit_file_{doc_id}",
+                                help="Leave empty to keep the current file.",
+                            )
+                            edit_submit = st_module.form_submit_button("Save protocol changes", type="secondary")
+
+                        if edit_submit:
+                            replacement_bytes = None
+                            replacement_name = None
+                            replacement_mime = None
+                            if replacement_protocol_file:
+                                replacement_bytes = replacement_protocol_file.getvalue()
+                                replacement_name = replacement_protocol_file.name
+                                replacement_mime = getattr(replacement_protocol_file, "type", None)
+                                if len(replacement_bytes) > 12 * 1024 * 1024:
+                                    st_module.warning("File is too large. Keep uploads under 12 MB.")
+                                    replacement_bytes = None
+                                    replacement_name = None
+                                    replacement_mime = None
+                                    edit_submit = False
+
+                            if edit_submit:
+                                final_protocol_name = edit_protocol_name.strip() or (replacement_name or doc.get("file_name") or "Protocol")
+                                deps["update_protocol_document"](
+                                    doc_id=doc_id,
+                                    surgeon_label=edit_surgeon_label,
+                                    protocol_name=final_protocol_name,
+                                    notes=edit_protocol_notes,
+                                    upload_name=replacement_name,
+                                    upload_mime=replacement_mime,
+                                    upload_bytes=replacement_bytes,
+                                )
+                                st_module.success("Protocol updated.")
+                                st_module.rerun()
+                with st_module.expander("View PDF", expanded=False):
+                    _render_protocol_pdf_preview(
+                        st_module,
+                        doc_bytes,
+                        doc.get("file_mime"),
+                        doc.get("file_name"),
+                        height=460,
+                    )
+        else:
+            st_module.markdown('<div class="empty-state">No protocols uploaded yet. Add BB protocols to reference during case prep.</div>', unsafe_allow_html=True)
+
+    st_module.markdown('</div>', unsafe_allow_html=True)
+
 
 
 def render_ai_panel(tasks, active_tasks, panel_key, deps, st_module=st):
