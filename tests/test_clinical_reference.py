@@ -1,4 +1,4 @@
-from clinical_reference import anatomy_related_resources, suggest_cpt_codes_for_case, suggest_protocols_for_case
+from clinical_reference import anatomy_related_resources, filter_anatomy_xray_images, suggest_cpt_codes_for_case, suggest_protocols_for_case
 
 
 def test_suggest_protocols_for_case_uses_cpt_codes_for_matching():
@@ -155,3 +155,35 @@ def test_suggest_cpt_codes_for_case_falls_back_to_reference_list():
     assert suggestions[0]["cpt_codes"] == "29898"
     assert suggestions[0]["match_source"] == "reference"
     assert suggestions[0]["matched_category"] == "ARTHROSCOPY"
+
+
+def test_filter_anatomy_xray_images_filters_by_body_part_fracture_view_and_query():
+    images = [
+        {
+            "id": 1,
+            "body_part": "Ankle",
+            "fracture_type": "Bimalleolar",
+            "view_label": "Mortise",
+            "notes": "Displacement present",
+            "image_name": "ankle_1.png",
+        },
+        {
+            "id": 2,
+            "body_part": "Foot",
+            "fracture_type": "Jones",
+            "view_label": "AP",
+            "notes": "Base of 5th metatarsal",
+            "image_name": "foot_1.png",
+        },
+    ]
+
+    filtered = filter_anatomy_xray_images(
+        images,
+        body_part_filter="Ankle",
+        fracture_filter="Bimalleolar",
+        view_filter="Mortise",
+        query="displacement",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["id"] == 1

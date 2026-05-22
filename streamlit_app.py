@@ -16,6 +16,7 @@ from clinical_reference import (
     anatomy_structure_map as ref_anatomy_structure_map,
     anatomy_bones_map as ref_anatomy_bones_map,
     anatomy_fractures_map as ref_anatomy_fractures_map,
+    filter_anatomy_xray_images as ref_filter_anatomy_xray_images,
     render_anatomy_structure_spotlight as ref_render_anatomy_structure_spotlight,
     suggest_cpt_codes_for_case as ref_suggest_cpt_codes_for_case,
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
@@ -91,6 +92,8 @@ if "protocol_documents" not in st.session_state:
     st.session_state.protocol_documents = []
 if "case_protocol_links" not in st.session_state:
     st.session_state.case_protocol_links = []
+if "anatomy_xray_images" not in st.session_state:
+    st.session_state.anatomy_xray_images = []
 if "personal_goals" not in st.session_state:
     st.session_state.personal_goals = []
 if "personal_goal_checkins" not in st.session_state:
@@ -751,6 +754,21 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS anatomy_xray_images (
+                            id BIGSERIAL PRIMARY KEY,
+                            body_part TEXT NOT NULL,
+                            fracture_type TEXT NOT NULL,
+                            view_label TEXT NOT NULL,
+                            image_name TEXT NOT NULL,
+                            image_mime TEXT,
+                            image_bytes BYTEA NOT NULL,
+                            notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -1125,6 +1143,102 @@ def delete_protocol_document(doc_id):
         return
     st.session_state.protocol_documents = [item for item in st.session_state.protocol_documents if item.get("id") != doc_id]
     st.session_state.case_protocol_links = [item for item in st.session_state.case_protocol_links if item.get("protocol_id") != doc_id]
+
+
+def load_anatomy_xray_images():
+    if not db_enabled():
+        return st.session_state.anatomy_xray_images
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        body_part,
+                        fracture_type,
+                        view_label,
+                        image_name,
+                        image_mime,
+                        image_bytes,
+                        notes,
+                        created_date
+                    FROM anatomy_xray_images
+                    ORDER BY created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return st.session_state.anatomy_xray_images
+
+
+def add_anatomy_xray_image(body_part, fracture_type, view_label, image_name, image_mime, image_bytes, notes=""):
+    body_part_value = str(body_part or "").strip()
+    fracture_type_value = str(fracture_type or "").strip() or "Unspecified"
+    view_label_value = str(view_label or "").strip() or "Unspecified"
+    notes_value = str(notes or "").strip()
+
+    if not body_part_value or not image_name or not image_bytes:
+        return None
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO anatomy_xray_images (
+                        body_part,
+                        fracture_type,
+                        view_label,
+                        image_name,
+                        image_mime,
+                        image_bytes,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        body_part_value,
+                        fracture_type_value,
+                        view_label_value,
+                        image_name,
+                        image_mime,
+                        image_bytes,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    next_id = max([item.get("id", 0) for item in st.session_state.anatomy_xray_images], default=0) + 1
+    st.session_state.anatomy_xray_images.append(
+        {
+            "id": next_id,
+            "body_part": body_part_value,
+            "fracture_type": fracture_type_value,
+            "view_label": view_label_value,
+            "image_name": image_name,
+            "image_mime": image_mime,
+            "image_bytes": image_bytes,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+    return next_id
+
+
+def delete_anatomy_xray_image(image_id):
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM anatomy_xray_images WHERE id = %s", (image_id,))
+        return
+
+    st.session_state.anatomy_xray_images = [
+        item for item in st.session_state.anatomy_xray_images if item.get("id") != image_id
+    ]
 
 
 def text_keywords(value):
@@ -4303,7 +4417,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot and ankle first, with related orthopedic pathways and chain context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    pathways_tab, differential_tab, foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab, exam_tab, imaging_tab = st.tabs([
+    pathways_tab, differential_tab, foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab, xray_tab, exam_tab, imaging_tab = st.tabs([
         "Clinical Pathways",
         "Differential Builder",
         "Foot",
@@ -4312,6 +4426,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         "Knee",
         "Bones",
         "Fractures",
+        "X-ray Library",
         "Exam Library",
         "Imaging Helper",
     ])
@@ -4870,6 +4985,270 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 protocol_documents,
                 panel_key=f"{panel_key}_fractures_foot_related",
             )
+
+    with xray_tab:
+        st.markdown("### X-ray Image Library")
+        st.caption("Upload and organize non-PHI X-rays by body part and fracture type.")
+        pending_delete_key = f"{panel_key}_xray_delete_pending"
+        batch_selection_key = f"{panel_key}_xray_batch_selection"
+        batch_pending_key = f"{panel_key}_xray_batch_pending"
+
+        with st.form(f"{panel_key}_xray_upload_form", clear_on_submit=True):
+            upload_cols = st.columns(2)
+            with upload_cols[0]:
+                body_part = st.selectbox(
+                    "Body part",
+                    ["Foot", "Ankle", "Lower Leg", "Knee", "Other"],
+                    key=f"{panel_key}_xray_body_part",
+                )
+                if body_part == "Other":
+                    body_part = st.text_input("Custom body part", key=f"{panel_key}_xray_body_part_custom").strip() or "Other"
+                fracture_type = st.selectbox(
+                    "Fracture type",
+                    [
+                        "Unspecified",
+                        "Avulsion",
+                        "Stress",
+                        "Jones",
+                        "Lisfranc",
+                        "Bimalleolar",
+                        "Trimalleolar",
+                        "Pilon",
+                        "Tibial Plateau",
+                        "Other",
+                    ],
+                    key=f"{panel_key}_xray_fracture_type",
+                )
+                if fracture_type == "Other":
+                    fracture_type = st.text_input("Custom fracture type", key=f"{panel_key}_xray_fracture_custom").strip() or "Other"
+            with upload_cols[1]:
+                view_label = st.selectbox(
+                    "X-ray view",
+                    ["AP", "Lateral", "Oblique", "Mortise", "Sunrise", "Other"],
+                    key=f"{panel_key}_xray_view_label",
+                )
+                if view_label == "Other":
+                    view_label = st.text_input("Custom view", key=f"{panel_key}_xray_view_custom").strip() or "Other"
+                xray_notes = st.text_area(
+                    "Notes",
+                    height=90,
+                    placeholder="Optional educational notes (no PHI).",
+                    key=f"{panel_key}_xray_notes",
+                )
+
+            xray_files = st.file_uploader(
+                "X-ray image(s)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key=f"{panel_key}_xray_file",
+                accept_multiple_files=True,
+                help="Upload non-PHI images only.",
+            )
+            no_phi_confirmed = st.checkbox(
+                "I confirm this image contains no patient identifiers (no PHI).",
+                key=f"{panel_key}_xray_phi_confirm",
+            )
+            xray_submit = st.form_submit_button("Upload X-ray", type="primary")
+
+        if xray_submit:
+            if not xray_files:
+                st.warning("Select at least one X-ray image to upload.")
+            elif not no_phi_confirmed:
+                st.warning("Confirm the image contains no PHI before uploading.")
+            else:
+                uploaded_count = 0
+                skipped_large = 0
+                for xray_file in xray_files:
+                    image_bytes = xray_file.getvalue()
+                    if len(image_bytes) > 10 * 1024 * 1024:
+                        skipped_large += 1
+                        continue
+                    add_anatomy_xray_image(
+                        body_part=body_part,
+                        fracture_type=fracture_type,
+                        view_label=view_label,
+                        image_name=xray_file.name,
+                        image_mime=getattr(xray_file, "type", None),
+                        image_bytes=image_bytes,
+                        notes=xray_notes,
+                    )
+                    uploaded_count += 1
+                if uploaded_count:
+                    st.success(f"Uploaded {uploaded_count} X-ray image(s).")
+                if skipped_large:
+                    st.warning(f"Skipped {skipped_large} file(s) over 10 MB.")
+                if uploaded_count:
+                    st.rerun()
+
+        xray_images = load_anatomy_xray_images()
+        if xray_images:
+            body_part_options = ["All"] + sorted({str(item.get("body_part") or "Unspecified") for item in xray_images})
+            fracture_options = ["All"] + sorted({str(item.get("fracture_type") or "Unspecified") for item in xray_images})
+            view_options = ["All"] + sorted({str(item.get("view_label") or "Unspecified") for item in xray_images})
+
+            filter_cols = st.columns([1.1, 1.1, 1.1, 1.6, 1.2, 1.1])
+            with filter_cols[0]:
+                body_part_filter = st.selectbox("Body part filter", body_part_options, key=f"{panel_key}_xray_body_filter")
+            with filter_cols[1]:
+                fracture_filter = st.selectbox("Fracture filter", fracture_options, key=f"{panel_key}_xray_fracture_filter")
+            with filter_cols[2]:
+                view_filter = st.selectbox("View filter", view_options, key=f"{panel_key}_xray_view_filter")
+            with filter_cols[3]:
+                query = st.text_input("Search", placeholder="Filename or notes", key=f"{panel_key}_xray_query")
+            with filter_cols[4]:
+                xray_sort = st.selectbox(
+                    "Sort",
+                    ["Newest", "Oldest", "Body Part A-Z", "Fracture A-Z"],
+                    key=f"{panel_key}_xray_sort",
+                )
+            with filter_cols[5]:
+                view_mode = st.selectbox(
+                    "Display",
+                    ["List", "Grid"],
+                    key=f"{panel_key}_xray_view_mode",
+                )
+
+            filtered_xrays = ref_filter_anatomy_xray_images(
+                xray_images,
+                body_part_filter=body_part_filter,
+                fracture_filter=fracture_filter,
+                view_filter=view_filter,
+                query=query,
+            )
+
+            if xray_sort == "Oldest":
+                filtered_xrays = sorted(
+                    filtered_xrays,
+                    key=lambda item: (item.get("created_date") or date.min, item.get("id") or 0),
+                )
+            elif xray_sort == "Body Part A-Z":
+                filtered_xrays = sorted(
+                    filtered_xrays,
+                    key=lambda item: (str(item.get("body_part") or ""), str(item.get("fracture_type") or ""), str(item.get("image_name") or "")),
+                )
+            elif xray_sort == "Fracture A-Z":
+                filtered_xrays = sorted(
+                    filtered_xrays,
+                    key=lambda item: (str(item.get("fracture_type") or ""), str(item.get("body_part") or ""), str(item.get("image_name") or "")),
+                )
+            else:
+                filtered_xrays = sorted(
+                    filtered_xrays,
+                    key=lambda item: (item.get("created_date") or date.min, item.get("id") or 0),
+                    reverse=True,
+                )
+
+            st.caption(f"Showing {len(filtered_xrays)} of {len(xray_images)} X-ray image(s)")
+
+            batch_label_to_id = {}
+            batch_options = []
+            for item in filtered_xrays:
+                image_id = item.get("id")
+                if image_id is None:
+                    continue
+                option_label = f"#{image_id} | {item.get('body_part') or 'Unspecified'} | {item.get('fracture_type') or 'Unspecified'} | {item.get('image_name') or 'X-ray'}"
+                batch_options.append(option_label)
+                batch_label_to_id[option_label] = image_id
+
+            batch_cols = st.columns([2.8, 1, 1, 2.2])
+            with batch_cols[0]:
+                selected_batch_labels = st.multiselect(
+                    "Batch select",
+                    options=batch_options,
+                    key=batch_selection_key,
+                    placeholder="Select images for batch delete",
+                )
+            with batch_cols[1]:
+                if st.button("Stage Delete", key=f"{panel_key}_xray_stage_batch_delete", use_container_width=True):
+                    selected_ids = [batch_label_to_id[label] for label in selected_batch_labels if label in batch_label_to_id]
+                    if not selected_ids:
+                        st.warning("Select at least one image to delete.")
+                    else:
+                        st.session_state[batch_pending_key] = selected_ids
+                        st.session_state.pop(pending_delete_key, None)
+                        st.rerun()
+            with batch_cols[2]:
+                if st.button("Clear", key=f"{panel_key}_xray_clear_batch_select", use_container_width=True):
+                    st.session_state[batch_selection_key] = []
+                    st.session_state.pop(batch_pending_key, None)
+                    st.rerun()
+
+            pending_batch_ids = st.session_state.get(batch_pending_key) or []
+            if pending_batch_ids:
+                st.warning(f"Confirm batch deletion of {len(pending_batch_ids)} image(s). This action cannot be undone.")
+                confirm_batch_cols = st.columns([1, 1, 4])
+                with confirm_batch_cols[0]:
+                    if st.button("Confirm Batch", key=f"{panel_key}_xray_confirm_batch_delete", use_container_width=True):
+                        for image_id in pending_batch_ids:
+                            delete_anatomy_xray_image(image_id)
+                        st.session_state[batch_pending_key] = []
+                        st.session_state[batch_selection_key] = []
+                        st.success(f"Deleted {len(pending_batch_ids)} image(s).")
+                        st.rerun()
+                with confirm_batch_cols[1]:
+                    if st.button("Cancel Batch", key=f"{panel_key}_xray_cancel_batch_delete", use_container_width=True):
+                        st.session_state[batch_pending_key] = []
+                        st.rerun()
+
+            def _render_xray_item(item, prefix):
+                image_id = item.get("id")
+                image_bytes = item.get("image_bytes")
+                if isinstance(image_bytes, memoryview):
+                    image_bytes = bytes(image_bytes)
+
+                st.markdown('<div style="border:1px solid #d8dee7; border-radius:12px; padding:0.85rem; margin:0.75rem 0; background:#fff;">', unsafe_allow_html=True)
+                meta_cols = st.columns([2.6, 1.2, 1.2, 1.2])
+                with meta_cols[0]:
+                    st.markdown(f"**{item.get('image_name') or 'X-ray'}**")
+                    st.caption(f"{item.get('body_part') or 'Unspecified'} · {item.get('fracture_type') or 'Unspecified'} · {item.get('view_label') or 'Unspecified'}")
+                with meta_cols[1]:
+                    if image_bytes:
+                        st.download_button(
+                            "Download",
+                            data=image_bytes,
+                            file_name=item.get("image_name") or "xray_image",
+                            mime=item.get("image_mime") or "application/octet-stream",
+                            key=f"{panel_key}_xray_download_{prefix}_{image_id}",
+                        )
+                with meta_cols[2]:
+                    if st.button("Delete", key=f"{panel_key}_xray_delete_{prefix}_{image_id}"):
+                        st.session_state[pending_delete_key] = image_id
+                        st.session_state.pop(batch_pending_key, None)
+                        st.rerun()
+                with meta_cols[3]:
+                    created_value = item.get("created_date")
+                    created_label = created_value.strftime("%b %d, %Y") if hasattr(created_value, "strftime") else str(created_value or "")
+                    st.caption(f"Uploaded {created_label}")
+
+                if st.session_state.get(pending_delete_key) == image_id:
+                    st.warning("Confirm image deletion. This action cannot be undone.")
+                    confirm_cols = st.columns([1, 1, 3])
+                    with confirm_cols[0]:
+                        if st.button("Confirm Delete", key=f"{panel_key}_xray_confirm_delete_{prefix}_{image_id}", use_container_width=True):
+                            delete_anatomy_xray_image(image_id)
+                            st.session_state.pop(pending_delete_key, None)
+                            st.success("X-ray image deleted.")
+                            st.rerun()
+                    with confirm_cols[1]:
+                        if st.button("Cancel", key=f"{panel_key}_xray_cancel_delete_{prefix}_{image_id}", use_container_width=True):
+                            st.session_state.pop(pending_delete_key, None)
+                            st.rerun()
+
+                if image_bytes:
+                    st.image(image_bytes, caption=item.get("view_label") or "X-ray", use_container_width=True)
+                if item.get("notes"):
+                    st.caption(item.get("notes"))
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            if view_mode == "Grid":
+                grid_cols = st.columns(3)
+                for idx, item in enumerate(filtered_xrays):
+                    with grid_cols[idx % 3]:
+                        _render_xray_item(item, "grid")
+            else:
+                for item in filtered_xrays:
+                    _render_xray_item(item, "list")
+        else:
+            st.markdown('<div class="empty-state">No X-ray images uploaded yet. Add your first non-PHI image above.</div>', unsafe_allow_html=True)
 
     with exam_tab:
         st.markdown("### Orthopedic Exam Library")

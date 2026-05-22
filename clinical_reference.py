@@ -216,6 +216,40 @@ def anatomy_related_resources(topic_name, topic_terms, surgical_cases, protocol_
     return case_ranked[:max_items], protocol_ranked[:max_items]
 
 
+def filter_anatomy_xray_images(images, body_part_filter="All", fracture_filter="All", view_filter="All", query=""):
+    normalized_query = str(query or "").strip().lower()
+    filtered = []
+
+    for item in images or []:
+        body_part = str(item.get("body_part") or "").strip()
+        fracture_type = str(item.get("fracture_type") or "").strip()
+        view_label = str(item.get("view_label") or "").strip()
+
+        if body_part_filter != "All" and body_part != body_part_filter:
+            continue
+        if fracture_filter != "All" and fracture_type != fracture_filter:
+            continue
+        if view_filter != "All" and view_label != view_filter:
+            continue
+
+        if normalized_query:
+            searchable_text = " ".join(
+                [
+                    body_part,
+                    fracture_type,
+                    view_label,
+                    str(item.get("notes") or ""),
+                    str(item.get("image_name") or ""),
+                ]
+            ).lower()
+            if normalized_query not in searchable_text:
+                continue
+
+        filtered.append(item)
+
+    return filtered
+
+
 def render_anatomy_structure_spotlight(region_name, structures, panel_key):
     st.markdown(f"#### Structure Spotlight: {region_name}")
     structure_names = list(structures.keys())
