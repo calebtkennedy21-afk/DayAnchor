@@ -5202,6 +5202,20 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 rotation_map = st.session_state.get(rotation_map_key, {})
                 current_rotation = int(rotation_map.get(image_id, 0)) % 360
 
+                rotated_bytes = None
+                if image_bytes and current_rotation:
+                    try:
+                        from PIL import Image
+
+                        pil_image = Image.open(BytesIO(image_bytes))
+                        rotated = pil_image.rotate(-current_rotation, expand=True)
+                        buffer = BytesIO()
+                        save_format = pil_image.format or "PNG"
+                        rotated.save(buffer, format=save_format)
+                        rotated_bytes = buffer.getvalue()
+                    except Exception:
+                        rotated_bytes = None
+
                 st.markdown('<div style="border:1px solid #d8dee7; border-radius:12px; padding:0.85rem; margin:0.75rem 0; background:#fff;">', unsafe_allow_html=True)
                 meta_cols = st.columns([2.2, 1.1, 1.1, 1.1, 1.1])
                 with meta_cols[0]:
@@ -5234,13 +5248,29 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                         st.session_state.pop(batch_pending_key, None)
                         st.rerun()
 
-                rotate_reset_cols = st.columns([1.2, 3.8])
+                rotate_reset_cols = st.columns([1.3, 1.7, 3.0])
                 with rotate_reset_cols[0]:
                     if st.button("Reset Rotation", key=f"{panel_key}_xray_reset_rotate_{prefix}_{image_id}", use_container_width=True):
                         rotation_map[image_id] = 0
                         st.session_state[rotation_map_key] = rotation_map
                         st.rerun()
                 with rotate_reset_cols[1]:
+                    if current_rotation and rotated_bytes:
+                        rotated_name = item.get("image_name") or "xray_image"
+                        if "." in rotated_name:
+                            base_name, ext = rotated_name.rsplit(".", 1)
+                            rotated_name = f"{base_name}_rot{current_rotation}.{ext}"
+                        else:
+                            rotated_name = f"{rotated_name}_rot{current_rotation}"
+                        st.download_button(
+                            "Download Rotated",
+                            data=rotated_bytes,
+                            file_name=rotated_name,
+                            mime=item.get("image_mime") or "application/octet-stream",
+                            key=f"{panel_key}_xray_download_rotated_{prefix}_{image_id}",
+                            use_container_width=True,
+                        )
+                with rotate_reset_cols[2]:
                     created_value = item.get("created_date")
                     created_label = created_value.strftime("%b %d, %Y") if hasattr(created_value, "strftime") else str(created_value or "")
                     st.caption(f"Uploaded {created_label}")
@@ -5260,19 +5290,9 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                             st.rerun()
 
                 if image_bytes:
-                    render_bytes = image_bytes
-                    if current_rotation:
-                        try:
-                            from PIL import Image
-
-                            pil_image = Image.open(BytesIO(image_bytes))
-                            rotated = pil_image.rotate(-current_rotation, expand=True)
-                            buffer = BytesIO()
-                            save_format = pil_image.format or "PNG"
-                            rotated.save(buffer, format=save_format)
-                            render_bytes = buffer.getvalue()
-                        except Exception:
-                            st.caption("Unable to rotate this image in-app.")
+                    render_bytes = rotated_bytes if (current_rotation and rotated_bytes) else image_bytes
+                    if current_rotation and not rotated_bytes:
+                        st.caption("Unable to rotate this image in-app.")
                     st.image(render_bytes, caption=item.get("view_label") or "X-ray", use_container_width=True)
                 if item.get("notes"):
                     st.caption(item.get("notes"))
