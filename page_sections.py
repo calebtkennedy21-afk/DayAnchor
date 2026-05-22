@@ -517,6 +517,8 @@ def render_surgical_cases_panel(
         education_notes_key = f"{panel_key}_new_case_education_notes"
         cpt_reference_category_key = f"{panel_key}_cpt_reference_category"
         cpt_reference_select_key = f"{panel_key}_cpt_reference_select"
+        cpt_prefill_key = f"{panel_key}_new_case_cpt_prefill"
+        form_reset_key = f"{panel_key}_new_case_reset"
 
         if date_key not in st_module.session_state:
             st_module.session_state[date_key] = date.today()
@@ -526,6 +528,17 @@ def render_surgical_cases_panel(
             st_module.session_state[status_key] = "planned"
         if cpt_reference_category_key not in st_module.session_state:
             st_module.session_state[cpt_reference_category_key] = "All"
+
+        # Apply staged updates before creating any widgets bound to these keys.
+        if st_module.session_state.pop(form_reset_key, False):
+            st_module.session_state[procedure_key] = ""
+            st_module.session_state[location_key] = ""
+            st_module.session_state[cpt_key] = ""
+            st_module.session_state[notes_key] = ""
+            st_module.session_state[education_url_key] = ""
+            st_module.session_state[education_notes_key] = ""
+        if cpt_prefill_key in st_module.session_state:
+            st_module.session_state[cpt_key] = st_module.session_state.pop(cpt_prefill_key)
 
         cpt_reference = deps.get("cpt_reference", [])
         reference_categories = ["All"] + sorted({item.get("category") or "Other" for item in cpt_reference})
@@ -564,7 +577,7 @@ def render_surgical_cases_panel(
                         f"{selected_item.get('category', 'Other')} · {selected_item.get('description', '')}"
                     )
                     if st_module.button("Use selected CPT", key=f"{panel_key}_use_reference_cpt"):
-                        st_module.session_state[cpt_key] = selected_code
+                        st_module.session_state[cpt_prefill_key] = selected_code
                         st_module.rerun()
 
         case_date = st_module.date_input("Case date", key=date_key)
@@ -603,7 +616,7 @@ def render_surgical_cases_panel(
                 with suggestion_cols[2]:
                     suggestion_key = suggestion["matched_case_id"] if suggestion["matched_case_id"] is not None else suggestion["cpt_codes"]
                     if st_module.button("Use", key=f"{panel_key}_cpt_suggestion_use_{idx}_{suggestion_key}"):
-                        st_module.session_state[cpt_key] = suggestion["cpt_codes"]
+                        st_module.session_state[cpt_prefill_key] = suggestion["cpt_codes"]
                         st_module.rerun()
         elif procedure_name.strip() or anatomical_location.strip():
             st_module.caption("No close CPT matches found in history or the reference list yet.")
@@ -656,12 +669,7 @@ def render_surgical_cases_panel(
                     education_url=education_url,
                     education_notes=education_notes,
                 )
-                st_module.session_state[procedure_key] = ""
-                st_module.session_state[location_key] = ""
-                st_module.session_state[cpt_key] = ""
-                st_module.session_state[notes_key] = ""
-                st_module.session_state[education_url_key] = ""
-                st_module.session_state[education_notes_key] = ""
+                st_module.session_state[form_reset_key] = True
                 st_module.success("Surgical case saved.")
                 st_module.rerun()
 
