@@ -737,9 +737,180 @@ def render_surgical_cases_panel(
     }
     
     if surgical_cases:
-        planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
-        completed_cases = [item for item in surgical_cases if item.get("status") == "completed"]
-        canceled_cases = [item for item in surgical_cases if item.get("status") == "canceled"]
+        case_search_key = f"{panel_key}_case_search"
+        case_stream_filter_key = f"{panel_key}_case_stream_filter"
+        case_date_filter_key = f"{panel_key}_case_date_filter"
+        case_limit_key = f"{panel_key}_case_cards_limit"
+        case_preset_pending_key = f"{panel_key}_case_filter_preset_pending"
+        case_bulk_selection_key = f"{panel_key}_bulk_case_selection"
+        case_bulk_status_key = f"{panel_key}_bulk_case_status"
+
+        if case_preset_pending_key in st_module.session_state:
+            pending_preset = st_module.session_state.pop(case_preset_pending_key)
+            preset_defaults = {
+                "all": {
+                    case_search_key: "",
+                    case_stream_filter_key: "All streams",
+                    case_date_filter_key: "All dates",
+                    case_limit_key: 20,
+                },
+                "upcoming_main_or": {
+                    case_search_key: "",
+                    case_stream_filter_key: "Main OR",
+                    case_date_filter_key: "Next 30 days",
+                    case_limit_key: 20,
+                },
+                "tenjet_focus": {
+                    case_search_key: "",
+                    case_stream_filter_key: "TenJet",
+                    case_date_filter_key: "All dates",
+                    case_limit_key: 20,
+                },
+                "recent": {
+                    case_search_key: "",
+                    case_stream_filter_key: "All streams",
+                    case_date_filter_key: "Past 30 days",
+                    case_limit_key: 20,
+                },
+            }
+            for key_name, key_value in preset_defaults.get(pending_preset, preset_defaults["all"]).items():
+                st_module.session_state[key_name] = key_value
+
+        preset_cols = st_module.columns([1, 1, 1, 1])
+        with preset_cols[0]:
+            if st_module.button("Upcoming Main OR", key=f"{panel_key}_preset_upcoming_main_or", use_container_width=True):
+                st_module.session_state[case_preset_pending_key] = "upcoming_main_or"
+                st_module.rerun()
+        with preset_cols[1]:
+            if st_module.button("TenJet Focus", key=f"{panel_key}_preset_tenjet_focus", use_container_width=True):
+                st_module.session_state[case_preset_pending_key] = "tenjet_focus"
+                st_module.rerun()
+        with preset_cols[2]:
+            if st_module.button("Recent Cases", key=f"{panel_key}_preset_recent", use_container_width=True):
+                st_module.session_state[case_preset_pending_key] = "recent"
+                st_module.rerun()
+        with preset_cols[3]:
+            if st_module.button("Reset Filters", key=f"{panel_key}_preset_all", use_container_width=True):
+                st_module.session_state[case_preset_pending_key] = "all"
+                st_module.rerun()
+
+        filter_cols = st_module.columns([2.2, 1.2, 1.2, 1])
+        with filter_cols[0]:
+            case_query = st_module.text_input(
+                "Search cases",
+                key=case_search_key,
+                placeholder="Search procedure, location, CPT, notes, or education fields",
+            )
+        with filter_cols[1]:
+            available_streams = ["Main OR", "DSC OR", "TenJet"]
+            stream_options = ["All streams"] + [stream for stream in available_streams if any(item.get("case_stream") == stream for item in surgical_cases)]
+            case_stream_filter = st_module.selectbox(
+                "Stream",
+                stream_options,
+                key=case_stream_filter_key,
+            )
+        with filter_cols[2]:
+            case_date_filter = st_module.selectbox(
+                "Date range",
+                ["All dates", "Next 30 days", "Past 30 days", "This year"],
+                key=case_date_filter_key,
+            )
+        with filter_cols[3]:
+            case_cards_limit = st_module.selectbox(
+                "Cards",
+                [10, 20, 50, 100],
+                index=1,
+                key=case_limit_key,
+            )
+
+        normalized_case_query = case_query.strip().lower()
+
+        def _case_matches_filters(case_item):
+            if case_stream_filter != "All streams" and case_item.get("case_stream") != case_stream_filter:
+                return False
+
+            case_date_value = case_item.get("case_date")
+            if hasattr(case_date_value, "date"):
+                case_date_value = case_date_value.date()
+            if case_date_filter != "All dates":
+                if not isinstance(case_date_value, date):
+                    return False
+                today_value = date.today()
+                if case_date_filter == "Next 30 days":
+                    if not (today_value <= case_date_value <= today_value + timedelta(days=30)):
+                        return False
+                elif case_date_filter == "Past 30 days":
+                    if not (today_value - timedelta(days=30) <= case_date_value <= today_value):
+                        return False
+                elif case_date_filter == "This year":
+                    if case_date_value.year != today_value.year:
+                        return False
+
+            if normalized_case_query:
+                searchable_text = " ".join(
+                    [
+                        str(case_item.get("procedure_name") or ""),
+                        str(case_item.get("anatomical_location") or ""),
+                        str(case_item.get("cpt_codes") or ""),
+                        str(case_item.get("notes") or ""),
+                        str(case_item.get("education_notes") or ""),
+                    ]
+                ).lower()
+                if normalized_case_query not in searchable_text:
+                    return False
+
+            return True
+
+        filtered_cases = [item for item in surgical_cases if _case_matches_filters(item)]
+        planned_cases = [item for item in filtered_cases if item.get("status") == "planned"]
+        completed_cases = [item for item in filtered_cases if item.get("status") == "completed"]
+        canceled_cases = [item for item in filtered_cases if item.get("status") == "canceled"]
+
+        st_module.caption(
+            f"Showing {len(filtered_cases)} of {len(surgical_cases)} cases"
+        )
+
+        bulk_case_options = []
+        bulk_case_id_by_label = {}
+        for case_item in filtered_cases:
+            case_id = case_item.get("id")
+            if case_id is None:
+                continue
+            case_date_value = case_item.get("case_date")
+            date_label = case_date_value.strftime("%Y-%m-%d") if hasattr(case_date_value, "strftime") else str(case_date_value)
+            label = f"#{case_id} | {case_item.get('case_stream') or 'Unknown'} | {date_label} | {case_item.get('procedure_name') or 'Untitled case'}"
+            bulk_case_options.append(label)
+            bulk_case_id_by_label[label] = case_id
+
+        bulk_cols = st_module.columns([2.8, 1.2, 1, 1])
+        with bulk_cols[0]:
+            selected_bulk_labels = st_module.multiselect(
+                "Bulk select cases",
+                bulk_case_options,
+                key=case_bulk_selection_key,
+                placeholder="Choose cases to update status in one action",
+            )
+        with bulk_cols[1]:
+            bulk_target_status = st_module.selectbox(
+                "Bulk status",
+                ["planned", "completed", "canceled"],
+                key=case_bulk_status_key,
+            )
+        with bulk_cols[2]:
+            if st_module.button("Apply Bulk", key=f"{panel_key}_apply_bulk_status", use_container_width=True):
+                selected_case_ids = [bulk_case_id_by_label[label] for label in selected_bulk_labels if label in bulk_case_id_by_label]
+                if not selected_case_ids:
+                    st_module.warning("Select at least one case before applying bulk status.")
+                else:
+                    for case_id in selected_case_ids:
+                        deps["update_surgical_case"](case_id, status=bulk_target_status)
+                    st_module.success(f"Updated {len(selected_case_ids)} cases to {bulk_target_status}.")
+                    st_module.session_state[case_bulk_selection_key] = []
+                    st_module.rerun()
+        with bulk_cols[3]:
+            if st_module.button("Clear", key=f"{panel_key}_clear_bulk_status", use_container_width=True):
+                st_module.session_state[case_bulk_selection_key] = []
+                st_module.rerun()
         
         planned_tab, completed_tab, canceled_tab = st_module.tabs([
             f"Planned ({len(planned_cases)})",
@@ -752,7 +923,7 @@ def render_surgical_cases_panel(
                 st_module_ref.markdown('<div class="empty-state">No cases in this category.</div>', unsafe_allow_html=True)
                 return
             
-            for item in case_list[:20]:
+            for item in case_list[:case_cards_limit]:
                 case_id = item.get("id")
                 case_date_value = item.get("case_date")
                 date_label = case_date_value.strftime("%b %d, %Y") if hasattr(case_date_value, "strftime") else str(case_date_value)
@@ -766,24 +937,33 @@ def render_surgical_cases_panel(
                     "canceled": "#DC3545"
                 }
                 status_color = status_color_map.get(status, "#6C757D")
+                status_surface_map = {
+                    "planned": "linear-gradient(135deg, #fff8eb 0%, #ffffff 60%)",
+                    "completed": "linear-gradient(135deg, #ecfff2 0%, #ffffff 60%)",
+                    "canceled": "linear-gradient(135deg, #fff0f0 0%, #ffffff 60%)",
+                }
+                status_surface = status_surface_map.get(status, "#ffffff")
                 
                 stream = item.get("case_stream", "Unknown")
                 
                 st_module_ref.markdown(
-                    f"<div style='border-left: 4px solid {status_color}; padding: 1.2rem; margin: 0.8rem 0; background: #fff; border: 1px solid #e0e0e0; border-left: 4px solid {status_color}; border-radius: 0.4rem;'>"
+                    f"<div style='padding: 1.05rem 1.15rem; margin: 0.8rem 0; background: {status_surface}; border: 1px solid #d9dee8; border-left: 5px solid {status_color}; border-radius: 0.65rem; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);'>"
                     f"<div style='display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.8rem;'>"
-                    f"<div><div style='font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; color: #1a1a1a;'>{item.get('procedure_name')}</div>"
-                    f"<div style='font-size: 0.9rem; color: #333;'>{item.get('anatomical_location') or 'Location not specified'}</div></div>"
+                    f"<div><div style='font-size: 1.08rem; font-weight: 700; margin-bottom: 0.35rem; color: #0f172a; line-height: 1.35;'>{item.get('procedure_name')}</div>"
+                    f"<div style='font-size: 0.9rem; color: #334155;'>{item.get('anatomical_location') or 'Location not specified'}</div></div>"
                     f"<div style='text-align: right;'>"
-                    f"<span style='display: inline-block; background: {status_color}; color: white; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; font-weight: 600; margin-left: 0.5rem;'>{str(status).title()}</span>"
-                    f"<span style='display: inline-block; background: #f0f0f0; color: #333; padding: 0.3rem 0.7rem; border-radius: 0.3rem; font-size: 0.85rem; margin-left: 0.5rem;'>{stream}</span>"
+                    f"<span style='display: inline-block; background: {status_color}; color: white; padding: 0.27rem 0.68rem; border-radius: 999px; font-size: 0.8rem; font-weight: 700; margin-left: 0.5rem;'>{str(status).title()}</span>"
+                    f"<span style='display: inline-block; background: #eef2ff; color: #1e293b; padding: 0.27rem 0.68rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; margin-left: 0.45rem;'>{stream}</span>"
                     f"</div></div>"
-                    f"<div style='font-size: 0.9rem; color: #555; margin-bottom: 0.8rem;'>{date_label}{hint_suffix}</div>",
+                    f"<div style='font-size: 0.88rem; color: #475569; margin-bottom: 0.75rem; font-weight: 500;'>{date_label}{hint_suffix}</div>",
                     unsafe_allow_html=True,
                 )
                 
                 if item.get("cpt_codes"):
-                    st_module_ref.markdown(f"**CPT Code(s):** `{item.get('cpt_codes')}`")
+                    st_module_ref.markdown(
+                        f"<span style='display:inline-block; background:#f8fafc; border:1px solid #dbe2ea; color:#0f172a; border-radius:999px; padding:0.24rem 0.72rem; font-size:0.84rem; font-weight:600;'>CPT: {item.get('cpt_codes')}</span>",
+                        unsafe_allow_html=True,
+                    )
                 
                 if item.get("notes"):
                     st_module_ref.markdown(f"**Notes:** {item.get('notes')}")
@@ -935,6 +1115,9 @@ def render_surgical_cases_panel(
                         st_module_ref.rerun()
                 
                 st_module_ref.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
+
+            if len(case_list) > case_cards_limit:
+                st_module_ref.caption(f"Showing first {case_cards_limit} of {len(case_list)} cases in this tab.")
         
         with planned_tab:
             _render_case_card(planned_cases, st_module, deps, protocol_documents, predicted_labels, panel_key)
