@@ -494,15 +494,17 @@ def render_surgical_cases_panel(
 
 
 
-    metrics = st_module.columns(4)
+    metrics = st_module.columns(5)
     planned_cases = [item for item in surgical_cases if item.get("status") == "planned"]
     completed_cases = [item for item in surgical_cases if item.get("status") == "completed"]
     tenjet_cases = [item for item in surgical_cases if item.get("case_stream") == "TenJet"]
     main_or_cases = [item for item in surgical_cases if item.get("case_stream") == "Main OR"]
+    dsc_or_cases = [item for item in surgical_cases if item.get("case_stream") == "DSC OR"]
     metrics[0].metric("Planned", len(planned_cases))
     metrics[1].metric("Completed", len(completed_cases))
     metrics[2].metric("Main OR", len(main_or_cases))
-    metrics[3].metric("TenJet", len(tenjet_cases))
+    metrics[3].metric("DSC OR", len(dsc_or_cases))
+    metrics[4].metric("TenJet", len(tenjet_cases))
 
     top_left, top_right = st_module.columns([1.1, 0.9], gap="large")
     with top_left:
