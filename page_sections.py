@@ -172,6 +172,21 @@ def build_bulk_case_option(case_item):
     return f"#{case_id} | {case_item.get('case_stream') or 'Unknown'} | {date_label} | {case_item.get('procedure_name') or 'Untitled case'}"
 
 
+def case_stream_options(surgical_cases):
+    available_streams = ["Main OR", "DSC OR", "TenJet"]
+    seen_streams = {item.get("case_stream") for item in surgical_cases}
+    return ["All streams"] + [stream for stream in available_streams if stream in seen_streams]
+
+
+def split_cases_by_status(case_list):
+    groups = {"planned": [], "completed": [], "canceled": []}
+    for case_item in case_list:
+        status = case_item.get("status")
+        if status in groups:
+            groups[status].append(case_item)
+    return groups
+
+
 def render_overview_control_tower(
     tasks,
     active_tasks,
@@ -822,6 +837,8 @@ def render_surgical_cases_panel(
         case_bulk_selection_key = f"{panel_key}_bulk_case_selection"
         case_bulk_status_key = f"{panel_key}_bulk_case_status"
         case_bulk_undo_key = f"{panel_key}_bulk_case_undo"
+        case_bulk_pending_key = f"{panel_key}_bulk_case_pending"
+        case_delete_pending_key = f"{panel_key}_case_delete_pending"
 
         if case_preset_pending_key in st_module.session_state:
             pending_preset = st_module.session_state.pop(case_preset_pending_key)
@@ -857,8 +874,7 @@ def render_surgical_cases_panel(
                 placeholder="Search procedure, location, CPT, notes, or education fields",
             )
         with filter_cols[1]:
-            available_streams = ["Main OR", "DSC OR", "TenJet"]
-            stream_options = ["All streams"] + [stream for stream in available_streams if any(item.get("case_stream") == stream for item in surgical_cases)]
+            stream_options = case_stream_options(surgical_cases)
             case_stream_filter = st_module.selectbox(
                 "Stream",
                 stream_options,
@@ -890,9 +906,10 @@ def render_surgical_cases_panel(
                 normalized_case_query,
             )
         ]
-        planned_cases = [item for item in filtered_cases if item.get("status") == "planned"]
-        completed_cases = [item for item in filtered_cases if item.get("status") == "completed"]
-        canceled_cases = [item for item in filtered_cases if item.get("status") == "canceled"]
+        cases_by_status = split_cases_by_status(filtered_cases)
+        planned_cases = cases_by_status["planned"]
+        completed_cases = cases_by_status["completed"]
+        canceled_cases = cases_by_status["canceled"]
 
         st_module.caption(
             f"Showing {len(filtered_cases)} of {len(surgical_cases)} cases"
@@ -928,26 +945,15 @@ def render_surgical_cases_panel(
                 if not selected_case_ids:
                     st_module.warning("Select at least one case before applying bulk status.")
                 else:
-                    current_status_map = {
-                        item.get("id"): item.get("status")
-                        for item in surgical_cases
-                        if item.get("id") is not None
+                    st_module.session_state[case_bulk_pending_key] = {
+                        "case_ids": selected_case_ids,
+                        "target_status": bulk_target_status,
                     }
-                    st_module.session_state[case_bulk_undo_key] = [
-                        {
-                            "id": case_id,
-                            "status": current_status_map.get(case_id, "planned"),
-                        }
-                        for case_id in selected_case_ids
-                    ]
-                    for case_id in selected_case_ids:
-                        deps["update_surgical_case"](case_id, status=bulk_target_status)
-                    st_module.success(f"Updated {len(selected_case_ids)} cases to {bulk_target_status}.")
-                    st_module.session_state[case_bulk_selection_key] = []
                     st_module.rerun()
         with bulk_cols[3]:
             if st_module.button("Clear", key=f"{panel_key}_clear_bulk_status", use_container_width=True):
                 st_module.session_state[case_bulk_selection_key] = []
+                st_module.session_state.pop(case_bulk_pending_key, None)
                 st_module.rerun()
         with bulk_cols[4]:
             if st_module.button("Undo Bulk", key=f"{panel_key}_undo_bulk_status", use_container_width=True):
@@ -959,6 +965,39 @@ def render_surgical_cases_panel(
                         deps["update_surgical_case"](entry["id"], status=entry["status"])
                     st_module.session_state[case_bulk_undo_key] = []
                     st_module.success(f"Reverted {len(undo_entries)} case status updates.")
+                    st_module.rerun()
+
+        pending_bulk = st_module.session_state.get(case_bulk_pending_key)
+        if pending_bulk:
+            pending_ids = pending_bulk.get("case_ids") or []
+            pending_status = pending_bulk.get("target_status") or "planned"
+            st_module.warning(
+                f"Confirm bulk update: set {len(pending_ids)} selected case(s) to {pending_status}."
+            )
+            confirm_cols = st_module.columns([1, 1, 3])
+            with confirm_cols[0]:
+                if st_module.button("Confirm Bulk", key=f"{panel_key}_confirm_bulk_status", use_container_width=True):
+                    current_status_map = {
+                        item.get("id"): item.get("status")
+                        for item in surgical_cases
+                        if item.get("id") is not None
+                    }
+                    st_module.session_state[case_bulk_undo_key] = [
+                        {
+                            "id": case_id,
+                            "status": current_status_map.get(case_id, "planned"),
+                        }
+                        for case_id in pending_ids
+                    ]
+                    for case_id in pending_ids:
+                        deps["update_surgical_case"](case_id, status=pending_status)
+                    st_module.success(f"Updated {len(pending_ids)} cases to {pending_status}.")
+                    st_module.session_state[case_bulk_selection_key] = []
+                    st_module.session_state.pop(case_bulk_pending_key, None)
+                    st_module.rerun()
+            with confirm_cols[1]:
+                if st_module.button("Cancel Bulk", key=f"{panel_key}_cancel_bulk_status", use_container_width=True):
+                    st_module.session_state.pop(case_bulk_pending_key, None)
                     st_module.rerun()
         
         planned_tab, completed_tab, canceled_tab = st_module.tabs([
@@ -1159,9 +1198,22 @@ def render_surgical_cases_panel(
                         st_module_ref.rerun()
                 with action_cols[3]:
                     if st_module_ref.button("Delete", key=f"{panel_key_ref}_delete_{case_id}", use_container_width=True):
-                        deps_ref["delete_surgical_case"](case_id)
-                        st_module_ref.success("Case deleted.")
+                        st_module_ref.session_state[case_delete_pending_key] = case_id
                         st_module_ref.rerun()
+
+                if st_module_ref.session_state.get(case_delete_pending_key) == case_id:
+                    st_module_ref.warning("Confirm case deletion. This action cannot be undone.")
+                    delete_confirm_cols = st_module_ref.columns([1, 1, 3])
+                    with delete_confirm_cols[0]:
+                        if st_module_ref.button("Confirm Delete", key=f"{panel_key_ref}_confirm_delete_{case_id}", use_container_width=True):
+                            deps_ref["delete_surgical_case"](case_id)
+                            st_module_ref.session_state.pop(case_delete_pending_key, None)
+                            st_module_ref.success("Case deleted.")
+                            st_module_ref.rerun()
+                    with delete_confirm_cols[1]:
+                        if st_module_ref.button("Cancel", key=f"{panel_key_ref}_cancel_delete_{case_id}", use_container_width=True):
+                            st_module_ref.session_state.pop(case_delete_pending_key, None)
+                            st_module_ref.rerun()
                 
                 st_module_ref.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
 

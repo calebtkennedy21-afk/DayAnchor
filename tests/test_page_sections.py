@@ -4,6 +4,8 @@ from page_sections import (
     build_bulk_case_option,
     case_library_filter_preset_values,
     case_matches_library_filters,
+    case_stream_options,
+    split_cases_by_status,
 )
 
 
@@ -85,3 +87,31 @@ def test_build_bulk_case_option_returns_none_without_id():
     }
 
     assert build_bulk_case_option(item) is None
+
+
+def test_case_stream_options_includes_only_present_streams():
+    cases = [
+        {"case_stream": "Main OR"},
+        {"case_stream": "TenJet"},
+        {"case_stream": "Main OR"},
+    ]
+
+    options = case_stream_options(cases)
+
+    assert options == ["All streams", "Main OR", "TenJet"]
+
+
+def test_split_cases_by_status_groups_expected_cases():
+    cases = [
+        {"id": 1, "status": "planned"},
+        {"id": 2, "status": "completed"},
+        {"id": 3, "status": "canceled"},
+        {"id": 4, "status": "planned"},
+        {"id": 5, "status": "unknown"},
+    ]
+
+    groups = split_cases_by_status(cases)
+
+    assert [item["id"] for item in groups["planned"]] == [1, 4]
+    assert [item["id"] for item in groups["completed"]] == [2]
+    assert [item["id"] for item in groups["canceled"]] == [3]
