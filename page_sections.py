@@ -95,6 +95,83 @@ def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
     }
 
 
+def case_library_filter_preset_values(preset_name):
+    preset_defaults = {
+        "all": {
+            "case_query": "",
+            "stream_filter": "All streams",
+            "date_filter": "All dates",
+            "cards_limit": 20,
+        },
+        "upcoming_main_or": {
+            "case_query": "",
+            "stream_filter": "Main OR",
+            "date_filter": "Next 30 days",
+            "cards_limit": 20,
+        },
+        "tenjet_focus": {
+            "case_query": "",
+            "stream_filter": "TenJet",
+            "date_filter": "All dates",
+            "cards_limit": 20,
+        },
+        "recent": {
+            "case_query": "",
+            "stream_filter": "All streams",
+            "date_filter": "Past 30 days",
+            "cards_limit": 20,
+        },
+    }
+    return preset_defaults.get(preset_name, preset_defaults["all"])
+
+
+def case_matches_library_filters(case_item, stream_filter, date_filter, normalized_query, today_value=None):
+    if stream_filter != "All streams" and case_item.get("case_stream") != stream_filter:
+        return False
+
+    case_date_value = case_item.get("case_date")
+    if hasattr(case_date_value, "date"):
+        case_date_value = case_date_value.date()
+    if date_filter != "All dates":
+        if not isinstance(case_date_value, date):
+            return False
+        if today_value is None:
+            today_value = date.today()
+        if date_filter == "Next 30 days":
+            if not (today_value <= case_date_value <= today_value + timedelta(days=30)):
+                return False
+        elif date_filter == "Past 30 days":
+            if not (today_value - timedelta(days=30) <= case_date_value <= today_value):
+                return False
+        elif date_filter == "This year":
+            if case_date_value.year != today_value.year:
+                return False
+
+    if normalized_query:
+        searchable_text = " ".join(
+            [
+                str(case_item.get("procedure_name") or ""),
+                str(case_item.get("anatomical_location") or ""),
+                str(case_item.get("cpt_codes") or ""),
+                str(case_item.get("notes") or ""),
+                str(case_item.get("education_notes") or ""),
+            ]
+        ).lower()
+        if normalized_query not in searchable_text:
+            return False
+
+    return True
+
+
+def build_bulk_case_option(case_item):
+    case_id = case_item.get("id")
+    if case_id is None:
+        return None
+    case_date_value = case_item.get("case_date")
+    date_label = case_date_value.strftime("%Y-%m-%d") if hasattr(case_date_value, "strftime") else str(case_date_value)
+    return f"#{case_id} | {case_item.get('case_stream') or 'Unknown'} | {date_label} | {case_item.get('procedure_name') or 'Untitled case'}"
+
+
 def render_overview_control_tower(
     tasks,
     active_tasks,
@@ -744,37 +821,15 @@ def render_surgical_cases_panel(
         case_preset_pending_key = f"{panel_key}_case_filter_preset_pending"
         case_bulk_selection_key = f"{panel_key}_bulk_case_selection"
         case_bulk_status_key = f"{panel_key}_bulk_case_status"
+        case_bulk_undo_key = f"{panel_key}_bulk_case_undo"
 
         if case_preset_pending_key in st_module.session_state:
             pending_preset = st_module.session_state.pop(case_preset_pending_key)
-            preset_defaults = {
-                "all": {
-                    case_search_key: "",
-                    case_stream_filter_key: "All streams",
-                    case_date_filter_key: "All dates",
-                    case_limit_key: 20,
-                },
-                "upcoming_main_or": {
-                    case_search_key: "",
-                    case_stream_filter_key: "Main OR",
-                    case_date_filter_key: "Next 30 days",
-                    case_limit_key: 20,
-                },
-                "tenjet_focus": {
-                    case_search_key: "",
-                    case_stream_filter_key: "TenJet",
-                    case_date_filter_key: "All dates",
-                    case_limit_key: 20,
-                },
-                "recent": {
-                    case_search_key: "",
-                    case_stream_filter_key: "All streams",
-                    case_date_filter_key: "Past 30 days",
-                    case_limit_key: 20,
-                },
-            }
-            for key_name, key_value in preset_defaults.get(pending_preset, preset_defaults["all"]).items():
-                st_module.session_state[key_name] = key_value
+            preset_values = case_library_filter_preset_values(pending_preset)
+            st_module.session_state[case_search_key] = preset_values["case_query"]
+            st_module.session_state[case_stream_filter_key] = preset_values["stream_filter"]
+            st_module.session_state[case_date_filter_key] = preset_values["date_filter"]
+            st_module.session_state[case_limit_key] = preset_values["cards_limit"]
 
         preset_cols = st_module.columns([1, 1, 1, 1])
         with preset_cols[0]:
@@ -825,43 +880,16 @@ def render_surgical_cases_panel(
 
         normalized_case_query = case_query.strip().lower()
 
-        def _case_matches_filters(case_item):
-            if case_stream_filter != "All streams" and case_item.get("case_stream") != case_stream_filter:
-                return False
-
-            case_date_value = case_item.get("case_date")
-            if hasattr(case_date_value, "date"):
-                case_date_value = case_date_value.date()
-            if case_date_filter != "All dates":
-                if not isinstance(case_date_value, date):
-                    return False
-                today_value = date.today()
-                if case_date_filter == "Next 30 days":
-                    if not (today_value <= case_date_value <= today_value + timedelta(days=30)):
-                        return False
-                elif case_date_filter == "Past 30 days":
-                    if not (today_value - timedelta(days=30) <= case_date_value <= today_value):
-                        return False
-                elif case_date_filter == "This year":
-                    if case_date_value.year != today_value.year:
-                        return False
-
-            if normalized_case_query:
-                searchable_text = " ".join(
-                    [
-                        str(case_item.get("procedure_name") or ""),
-                        str(case_item.get("anatomical_location") or ""),
-                        str(case_item.get("cpt_codes") or ""),
-                        str(case_item.get("notes") or ""),
-                        str(case_item.get("education_notes") or ""),
-                    ]
-                ).lower()
-                if normalized_case_query not in searchable_text:
-                    return False
-
-            return True
-
-        filtered_cases = [item for item in surgical_cases if _case_matches_filters(item)]
+        filtered_cases = [
+            item
+            for item in surgical_cases
+            if case_matches_library_filters(
+                item,
+                case_stream_filter,
+                case_date_filter,
+                normalized_case_query,
+            )
+        ]
         planned_cases = [item for item in filtered_cases if item.get("status") == "planned"]
         completed_cases = [item for item in filtered_cases if item.get("status") == "completed"]
         canceled_cases = [item for item in filtered_cases if item.get("status") == "canceled"]
@@ -873,16 +901,14 @@ def render_surgical_cases_panel(
         bulk_case_options = []
         bulk_case_id_by_label = {}
         for case_item in filtered_cases:
-            case_id = case_item.get("id")
-            if case_id is None:
+            option_label = build_bulk_case_option(case_item)
+            if not option_label:
                 continue
-            case_date_value = case_item.get("case_date")
-            date_label = case_date_value.strftime("%Y-%m-%d") if hasattr(case_date_value, "strftime") else str(case_date_value)
-            label = f"#{case_id} | {case_item.get('case_stream') or 'Unknown'} | {date_label} | {case_item.get('procedure_name') or 'Untitled case'}"
-            bulk_case_options.append(label)
-            bulk_case_id_by_label[label] = case_id
+            case_id = case_item.get("id")
+            bulk_case_options.append(option_label)
+            bulk_case_id_by_label[option_label] = case_id
 
-        bulk_cols = st_module.columns([2.8, 1.2, 1, 1])
+        bulk_cols = st_module.columns([2.4, 1.2, 1, 1, 1])
         with bulk_cols[0]:
             selected_bulk_labels = st_module.multiselect(
                 "Bulk select cases",
@@ -902,6 +928,18 @@ def render_surgical_cases_panel(
                 if not selected_case_ids:
                     st_module.warning("Select at least one case before applying bulk status.")
                 else:
+                    current_status_map = {
+                        item.get("id"): item.get("status")
+                        for item in surgical_cases
+                        if item.get("id") is not None
+                    }
+                    st_module.session_state[case_bulk_undo_key] = [
+                        {
+                            "id": case_id,
+                            "status": current_status_map.get(case_id, "planned"),
+                        }
+                        for case_id in selected_case_ids
+                    ]
                     for case_id in selected_case_ids:
                         deps["update_surgical_case"](case_id, status=bulk_target_status)
                     st_module.success(f"Updated {len(selected_case_ids)} cases to {bulk_target_status}.")
@@ -911,6 +949,17 @@ def render_surgical_cases_panel(
             if st_module.button("Clear", key=f"{panel_key}_clear_bulk_status", use_container_width=True):
                 st_module.session_state[case_bulk_selection_key] = []
                 st_module.rerun()
+        with bulk_cols[4]:
+            if st_module.button("Undo Bulk", key=f"{panel_key}_undo_bulk_status", use_container_width=True):
+                undo_entries = st_module.session_state.get(case_bulk_undo_key) or []
+                if not undo_entries:
+                    st_module.warning("No bulk update to undo.")
+                else:
+                    for entry in undo_entries:
+                        deps["update_surgical_case"](entry["id"], status=entry["status"])
+                    st_module.session_state[case_bulk_undo_key] = []
+                    st_module.success(f"Reverted {len(undo_entries)} case status updates.")
+                    st_module.rerun()
         
         planned_tab, completed_tab, canceled_tab = st_module.tabs([
             f"Planned ({len(planned_cases)})",
