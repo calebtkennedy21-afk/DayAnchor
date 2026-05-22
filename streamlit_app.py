@@ -4,6 +4,7 @@ import html
 import re
 import calendar
 import textwrap
+from io import BytesIO
 from datetime import date, datetime, time, timedelta
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -4992,6 +4993,9 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         pending_delete_key = f"{panel_key}_xray_delete_pending"
         batch_selection_key = f"{panel_key}_xray_batch_selection"
         batch_pending_key = f"{panel_key}_xray_batch_pending"
+        rotation_map_key = f"{panel_key}_xray_rotation_map"
+        if rotation_map_key not in st.session_state:
+            st.session_state[rotation_map_key] = {}
 
         with st.form(f"{panel_key}_xray_upload_form", clear_on_submit=True):
             upload_cols = st.columns(2)
@@ -5195,11 +5199,16 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 if isinstance(image_bytes, memoryview):
                     image_bytes = bytes(image_bytes)
 
+                rotation_map = st.session_state.get(rotation_map_key, {})
+                current_rotation = int(rotation_map.get(image_id, 0)) % 360
+
                 st.markdown('<div style="border:1px solid #d8dee7; border-radius:12px; padding:0.85rem; margin:0.75rem 0; background:#fff;">', unsafe_allow_html=True)
-                meta_cols = st.columns([2.6, 1.2, 1.2, 1.2])
+                meta_cols = st.columns([2.2, 1.1, 1.1, 1.1, 1.1])
                 with meta_cols[0]:
                     st.markdown(f"**{item.get('image_name') or 'X-ray'}**")
-                    st.caption(f"{item.get('body_part') or 'Unspecified'} · {item.get('fracture_type') or 'Unspecified'} · {item.get('view_label') or 'Unspecified'}")
+                    st.caption(
+                        f"{item.get('body_part') or 'Unspecified'} · {item.get('fracture_type') or 'Unspecified'} · {item.get('view_label') or 'Unspecified'} · rotation {current_rotation}°"
+                    )
                 with meta_cols[1]:
                     if image_bytes:
                         st.download_button(
@@ -5210,11 +5219,28 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                             key=f"{panel_key}_xray_download_{prefix}_{image_id}",
                         )
                 with meta_cols[2]:
+                    if st.button("Rotate -90", key=f"{panel_key}_xray_rotate_left_{prefix}_{image_id}"):
+                        rotation_map[image_id] = (current_rotation - 90) % 360
+                        st.session_state[rotation_map_key] = rotation_map
+                        st.rerun()
+                with meta_cols[3]:
+                    if st.button("Rotate +90", key=f"{panel_key}_xray_rotate_right_{prefix}_{image_id}"):
+                        rotation_map[image_id] = (current_rotation + 90) % 360
+                        st.session_state[rotation_map_key] = rotation_map
+                        st.rerun()
+                with meta_cols[4]:
                     if st.button("Delete", key=f"{panel_key}_xray_delete_{prefix}_{image_id}"):
                         st.session_state[pending_delete_key] = image_id
                         st.session_state.pop(batch_pending_key, None)
                         st.rerun()
-                with meta_cols[3]:
+
+                rotate_reset_cols = st.columns([1.2, 3.8])
+                with rotate_reset_cols[0]:
+                    if st.button("Reset Rotation", key=f"{panel_key}_xray_reset_rotate_{prefix}_{image_id}", use_container_width=True):
+                        rotation_map[image_id] = 0
+                        st.session_state[rotation_map_key] = rotation_map
+                        st.rerun()
+                with rotate_reset_cols[1]:
                     created_value = item.get("created_date")
                     created_label = created_value.strftime("%b %d, %Y") if hasattr(created_value, "strftime") else str(created_value or "")
                     st.caption(f"Uploaded {created_label}")
@@ -5234,7 +5260,20 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                             st.rerun()
 
                 if image_bytes:
-                    st.image(image_bytes, caption=item.get("view_label") or "X-ray", use_container_width=True)
+                    render_bytes = image_bytes
+                    if current_rotation:
+                        try:
+                            from PIL import Image
+
+                            pil_image = Image.open(BytesIO(image_bytes))
+                            rotated = pil_image.rotate(-current_rotation, expand=True)
+                            buffer = BytesIO()
+                            save_format = pil_image.format or "PNG"
+                            rotated.save(buffer, format=save_format)
+                            render_bytes = buffer.getvalue()
+                        except Exception:
+                            st.caption("Unable to rotate this image in-app.")
+                    st.image(render_bytes, caption=item.get("view_label") or "X-ray", use_container_width=True)
                 if item.get("notes"):
                     st.caption(item.get("notes"))
                 st.markdown("</div>", unsafe_allow_html=True)
