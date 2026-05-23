@@ -5153,7 +5153,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 batch_options.append(option_label)
                 batch_label_to_id[option_label] = image_id
 
-            batch_cols = st.columns([2.8, 1, 1, 2.2])
+            batch_cols = st.columns([2.4, 1, 1, 1, 2.2])
             with batch_cols[0]:
                 selected_batch_labels = st.multiselect(
                     "Batch select",
@@ -5162,6 +5162,10 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                     placeholder="Select images for batch delete",
                 )
             with batch_cols[1]:
+                if st.button("Select All", key=f"{panel_key}_xray_select_all_batch", use_container_width=True):
+                    st.session_state[batch_selection_key] = list(batch_options)
+                    st.rerun()
+            with batch_cols[2]:
                 if st.button("Stage Delete", key=f"{panel_key}_xray_stage_batch_delete", use_container_width=True):
                     selected_ids = [batch_label_to_id[label] for label in selected_batch_labels if label in batch_label_to_id]
                     if not selected_ids:
@@ -5170,7 +5174,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                         st.session_state[batch_pending_key] = selected_ids
                         st.session_state.pop(pending_delete_key, None)
                         st.rerun()
-            with batch_cols[2]:
+            with batch_cols[3]:
                 if st.button("Clear", key=f"{panel_key}_xray_clear_batch_select", use_container_width=True):
                     st.session_state[batch_selection_key] = []
                     st.session_state.pop(batch_pending_key, None)

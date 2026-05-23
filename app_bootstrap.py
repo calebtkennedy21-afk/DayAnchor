@@ -1,6 +1,44 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
+
+
+def summarize_schedule_conflicts(scheduled_tasks, fallback_minutes=60, daily_capacity_minutes=480):
+    conflicts = []
+    over_capacity_days = []
+    by_day = {}
+
+    for task in scheduled_tasks:
+        scheduled_date = task.get("scheduled_date")
+        scheduled_time = task.get("scheduled_time")
+        if not scheduled_date or not scheduled_time:
+            continue
+
+        minutes_raw = task.get("scheduled_minutes")
+        try:
+            minutes_value = int(minutes_raw) if minutes_raw is not None else int(fallback_minutes)
+        except (TypeError, ValueError):
+            minutes_value = int(fallback_minutes)
+        if minutes_value <= 0:
+            minutes_value = int(fallback_minutes)
+
+        start_dt = datetime.combine(scheduled_date, scheduled_time)
+        end_dt = start_dt + timedelta(minutes=minutes_value)
+        by_day.setdefault(scheduled_date, []).append((start_dt, end_dt, task, minutes_value))
+
+    for day_value, entries in by_day.items():
+        entries.sort(key=lambda item: item[0])
+        total_minutes = sum(item[3] for item in entries)
+        if total_minutes > int(daily_capacity_minutes):
+            over_capacity_days.append((day_value, total_minutes))
+
+        for idx in range(1, len(entries)):
+            previous_entry = entries[idx - 1]
+            current_entry = entries[idx]
+            if current_entry[0] < previous_entry[1]:
+                conflicts.append((day_value, previous_entry[2], current_entry[2]))
+
+    return conflicts, over_capacity_days
 
 
 def run_app(context, st_module=st):
@@ -52,6 +90,7 @@ def run_app(context, st_module=st):
     summarize_news_with_ai = context.get("summarize_news_with_ai")
     render_morning_digest_panel = context.get("render_morning_digest_panel")
     render_full_news_page = context.get("render_full_news_page")
+    add_task = context["add_task"]
     news_manual_refresh_requested = False
 
     initialize_database()
@@ -150,16 +189,98 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### View Controls")
-        search_query = st_module.text_input("Search tasks", placeholder="Title or description")
-        category_filter = st_module.multiselect("Category", ["Personal", "Clinic"], default=["Personal", "Clinic"])
-        priority_filter = st_module.multiselect("Priority", ["high", "medium", "low"], default=["high", "medium", "low"])
+        view_search_key = "view_search_query"
+        view_category_key = "view_category_filter"
+        view_priority_key = "view_priority_filter"
+        view_status_key = "view_status_filter"
+        view_scheduled_only_key = "view_scheduled_only"
+        view_preset_pending_key = "view_preset_pending"
+
+        if view_search_key not in st_module.session_state:
+            st_module.session_state[view_search_key] = ""
+        if view_category_key not in st_module.session_state:
+            st_module.session_state[view_category_key] = ["Personal", "Clinic"]
+        if view_priority_key not in st_module.session_state:
+            st_module.session_state[view_priority_key] = ["high", "medium", "low"]
+        if view_status_key not in st_module.session_state:
+            st_module.session_state[view_status_key] = ["todo", "in_progress", "blocked", "completed"]
+        if view_scheduled_only_key not in st_module.session_state:
+            st_module.session_state[view_scheduled_only_key] = False
+
+        if view_preset_pending_key in st_module.session_state:
+            pending_view_preset = st_module.session_state.pop(view_preset_pending_key)
+            preset_values = {
+                "all": {
+                    view_search_key: "",
+                    view_category_key: ["Personal", "Clinic"],
+                    view_priority_key: ["high", "medium", "low"],
+                    view_status_key: ["todo", "in_progress", "blocked", "completed"],
+                    view_scheduled_only_key: False,
+                },
+                "today_focus": {
+                    view_search_key: "",
+                    view_category_key: ["Personal", "Clinic"],
+                    view_priority_key: ["high", "medium"],
+                    view_status_key: ["todo", "in_progress", "blocked"],
+                    view_scheduled_only_key: False,
+                },
+                "clinic_ops": {
+                    view_search_key: "",
+                    view_category_key: ["Clinic"],
+                    view_priority_key: ["high", "medium", "low"],
+                    view_status_key: ["todo", "in_progress", "blocked", "completed"],
+                    view_scheduled_only_key: False,
+                },
+                "personal_sprint": {
+                    view_search_key: "",
+                    view_category_key: ["Personal"],
+                    view_priority_key: ["high", "medium"],
+                    view_status_key: ["todo", "in_progress", "blocked", "completed"],
+                    view_scheduled_only_key: False,
+                },
+                "scheduled": {
+                    view_search_key: "",
+                    view_category_key: ["Personal", "Clinic"],
+                    view_priority_key: ["high", "medium", "low"],
+                    view_status_key: ["todo", "in_progress", "blocked", "completed"],
+                    view_scheduled_only_key: True,
+                },
+            }
+            for key_name, key_value in preset_values.get(pending_view_preset, preset_values["all"]).items():
+                st_module.session_state[key_name] = key_value
+
+        preset_row = st_module.columns(5)
+        with preset_row[0]:
+            if st_module.button("All", key="view_preset_all", use_container_width=True):
+                st_module.session_state[view_preset_pending_key] = "all"
+                st_module.rerun()
+        with preset_row[1]:
+            if st_module.button("Today", key="view_preset_today", use_container_width=True):
+                st_module.session_state[view_preset_pending_key] = "today_focus"
+                st_module.rerun()
+        with preset_row[2]:
+            if st_module.button("Clinic", key="view_preset_clinic", use_container_width=True):
+                st_module.session_state[view_preset_pending_key] = "clinic_ops"
+                st_module.rerun()
+        with preset_row[3]:
+            if st_module.button("Personal", key="view_preset_personal", use_container_width=True):
+                st_module.session_state[view_preset_pending_key] = "personal_sprint"
+                st_module.rerun()
+        with preset_row[4]:
+            if st_module.button("Scheduled", key="view_preset_scheduled", use_container_width=True):
+                st_module.session_state[view_preset_pending_key] = "scheduled"
+                st_module.rerun()
+
+        search_query = st_module.text_input("Search tasks", placeholder="Title or description", key=view_search_key)
+        category_filter = st_module.multiselect("Category", ["Personal", "Clinic"], key=view_category_key)
+        priority_filter = st_module.multiselect("Priority", ["high", "medium", "low"], key=view_priority_key)
         status_filter = st_module.multiselect(
             "Status",
             ["todo", "in_progress", "blocked", "completed"],
-            default=["todo", "in_progress", "blocked", "completed"],
+            key=view_status_key,
             format_func=status_label,
         )
-        scheduled_only = st_module.checkbox("Scheduled tasks only", value=False)
+        scheduled_only = st_module.checkbox("Scheduled tasks only", key=view_scheduled_only_key)
         timeline_days = st_module.slider(
             "Timeline window (days)",
             min_value=3,
@@ -290,6 +411,65 @@ def run_app(context, st_module=st):
         key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
     )
 
+    with st_module.form("global_quick_command_bar", clear_on_submit=True):
+        st_module.markdown("### Quick Command Bar")
+        command_cols = st_module.columns([2.8, 1.1, 1.1, 1.2, 1])
+        with command_cols[0]:
+            command_title = st_module.text_input("Task", placeholder="Add task from any page", label_visibility="collapsed")
+        with command_cols[1]:
+            command_category = st_module.selectbox("Lane", ["Personal", "Clinic"], index=0, label_visibility="collapsed")
+        with command_cols[2]:
+            command_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1, label_visibility="collapsed")
+        with command_cols[3]:
+            command_due = st_module.date_input("Due", value=date.today(), label_visibility="collapsed")
+        with command_cols[4]:
+            command_submit = st_module.form_submit_button("Add", type="primary")
+
+        if command_submit:
+            if not command_title.strip():
+                st_module.warning("Add a task title before submitting the command bar.")
+            else:
+                add_task(command_title.strip(), "", command_category, command_priority, command_due)
+                st_module.success("Task captured from command bar.")
+                st_module.rerun()
+
+    ritual_started_key = "day_ritual_started_on"
+    ritual_closed_key = "day_ritual_closed_on"
+    ritual_snapshot_key = "day_ritual_snapshot"
+
+    ritual_cols = st_module.columns([1.2, 1.2, 5])
+    with ritual_cols[0]:
+        if st_module.button("Start My Day", key="day_ritual_start", use_container_width=True):
+            st_module.session_state[ritual_started_key] = date.today().isoformat()
+            st_module.session_state[ritual_closed_key] = None
+            st_module.session_state[ritual_snapshot_key] = {
+                "started_active": len(active_tasks),
+                "started_due_today": len(due_today),
+            }
+            st_module.success("Day started. Priorities and queue are locked in.")
+    with ritual_cols[1]:
+        if st_module.button("Close My Day", key="day_ritual_close", use_container_width=True):
+            st_module.session_state[ritual_closed_key] = date.today().isoformat()
+            st_module.session_state[ritual_snapshot_key] = {
+                "completed_today": len(completed_today_all),
+                "remaining_active": len(active_tasks),
+            }
+            st_module.success("Day closed. Review snapshot recorded.")
+    with ritual_cols[2]:
+        started_on = st_module.session_state.get(ritual_started_key)
+        closed_on = st_module.session_state.get(ritual_closed_key)
+        ritual_snapshot = st_module.session_state.get(ritual_snapshot_key) or {}
+        if closed_on == date.today().isoformat():
+            st_module.caption(
+                f"Closed today: {ritual_snapshot.get('completed_today', 0)} completed · {ritual_snapshot.get('remaining_active', 0)} remaining active."
+            )
+        elif started_on == date.today().isoformat():
+            st_module.caption(
+                f"Started today: {ritual_snapshot.get('started_active', len(active_tasks))} active · {ritual_snapshot.get('started_due_today', len(due_today))} due today."
+            )
+        else:
+            st_module.caption("Use Start My Day and Close My Day for a lightweight daily ritual.")
+
     if len(filtered_tasks) != len(tasks):
         st_module.caption(f"Showing {len(filtered_tasks)} of {len(tasks)} tasks based on current filters.")
 
@@ -353,6 +533,24 @@ def run_app(context, st_module=st):
         render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases_page")
     elif current_page == "Schedule":
         render_page_banner("schedule", "Schedule Builder", "Plan work and personal blocks, then pin them into real time.")
+        schedule_conflicts, over_capacity_days = summarize_schedule_conflicts(
+            scheduled_tasks,
+            fallback_minutes=int(app_settings.get("default_duration", 60)),
+            daily_capacity_minutes=int(app_settings.get("schedule_daily_capacity_minutes", 480)),
+        )
+        if schedule_conflicts or over_capacity_days:
+            st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+            st_module.markdown('<div class="panel-title"><h3>Schedule Alerts</h3><span>Conflicts and capacity risks detected</span></div>', unsafe_allow_html=True)
+            if over_capacity_days:
+                for day_value, total_minutes in over_capacity_days[:7]:
+                    st_module.warning(f"{day_value}: scheduled {total_minutes} min exceeds daily capacity.")
+            if schedule_conflicts:
+                for day_value, first_task, second_task in schedule_conflicts[:8]:
+                    first_label = first_task.get("title") or "Task"
+                    second_label = second_task.get("title") or "Task"
+                    st_module.warning(f"{day_value}: overlap between '{first_label}' and '{second_label}'.")
+            st_module.markdown('</div>', unsafe_allow_html=True)
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedule_page")
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
