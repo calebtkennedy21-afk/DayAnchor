@@ -51,3 +51,98 @@ If the app shows `Detected DB vars: none`, the variables are not reaching the ru
 	- `DATABASE_PUBLIC_URL=${{Postgres.DATABASE_PUBLIC_URL}}`
 3. Save and **redeploy** the web app service.
 4. Confirm sidebar now shows detected vars and connected DB health.
+
+## Build Roadmap: Make DayAnchor Your Only Productivity App
+
+This is the practical 6-step build order, mapped to this codebase with clear deliverables.
+
+### Milestone 1: Universal Inbox + Smart Parse
+
+Goal: capture any task in one input, from any page.
+
+Implementation targets:
+- `app_bootstrap.py`: extend the global quick command bar with a single natural-language input.
+- `streamlit_app.py`: add parser helper for patterns like `tomorrow 9am high clinic call PT`.
+- `data_access.py`: keep write path through existing `add_task` contract.
+
+Acceptance criteria:
+- Can type one-line input and auto-populate title/category/priority/due/schedule when present.
+- Works from all major pages without navigation.
+- Falls back safely if parser confidence is low.
+
+### Milestone 2: Daily Command Center (Default Landing)
+
+Goal: one screen answers "what matters now" for personal + clinic.
+
+Implementation targets:
+- `app_bootstrap.py`: set default page to a command-center-first view.
+- `overview_core.py`: add ranked action list (`now`, `today`, `risk`).
+- `page_sections.py`: render top-3 personal, top-3 clinic, conflicts, and follow-ups.
+
+Acceptance criteria:
+- Home screen loads with top priorities and risks in under 2 seconds on normal datasets.
+- Shows schedule conflicts and overdue blockers prominently.
+
+### Milestone 3: Focus Block Execution Mode
+
+Goal: execution loop with minimal UI noise and clear end-of-block outcomes.
+
+Implementation targets:
+- `app_bootstrap.py`: add `Start Focus Block` entrypoint and active block banner.
+- `streamlit_app.py`: session + DB persistence for block start/end and outcome (`done`, `partial`, `blocked`).
+- `analytics` page section: include focus completion metrics.
+
+Acceptance criteria:
+- Start/stop a 25/50/90-minute block against any task.
+- Ending a block updates task status/progress note in one click.
+
+### Milestone 4: Clinic Workflow Automation
+
+Goal: reduce manual follow-up creation after clinic/case events.
+
+Implementation targets:
+- `page_sections.py` surgical workflows: add automation rules UI.
+- `streamlit_app.py`: rule engine for case status transitions (for example completed case -> protocol/doc/follow-up tasks).
+- `data_access.py`: idempotent task generation guards (no duplicate automation tasks).
+
+Acceptance criteria:
+- Changing case status can auto-create configured follow-up tasks.
+- Rules can be toggled on/off per automation type.
+
+### Milestone 5: Weekly Review + Recommendations
+
+Goal: close the loop with insights and next-week adjustments.
+
+Implementation targets:
+- `overview_core.py`: compute weekly completion, carry-over, blocked trend, lane balance.
+- `page_sections.py`: weekly review panel with auto-generated recommendations.
+- `streamlit_app.py`: persist weekly snapshots for trend history.
+
+Acceptance criteria:
+- Weekly review shows key metrics plus top 3 recommendations.
+- Can mark recommendations as accepted and apply selected changes.
+
+### Milestone 6: Mobile Quick Actions + Reminder Reliability
+
+Goal: make capture and completion viable on-the-go.
+
+Implementation targets:
+- `app_bootstrap.py` + `page_renderers.py`: mobile-first quick action strip (capture, done, focus start, close day).
+- `streamlit_app.py`: reminder escalation rules for critical clinic tasks.
+- `README.md`: deployment guidance for home-screen bookmark/PWA-like behavior.
+
+Acceptance criteria:
+- Mobile viewport supports one-tap capture and one-tap complete.
+- Critical reminders escalate visually by urgency and due window.
+
+## Suggested Delivery Plan
+
+- Week 1: Milestone 1 and Milestone 2
+- Week 2: Milestone 3 and Milestone 4
+- Week 3: Milestone 5 and Milestone 6
+
+## Definition of Done (Global)
+
+- `PYTHONPATH=. pytest -q` passes.
+- No new diagnostics errors in touched files.
+- Every milestone includes one short "how to use" note in this README.
