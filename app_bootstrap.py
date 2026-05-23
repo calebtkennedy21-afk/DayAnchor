@@ -322,7 +322,9 @@ def run_app(context, st_module=st):
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.", max_items=list_preview_limit)
         if not focus_mode:
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_personal_goals_panel(personal_goals, panel_key="personal_goals")
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             personal_goal_cols = st_module.columns(2, gap="large")
@@ -333,7 +335,6 @@ def run_app(context, st_module=st):
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_history")
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.", max_items=list_preview_limit)
     elif current_page == "Clinic":
         render_page_banner("clinic", "Clinic Command Center", "Track outpatient load, follow-up flow, and clinic-first work.")
         render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="clinic_page")
