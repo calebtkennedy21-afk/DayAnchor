@@ -99,6 +99,10 @@ if "personal_goals" not in st.session_state:
     st.session_state.personal_goals = []
 if "personal_goal_checkins" not in st.session_state:
     st.session_state.personal_goal_checkins = []
+if "anatomy_quiz_attempts" not in st.session_state:
+    st.session_state.anatomy_quiz_attempts = []
+if "anatomy_quiz_review_queue" not in st.session_state:
+    st.session_state.anatomy_quiz_review_queue = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -770,6 +774,30 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS anatomy_quiz_attempts (
+                            id BIGSERIAL PRIMARY KEY,
+                            quiz_mode TEXT NOT NULL,
+                            prompt TEXT NOT NULL,
+                            expected_answer TEXT NOT NULL,
+                            submitted_answer TEXT NOT NULL,
+                            confidence INTEGER,
+                            is_correct BOOLEAN NOT NULL,
+                            explanation TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS anatomy_quiz_review_queue (
+                            id BIGSERIAL PRIMARY KEY,
+                            review_text TEXT NOT NULL,
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -1240,6 +1268,156 @@ def delete_anatomy_xray_image(image_id):
     st.session_state.anatomy_xray_images = [
         item for item in st.session_state.anatomy_xray_images if item.get("id") != image_id
     ]
+
+
+def load_anatomy_quiz_attempts():
+    if not db_enabled():
+        return list(st.session_state.anatomy_quiz_attempts)
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        quiz_mode,
+                        prompt,
+                        expected_answer,
+                        submitted_answer,
+                        confidence,
+                        is_correct,
+                        explanation,
+                        created_date
+                    FROM anatomy_quiz_attempts
+                    ORDER BY created_date DESC, id DESC
+                    LIMIT 500
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st.session_state.anatomy_quiz_attempts)
+
+
+def add_anatomy_quiz_attempt(
+    quiz_mode,
+    prompt,
+    expected_answer,
+    submitted_answer,
+    confidence,
+    is_correct,
+    explanation="",
+):
+    quiz_mode_value = str(quiz_mode or "Unknown").strip() or "Unknown"
+    prompt_value = str(prompt or "").strip()
+    expected_value = str(expected_answer or "").strip()
+    submitted_value = str(submitted_answer or "").strip()
+    explanation_value = str(explanation or "").strip()
+    confidence_value = None
+    try:
+        if confidence is not None:
+            confidence_value = int(confidence)
+    except (TypeError, ValueError):
+        confidence_value = None
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO anatomy_quiz_attempts (
+                        quiz_mode,
+                        prompt,
+                        expected_answer,
+                        submitted_answer,
+                        confidence,
+                        is_correct,
+                        explanation,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        quiz_mode_value,
+                        prompt_value,
+                        expected_value,
+                        submitted_value,
+                        confidence_value,
+                        bool(is_correct),
+                        explanation_value,
+                        date.today(),
+                    ),
+                )
+        return
+
+    next_id = max([item.get("id", 0) for item in st.session_state.anatomy_quiz_attempts], default=0) + 1
+    st.session_state.anatomy_quiz_attempts.append(
+        {
+            "id": next_id,
+            "quiz_mode": quiz_mode_value,
+            "prompt": prompt_value,
+            "expected_answer": expected_value,
+            "submitted_answer": submitted_value,
+            "confidence": confidence_value,
+            "is_correct": bool(is_correct),
+            "explanation": explanation_value,
+            "created_date": date.today(),
+        }
+    )
+
+
+def load_anatomy_quiz_review_queue():
+    if not db_enabled():
+        return list(st.session_state.anatomy_quiz_review_queue)
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, review_text, created_date
+                    FROM anatomy_quiz_review_queue
+                    ORDER BY created_date DESC, id DESC
+                    LIMIT 500
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st.session_state.anatomy_quiz_review_queue)
+
+
+def add_anatomy_quiz_review_item(review_text):
+    review_value = str(review_text or "").strip()
+    if not review_value:
+        return
+
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO anatomy_quiz_review_queue (review_text, created_date)
+                    VALUES (%s, %s)
+                    """,
+                    (review_value, date.today()),
+                )
+        return
+
+    next_id = max([item.get("id", 0) for item in st.session_state.anatomy_quiz_review_queue], default=0) + 1
+    st.session_state.anatomy_quiz_review_queue.append(
+        {
+            "id": next_id,
+            "review_text": review_value,
+            "created_date": date.today(),
+        }
+    )
+
+
+def clear_anatomy_quiz_review_queue():
+    if db_enabled():
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM anatomy_quiz_review_queue")
+        return
+
+    st.session_state.anatomy_quiz_review_queue = []
 
 
 def text_keywords(value):
@@ -4418,7 +4596,183 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
     st.markdown('<div class="panel-title"><h3>MSK Anatomy Atlas</h3><span>Foot and ankle first, with related orthopedic pathways and chain context</span></div>', unsafe_allow_html=True)
     st.caption("Educational reference only. This section is not diagnostic or treatment advice.")
 
-    pathways_tab, differential_tab, foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab, xray_tab, exam_tab, imaging_tab = st.tabs([
+    anatomy_atlas = {
+        "Upper Extremity": {
+            "Bones": [
+                "Clavicle/scapula orientation drives glenohumeral rhythm and scapulothoracic control.",
+                "Humerus, radius, and ulna alignment determine elbow carrying angle and forearm rotation.",
+            ],
+            "Joints": [
+                "Shoulder stabilizes with dynamic cuff and static labral/capsular systems.",
+                "Elbow and distal radioulnar joints are key to functional pronation/supination.",
+            ],
+            "Muscle Attachments": [
+                "Rotator cuff insertions center the humeral head for overhead mechanics.",
+                "Flexor-pronator and extensor-supinator origins explain many overuse syndromes.",
+            ],
+            "Neurovascular": [
+                "Brachial plexus and axillary artery relationships matter in trauma and dislocation.",
+                "Radial/ulnar nerve corridors should be considered during splinting and surgery.",
+            ],
+            "clinical": [
+                "Clinical relevance: shoulder instability, cuff tears, and elbow overuse often present with referred pain patterns.",
+            ],
+        },
+        "Lower Extremity": {
+            "Bones": [
+                "Pelvis-femur-tibia-foot alignment determines load transfer and gait efficiency.",
+                "Tibia/fibula relationship is central for ankle mortise congruence and rotational control.",
+            ],
+            "Joints": [
+                "Hip, knee, and ankle work as a chain; malalignment at one level drives overload distally.",
+                "Subtalar and midfoot joints tune shock absorption and propulsion.",
+            ],
+            "Muscle Attachments": [
+                "Gluteal, quadriceps, hamstring, and triceps surae attachments coordinate stance and push-off.",
+                "Posterior tibial and peroneal insertions are major dynamic stabilizers of the foot arches.",
+            ],
+            "Neurovascular": [
+                "Femoral, sciatic, tibial, and peroneal distributions help localize weakness and sensory changes.",
+                "Popliteal and tibial vessel anatomy guides trauma and compartment-risk evaluation.",
+            ],
+            "clinical": [
+                "Clinical relevance: valgus collapse, tendon dysfunction, and stress injury patterns are often chain-mediated.",
+            ],
+        },
+        "Spine": {
+            "Bones": [
+                "Cervical, thoracic, and lumbar vertebral morphology influences motion and load tolerance.",
+                "Facet orientation patterns explain region-specific movement behavior.",
+            ],
+            "Joints": [
+                "Intervertebral discs and facets share load differently across posture and activity.",
+                "Sacroiliac mechanics affect lower-extremity force transfer and pelvic control.",
+            ],
+            "Muscle Attachments": [
+                "Deep multifidus and segmental stabilizers contribute to spinal control.",
+                "Thoracolumbar fascia links trunk function to hip mechanics.",
+            ],
+            "Neurovascular": [
+                "Dermatomal and myotomal mapping helps separate spinal from peripheral causes.",
+                "Radicular patterns may mimic distal limb pathology in orthopedic clinics.",
+            ],
+            "clinical": [
+                "Clinical relevance: referred spinal pain can mimic hip, knee, and foot pathology.",
+            ],
+        },
+        "Chest": {
+            "Bones": [
+                "Rib, sternum, and thoracic vertebral structures influence breathing and shoulder mechanics.",
+                "Scapulothoracic articulation bridges chest wall function and upper-extremity motion.",
+            ],
+            "Joints": [
+                "Costovertebral and sternocostal joints modulate thoracic expansion.",
+                "Clavicular articulations influence shoulder position and kinetic chain efficiency.",
+            ],
+            "Muscle Attachments": [
+                "Intercostals, serratus, pecs, and diaphragm coordinate respiration and posture.",
+                "Scapular muscle balance strongly affects shoulder pain and impingement risk.",
+            ],
+            "Neurovascular": [
+                "Intercostal bundles and thoracic outlet boundaries matter for compression syndromes.",
+                "Supraclavicular regions should be screened in unexplained upper-limb symptoms.",
+            ],
+            "clinical": [
+                "Clinical relevance: thoracic stiffness and rib dysfunction can drive neck/shoulder overload.",
+            ],
+        },
+        "Pelvis": {
+            "Bones": [
+                "Ilium, ischium, and pubis orientation governs acetabular coverage and hip stability.",
+                "Sacrum and innominate relationships affect gait asymmetry and force transfer.",
+            ],
+            "Joints": [
+                "Hip and SI joints coordinate frontal and transverse-plane control.",
+                "Pubic symphysis contributes to ring stability during dynamic activity.",
+            ],
+            "Muscle Attachments": [
+                "Abductors and rotators at the greater trochanter are central for single-leg stability.",
+                "Adductor and hamstring origins often relate to groin and posterior chain symptoms.",
+            ],
+            "Neurovascular": [
+                "Femoral triangle and sciatic pathways should be considered in trauma and entrapment patterns.",
+                "Pelvic vascular anatomy is important in high-energy injuries.",
+            ],
+            "clinical": [
+                "Clinical relevance: pelvic control deficits commonly cascade into knee/ankle overload.",
+            ],
+        },
+    }
+
+    fracture_deep_dives = {
+        "Colles fracture": {
+            "mechanism": "FOOSH with wrist extension causing distal radius dorsal displacement.",
+            "key_signs": "Dinner-fork deformity, dorsal tilt on lateral X-ray, radial shortening.",
+            "pitfalls": "Missing associated ulnar styloid injury or DRUJ instability.",
+            "common_misses": "Subtle intra-articular extension and occult carpal injuries.",
+            "treatment_path": "Reduction/splinting then operative fixation if unstable or significantly displaced.",
+        },
+        "Intertrochanteric femur fracture": {
+            "mechanism": "Low-energy fall in osteoporotic bone or high-energy trauma in younger patients.",
+            "key_signs": "External rotation and shortening, fracture lines between greater and lesser trochanters.",
+            "pitfalls": "Underestimating comminution and medial calcar compromise.",
+            "common_misses": "Occult extension into subtrochanteric region.",
+            "treatment_path": "Prompt fixation with cephalomedullary nail or sliding hip device based on pattern.",
+        },
+        "Pilon fracture": {
+            "mechanism": "Axial load with distal tibial plafond impaction and metaphyseal comminution.",
+            "key_signs": "Plafond incongruity, metaphyseal-diaphyseal dissociation, severe swelling.",
+            "pitfalls": "Rushing definitive fixation before soft-tissue recovery.",
+            "common_misses": "Associated fibula fracture alignment effect on plafond reduction.",
+            "treatment_path": "Staged management: temporizing external fixation then definitive ORIF when soft tissue allows.",
+        },
+        "Tibial plateau fracture": {
+            "mechanism": "Valgus/varus force with axial loading causing split, depression, or bicondylar patterns.",
+            "key_signs": "Lipohemarthrosis, articular depression, condylar widening on AP view.",
+            "pitfalls": "Ignoring meniscal/ligament injury and posterior slope changes.",
+            "common_misses": "Posterolateral depression not obvious on plain films.",
+            "treatment_path": "CT-guided classification, restore alignment/articular surface, protect soft tissue envelope.",
+        },
+    }
+
+    case_learning_tracks = [
+        {
+            "title": "Twisting ankle injury at sport",
+            "history": "23-year-old athlete with inversion injury and immediate lateral ankle swelling.",
+            "exam": "Tenderness over ATFL/CFL region, mild positive anterior drawer, no syndesmotic pain.",
+            "imaging_hint": "AP/mortise/lateral ankle films without gross fracture; assess talar tilt and avulsion fragments.",
+            "differential": ["Lateral ligament sprain", "Occult distal fibula avulsion", "Peroneal tendon injury"],
+            "final_dx": "Lateral ankle ligament complex injury (ATFL-predominant).",
+            "pearls": ["Compare to contralateral side.", "Screen syndesmosis and peroneals in all significant sprains."],
+            "board_question": "Most commonly injured ligament in inversion ankle sprain?",
+            "board_answer": "ATFL",
+        },
+        {
+            "title": "Forefoot pain after mileage increase",
+            "history": "31-year-old runner with progressive forefoot pain and focal tenderness over second metatarsal.",
+            "exam": "Pain with forefoot loading, no acute trauma history.",
+            "imaging_hint": "Early X-ray may be negative; MRI or repeat radiographs can reveal stress pattern.",
+            "differential": ["Metatarsal stress injury", "Morton neuroma", "Second MTP synovitis"],
+            "final_dx": "Second metatarsal stress injury.",
+            "pearls": ["Negative initial X-ray does not exclude stress injury.", "Training load and nutrition history matter."],
+            "board_question": "Best next test when stress injury is strongly suspected but X-ray is negative?",
+            "board_answer": "MRI",
+        },
+        {
+            "title": "Elderly fall with ankle deformity",
+            "history": "68-year-old with rotational ankle injury and inability to bear weight.",
+            "exam": "Medial/lateral malleolar tenderness with swelling and instability concern.",
+            "imaging_hint": "Mortise disruption on ankle radiographs; evaluate posterior malleolus and syndesmosis.",
+            "differential": ["Bimalleolar fracture", "Trimalleolar fracture", "Syndesmotic injury without fracture"],
+            "final_dx": "Unstable bimalleolar/trimalleolar ankle fracture pattern.",
+            "pearls": ["Assess neurovascular status before and after reduction.", "CT can clarify posterior malleolar involvement."],
+            "board_question": "Key determinant for urgent reduction in displaced ankle fracture-dislocation?",
+            "board_answer": "Neurovascular compromise and skin at risk",
+        },
+    ]
+
+    atlas_tab, pathways_tab, differential_tab, foot_tab, ankle_tab, lower_leg_tab, knee_tab, bones_tab, fractures_tab, xray_tab, quiz_tab, case_tracks_tab, exam_tab, imaging_tab = st.tabs([
+        "Atlas 2.0",
         "Clinical Pathways",
         "Differential Builder",
         "Foot",
@@ -4428,9 +4782,39 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
         "Bones",
         "Fractures",
         "X-ray Library",
+        "Quiz Lab",
+        "Case Tracks",
         "Exam Library",
         "Imaging Helper",
     ])
+
+    with atlas_tab:
+        st.markdown("### Structured Anatomy Atlas")
+        st.caption("Region-based and layered review with direct clinical relevance.")
+
+        atlas_region = st.selectbox(
+            "Region",
+            list(anatomy_atlas.keys()),
+            key=f"{panel_key}_atlas_region",
+        )
+        atlas_layers = st.multiselect(
+            "Layer(s)",
+            ["Bones", "Joints", "Muscle Attachments", "Neurovascular"],
+            default=["Bones", "Joints"],
+            key=f"{panel_key}_atlas_layers",
+        )
+
+        region_payload = anatomy_atlas.get(atlas_region, {})
+        if atlas_layers:
+            for layer_name in atlas_layers:
+                st.markdown(f"#### {layer_name}")
+                for bullet in region_payload.get(layer_name, []):
+                    st.markdown(f"- {bullet}")
+        else:
+            st.markdown('<div class="empty-state">Select at least one layer to display atlas content.</div>', unsafe_allow_html=True)
+
+        for line in region_payload.get("clinical", []):
+            st.info(line)
 
     with pathways_tab:
         st.markdown("### Foot and Ankle Clinical Pathways")
@@ -4987,6 +5371,22 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 panel_key=f"{panel_key}_fractures_foot_related",
             )
 
+        st.markdown("### Fracture Pattern Deep Dives")
+        deep_dive_name = st.selectbox(
+            "Select fracture pattern",
+            list(fracture_deep_dives.keys()),
+            key=f"{panel_key}_fracture_deep_dive",
+        )
+        deep_dive = fracture_deep_dives.get(deep_dive_name, {})
+        dd_cols = st.columns(2)
+        with dd_cols[0]:
+            st.markdown(f"**Mechanism:** {deep_dive.get('mechanism', '')}")
+            st.markdown(f"**Key radiographic signs:** {deep_dive.get('key_signs', '')}")
+            st.markdown(f"**Pitfalls:** {deep_dive.get('pitfalls', '')}")
+        with dd_cols[1]:
+            st.markdown(f"**Common misses:** {deep_dive.get('common_misses', '')}")
+            st.markdown(f"**Treatment pathway:** {deep_dive.get('treatment_path', '')}")
+
     with xray_tab:
         st.markdown("### X-ray Image Library")
         st.caption("Upload and organize non-PHI X-rays by body part and fracture type.")
@@ -5142,6 +5542,99 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                 )
 
             st.caption(f"Showing {len(filtered_xrays)} of {len(xray_images)} X-ray image(s)")
+
+            st.markdown("### X-ray Teaching Mode")
+            st.caption("Use side-by-side comparison with a structured read checklist and landmark overlays.")
+
+            teach_options = {
+                f"#{item.get('id')} | {item.get('body_part') or 'Unspecified'} | {item.get('fracture_type') or 'Unspecified'} | {item.get('view_label') or 'Unspecified'}": item
+                for item in filtered_xrays
+                if item.get("id") is not None
+            }
+            option_labels = list(teach_options.keys())
+            if option_labels:
+                teach_cols = st.columns([1.4, 1.4, 1.2])
+                with teach_cols[0]:
+                    normal_label = st.selectbox(
+                        "Reference image",
+                        option_labels,
+                        key=f"{panel_key}_xray_teach_reference",
+                    )
+                with teach_cols[1]:
+                    pathology_label = st.selectbox(
+                        "Pathology image",
+                        option_labels,
+                        key=f"{panel_key}_xray_teach_pathology",
+                    )
+                with teach_cols[2]:
+                    overlay_mode = st.multiselect(
+                        "Overlay tools",
+                        ["Center lines", "Quadrant grid", "Measurement guide"],
+                        key=f"{panel_key}_xray_teach_overlay_mode",
+                    )
+
+                ref_item = teach_options.get(normal_label)
+                path_item = teach_options.get(pathology_label)
+
+                def _teaching_render(item, image_label, render_key):
+                    if not item:
+                        st.markdown('<div class="empty-state">No image selected.</div>', unsafe_allow_html=True)
+                        return
+                    image_bytes = item.get("image_bytes")
+                    if isinstance(image_bytes, memoryview):
+                        image_bytes = bytes(image_bytes)
+                    if not image_bytes:
+                        st.markdown('<div class="empty-state">Image bytes unavailable.</div>', unsafe_allow_html=True)
+                        return
+
+                    render_bytes = image_bytes
+                    if overlay_mode:
+                        try:
+                            from PIL import Image, ImageDraw
+
+                            image = Image.open(BytesIO(image_bytes)).convert("RGB")
+                            draw = ImageDraw.Draw(image)
+                            width, height = image.size
+                            line_color = (231, 76, 60)
+                            if "Center lines" in overlay_mode:
+                                draw.line([(width // 2, 0), (width // 2, height)], fill=line_color, width=3)
+                                draw.line([(0, height // 2), (width, height // 2)], fill=line_color, width=3)
+                            if "Quadrant grid" in overlay_mode:
+                                draw.line([(width // 4, 0), (width // 4, height)], fill=(52, 152, 219), width=2)
+                                draw.line([(3 * width // 4, 0), (3 * width // 4, height)], fill=(52, 152, 219), width=2)
+                                draw.line([(0, height // 4), (width, height // 4)], fill=(52, 152, 219), width=2)
+                                draw.line([(0, 3 * height // 4), (width, 3 * height // 4)], fill=(52, 152, 219), width=2)
+                            if "Measurement guide" in overlay_mode:
+                                draw.line([(int(width * 0.15), int(height * 0.82)), (int(width * 0.85), int(height * 0.82))], fill=(46, 204, 113), width=3)
+                            buffer = BytesIO()
+                            image.save(buffer, format="PNG")
+                            render_bytes = buffer.getvalue()
+                        except Exception:
+                            render_bytes = image_bytes
+
+                    st.image(render_bytes, caption=image_label, use_container_width=True)
+                    st.caption(
+                        f"{item.get('body_part') or 'Unspecified'} | {item.get('fracture_type') or 'Unspecified'} | {item.get('view_label') or 'Unspecified'}"
+                    )
+
+                compare_cols = st.columns(2)
+                with compare_cols[0]:
+                    _teaching_render(ref_item, "Reference", "reference")
+                with compare_cols[1]:
+                    _teaching_render(path_item, "Pathology", "pathology")
+
+                st.markdown("#### Stepwise Read Checklist")
+                checklist_cols = st.columns(2)
+                with checklist_cols[0]:
+                    st.checkbox("Image quality adequate (exposure/rotation)", key=f"{panel_key}_xray_check_quality")
+                    st.checkbox("Alignment reviewed", key=f"{panel_key}_xray_check_alignment")
+                    st.checkbox("Bones reviewed for cortical interruption", key=f"{panel_key}_xray_check_bones")
+                with checklist_cols[1]:
+                    st.checkbox("Joint congruence reviewed", key=f"{panel_key}_xray_check_joints")
+                    st.checkbox("Soft tissue and effusion reviewed", key=f"{panel_key}_xray_check_soft_tissue")
+                    st.checkbox("Mechanism/pathology fit verified", key=f"{panel_key}_xray_check_mechanism")
+            else:
+                st.markdown('<div class="empty-state">Add images to use teaching mode.</div>', unsafe_allow_html=True)
 
             batch_label_to_id = {}
             batch_options = []
@@ -5312,6 +5805,246 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
                     _render_xray_item(item, "list")
         else:
             st.markdown('<div class="empty-state">No X-ray images uploaded yet. Add your first non-PHI image above.</div>', unsafe_allow_html=True)
+
+    with quiz_tab:
+        st.markdown("### Interactive Quiz Engine")
+        st.caption("Train anatomy labels and fracture diagnosis with confidence scoring and spaced review.")
+
+        missed_queue_key = f"{panel_key}_quiz_missed_queue"
+        quiz_attempts = load_anatomy_quiz_attempts() or []
+        review_queue_rows = load_anatomy_quiz_review_queue() or []
+        review_queue = [
+            str(item.get("review_text") or "").strip()
+            for item in review_queue_rows
+            if str(item.get("review_text") or "").strip()
+        ]
+        st.session_state[missed_queue_key] = review_queue
+
+        total_attempts = len(quiz_attempts)
+        correct_attempts = sum(1 for item in quiz_attempts if bool(item.get("is_correct")))
+        accuracy = round((correct_attempts / total_attempts) * 100, 1) if total_attempts else 0.0
+
+        quiz_metric_cols = st.columns(3)
+        quiz_metric_cols[0].metric("Attempts", total_attempts)
+        quiz_metric_cols[1].metric("Accuracy", f"{accuracy}%")
+        quiz_metric_cols[2].metric("Review queue", len(review_queue))
+
+        with st.expander("Recent Quiz History", expanded=False):
+            if not quiz_attempts:
+                st.caption("No quiz attempts yet. Submit a label or diagnosis quiz to populate history.")
+            else:
+                history_rows = []
+                for attempt in quiz_attempts[:10]:
+                    created_value = attempt.get("created_date")
+                    created_label = created_value.strftime("%Y-%m-%d") if hasattr(created_value, "strftime") else str(created_value or "")
+                    confidence_value = attempt.get("confidence")
+                    confidence_label = f"{confidence_value}%" if confidence_value is not None else "-"
+                    history_rows.append(
+                        {
+                            "Date": created_label,
+                            "Mode": str(attempt.get("quiz_mode") or ""),
+                            "Result": "Correct" if bool(attempt.get("is_correct")) else "Miss",
+                            "Confidence": confidence_label,
+                            "Prompt": str(attempt.get("prompt") or ""),
+                            "Expected": str(attempt.get("expected_answer") or ""),
+                            "Submitted": str(attempt.get("submitted_answer") or ""),
+                            "Teaching Note": str(attempt.get("explanation") or ""),
+                        }
+                    )
+
+                st.caption("Showing the latest 10 quiz attempts.")
+                st.dataframe(history_rows, use_container_width=True, hide_index=True)
+
+        quiz_mode = st.radio(
+            "Quiz mode",
+            ["Label Quiz", "Diagnosis Quiz", "Review Missed"],
+            horizontal=True,
+            key=f"{panel_key}_quiz_mode",
+        )
+
+        quiz_images = load_anatomy_xray_images() or []
+        if not quiz_images and quiz_mode != "Review Missed":
+            st.markdown('<div class="empty-state">Upload X-rays first to enable interactive quiz modes.</div>', unsafe_allow_html=True)
+        elif quiz_mode == "Review Missed":
+            queue = st.session_state.get(missed_queue_key, [])
+            if not queue:
+                st.success("No missed items in queue.")
+            else:
+                st.markdown("#### Spaced Repetition Queue")
+                for idx, item in enumerate(queue, start=1):
+                    st.markdown(f"{idx}. {item}")
+                if st.button("Clear Review Queue", key=f"{panel_key}_quiz_clear_queue"):
+                    clear_anatomy_quiz_review_queue()
+                    st.session_state[missed_queue_key] = []
+                    st.rerun()
+        elif quiz_mode == "Label Quiz":
+            question_item = quiz_images[0]
+            if len(quiz_images) > 1:
+                question_index = st.selectbox(
+                    "Question image",
+                    options=list(range(len(quiz_images))),
+                    format_func=lambda idx: f"#{quiz_images[idx].get('id')} {quiz_images[idx].get('image_name') or 'X-ray'}",
+                    key=f"{panel_key}_quiz_label_index",
+                )
+                question_item = quiz_images[question_index]
+
+            image_bytes = question_item.get("image_bytes")
+            if isinstance(image_bytes, memoryview):
+                image_bytes = bytes(image_bytes)
+            if image_bytes:
+                st.image(image_bytes, caption="Label this image", use_container_width=True)
+
+            body_part_options = sorted({str(item.get("body_part") or "Unspecified") for item in quiz_images})
+            fracture_options = sorted({str(item.get("fracture_type") or "Unspecified") for item in quiz_images})
+            view_options = sorted({str(item.get("view_label") or "Unspecified") for item in quiz_images})
+
+            answer_cols = st.columns(4)
+            with answer_cols[0]:
+                body_guess = st.selectbox("Body part", body_part_options, key=f"{panel_key}_quiz_guess_body")
+            with answer_cols[1]:
+                fracture_guess = st.selectbox("Fracture", fracture_options, key=f"{panel_key}_quiz_guess_fracture")
+            with answer_cols[2]:
+                view_guess = st.selectbox("View", view_options, key=f"{panel_key}_quiz_guess_view")
+            with answer_cols[3]:
+                confidence = st.slider("Confidence %", min_value=0, max_value=100, value=70, key=f"{panel_key}_quiz_confidence")
+
+            if st.button("Submit Label Quiz", key=f"{panel_key}_quiz_submit_label", type="primary"):
+                expected_body = str(question_item.get("body_part") or "Unspecified")
+                expected_fracture = str(question_item.get("fracture_type") or "Unspecified")
+                expected_view = str(question_item.get("view_label") or "Unspecified")
+                prompt_text = f"Label quiz image #{question_item.get('id') or 'unknown'}"
+                submitted_text = f"{body_guess} / {fracture_guess} / {view_guess}"
+                expected_text = f"{expected_body} / {expected_fracture} / {expected_view}"
+
+                correct_parts = []
+                if body_guess == expected_body:
+                    correct_parts.append("body part")
+                if fracture_guess == expected_fracture:
+                    correct_parts.append("fracture type")
+                if view_guess == expected_view:
+                    correct_parts.append("view")
+
+                if len(correct_parts) == 3:
+                    add_anatomy_quiz_attempt(
+                        "Label Quiz",
+                        prompt_text,
+                        expected_text,
+                        submitted_text,
+                        confidence,
+                        True,
+                        "All label fields matched.",
+                    )
+                    st.success(f"Correct with {confidence}% confidence. Great read.")
+                else:
+                    missed_summary = f"Label quiz miss: expected {expected_body} / {expected_fracture} / {expected_view}"
+                    add_anatomy_quiz_review_item(missed_summary)
+                    add_anatomy_quiz_attempt(
+                        "Label Quiz",
+                        prompt_text,
+                        expected_text,
+                        submitted_text,
+                        confidence,
+                        False,
+                        "Use body-part landmarks first, then classify fracture pattern, then confirm view orientation.",
+                    )
+                    st.warning(
+                        "Not fully correct. "
+                        f"Correct answers: {expected_body} / {expected_fracture} / {expected_view}."
+                    )
+                    st.info("Teaching explanation: Use body-part landmarks first, then classify fracture pattern, then confirm view orientation.")
+        else:
+            diagnosis_names = list(fracture_deep_dives.keys())
+            diagnosis_case = st.selectbox(
+                "Scenario",
+                diagnosis_names,
+                key=f"{panel_key}_quiz_dx_case",
+            )
+            payload = fracture_deep_dives.get(diagnosis_case, {})
+            st.markdown(f"**Mechanism clue:** {payload.get('mechanism', '')}")
+            st.markdown(f"**Radiographic clue:** {payload.get('key_signs', '')}")
+
+            diagnosis_guess = st.selectbox(
+                "Most likely diagnosis",
+                diagnosis_names,
+                key=f"{panel_key}_quiz_dx_guess",
+            )
+            dx_confidence = st.slider("Confidence %", min_value=0, max_value=100, value=65, key=f"{panel_key}_quiz_dx_conf")
+            if st.button("Submit Diagnosis Quiz", key=f"{panel_key}_quiz_submit_dx", type="primary"):
+                submitted_text = diagnosis_guess
+                expected_text = diagnosis_case
+                if diagnosis_guess == diagnosis_case:
+                    add_anatomy_quiz_attempt(
+                        "Diagnosis Quiz",
+                        payload.get("mechanism", "Diagnosis scenario"),
+                        expected_text,
+                        submitted_text,
+                        dx_confidence,
+                        True,
+                        payload.get("pitfalls", ""),
+                    )
+                    st.success(f"Correct diagnosis at {dx_confidence}% confidence.")
+                    st.info(f"Why: {payload.get('pitfalls', '')}")
+                else:
+                    add_anatomy_quiz_review_item(f"Diagnosis miss: expected {diagnosis_case}")
+                    add_anatomy_quiz_attempt(
+                        "Diagnosis Quiz",
+                        payload.get("mechanism", "Diagnosis scenario"),
+                        expected_text,
+                        submitted_text,
+                        dx_confidence,
+                        False,
+                        payload.get("common_misses", ""),
+                    )
+                    st.warning(f"Incorrect. Expected diagnosis: {diagnosis_case}.")
+                    st.info(f"Teaching explanation: {payload.get('common_misses', '')}")
+
+    with case_tracks_tab:
+        st.markdown("### Case-Based Learning Tracks")
+        st.caption("Work unknowns in a progressive reveal format from history to final diagnosis.")
+
+        case_names = [item["title"] for item in case_learning_tracks]
+        selected_case_name = st.selectbox(
+            "Unknown case",
+            case_names,
+            key=f"{panel_key}_case_track_name",
+        )
+        selected_case = next((item for item in case_learning_tracks if item["title"] == selected_case_name), case_learning_tracks[0])
+
+        reveal_stage = st.slider(
+            "Reveal stage",
+            min_value=1,
+            max_value=5,
+            value=2,
+            help="1=History, 2=Exam, 3=Imaging clue, 4=Differential, 5=Final diagnosis",
+            key=f"{panel_key}_case_track_stage",
+        )
+
+        st.markdown("#### Progressive Reveal")
+        st.markdown(f"**History:** {selected_case['history']}")
+        if reveal_stage >= 2:
+            st.markdown(f"**Exam:** {selected_case['exam']}")
+        if reveal_stage >= 3:
+            st.markdown(f"**Imaging clue:** {selected_case['imaging_hint']}")
+        if reveal_stage >= 4:
+            st.markdown("**Differential:**")
+            for dx in selected_case["differential"]:
+                st.markdown(f"- {dx}")
+        if reveal_stage >= 5:
+            st.success(f"Final diagnosis: {selected_case['final_dx']}")
+            st.markdown("**Teaching pearls**")
+            for pearl in selected_case["pearls"]:
+                st.markdown(f"- {pearl}")
+
+        st.markdown("#### Board-Style Check")
+        st.markdown(f"**Question:** {selected_case['board_question']}")
+        board_response = st.text_input("Your answer", key=f"{panel_key}_case_track_board_response")
+        if st.button("Check Answer", key=f"{panel_key}_case_track_check_answer"):
+            normalized_response = board_response.strip().lower()
+            normalized_answer = selected_case["board_answer"].strip().lower()
+            if normalized_response and normalized_answer in normalized_response:
+                st.success("Correct.")
+            else:
+                st.info(f"Expected answer: {selected_case['board_answer']}")
 
     with exam_tab:
         st.markdown("### Orthopedic Exam Library")
