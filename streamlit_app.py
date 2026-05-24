@@ -103,6 +103,14 @@ if "anatomy_quiz_attempts" not in st.session_state:
     st.session_state.anatomy_quiz_attempts = []
 if "anatomy_quiz_review_queue" not in st.session_state:
     st.session_state.anatomy_quiz_review_queue = []
+if "lead_clinical_issues" not in st.session_state:
+    st.session_state.lead_clinical_issues = []
+if "lead_sop_entries" not in st.session_state:
+    st.session_state.lead_sop_entries = []
+if "lead_relationship_touchpoints" not in st.session_state:
+    st.session_state.lead_relationship_touchpoints = []
+if "lead_huddle_logs" not in st.session_state:
+    st.session_state.lead_huddle_logs = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -794,6 +802,75 @@ def initialize_database():
                         CREATE TABLE IF NOT EXISTS anatomy_quiz_review_queue (
                             id BIGSERIAL PRIMARY KEY,
                             review_text TEXT NOT NULL,
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_clinical_issues (
+                            id BIGSERIAL PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            details TEXT NOT NULL DEFAULT '',
+                            issue_type TEXT NOT NULL DEFAULT 'Clinical task',
+                            source_lane TEXT NOT NULL DEFAULT 'clinical_staff',
+                            urgency TEXT NOT NULL DEFAULT 'medium',
+                            status TEXT NOT NULL DEFAULT 'new',
+                            owner_name TEXT NOT NULL DEFAULT '',
+                            due_date DATE,
+                            due_time TIME,
+                            escalation_target TEXT NOT NULL DEFAULT 'none',
+                            escalation_reason TEXT NOT NULL DEFAULT '',
+                            decision_needed_by DATE,
+                            dependency_owner TEXT NOT NULL DEFAULT '',
+                            resolved_date DATE,
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_sop_entries (
+                            id BIGSERIAL PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            topic TEXT NOT NULL DEFAULT 'General',
+                            owner_name TEXT NOT NULL DEFAULT '',
+                            version_tag TEXT NOT NULL DEFAULT 'v1.0',
+                            quick_steps TEXT NOT NULL DEFAULT '',
+                            link_url TEXT NOT NULL DEFAULT '',
+                            status TEXT NOT NULL DEFAULT 'active',
+                            updated_date DATE NOT NULL,
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_relationship_touchpoints (
+                            id BIGSERIAL PRIMARY KEY,
+                            person_name TEXT NOT NULL,
+                            role_label TEXT NOT NULL DEFAULT '',
+                            relationship_type TEXT NOT NULL DEFAULT 'Clinical staff',
+                            status_label TEXT NOT NULL DEFAULT 'green',
+                            last_touch_date DATE,
+                            next_follow_up_date DATE,
+                            open_asks TEXT NOT NULL DEFAULT '',
+                            recent_win TEXT NOT NULL DEFAULT '',
+                            notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_huddle_logs (
+                            id BIGSERIAL PRIMARY KEY,
+                            huddle_date DATE NOT NULL,
+                            priority_focus TEXT NOT NULL DEFAULT '',
+                            staffing_notes TEXT NOT NULL DEFAULT '',
+                            escalation_notes TEXT NOT NULL DEFAULT '',
+                            recap_sent_to TEXT NOT NULL DEFAULT '',
+                            shift_notes TEXT NOT NULL DEFAULT '',
                             created_date DATE NOT NULL
                         )
                         """
@@ -4276,6 +4353,383 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
 
 
+def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
+    render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    lead_issues = load_lead_clinical_issues() or []
+    sop_entries = load_lead_sop_entries() or []
+    relationship_touchpoints = load_lead_relationship_touchpoints() or []
+    huddle_logs = load_lead_huddle_logs() or []
+
+    unresolved_statuses = {"new", "in_review", "escalated"}
+    open_issues = [item for item in lead_issues if item.get("status") in unresolved_statuses]
+    escalated_issues = [item for item in open_issues if item.get("status") == "escalated"]
+    waiting_psr = [
+        item
+        for item in open_issues
+        if item.get("source_lane") == "psr"
+        or item.get("escalation_target") == "psr_lead"
+    ]
+    waiting_leadership = [
+        item
+        for item in open_issues
+        if item.get("escalation_target") in ("manager", "supervisor")
+    ]
+    resolved_today = [item for item in lead_issues if item.get("resolved_date") == date.today()]
+    clinical_overdue = [
+        task
+        for task in clinic_tasks_all
+        if task.get("status") != "completed" and task.get("due_date") and task.get("due_date") < date.today()
+    ]
+
+    headline = st.columns(5)
+    headline[0].metric("Needs action now", len(open_issues))
+    headline[1].metric("Waiting on PSR", len(waiting_psr))
+    headline[2].metric("Waiting on manager/supervisor", len(waiting_leadership))
+    headline[3].metric("Escalated", len(escalated_issues))
+    headline[4].metric("Resolved today", len(resolved_today))
+
+    st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
+    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab = st.tabs(
+        ["Command Center", "Clinical Triage Queue", "Daily Huddle", "SOP Playbook", "Relationship Tracker"]
+    )
+
+    with command_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>MA Lead Command Center</h3><span>Go-to view for staffing, escalations, and cross-team dependencies</span></div>', unsafe_allow_html=True)
+        alert_cols = st.columns(2)
+        with alert_cols[0]:
+            if open_issues:
+                st.warning(f"{len(open_issues)} open issue(s) need active ownership.")
+            else:
+                st.success("No open lead queue issues right now.")
+            if waiting_psr:
+                st.info(f"{len(waiting_psr)} issue(s) waiting on PSR lane.")
+            if waiting_leadership:
+                st.warning(f"{len(waiting_leadership)} issue(s) waiting on manager/supervisor input.")
+        with alert_cols[1]:
+            st.caption(f"Clinic overdue tasks: {len(clinical_overdue)}")
+            st.caption(f"SOP entries: {len(sop_entries)}")
+            due_followups = [
+                person
+                for person in relationship_touchpoints
+                if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= date.today()
+            ]
+            st.caption(f"Relationship follow-ups due: {len(due_followups)}")
+
+        queue_cols = st.columns(2, gap="large")
+        with queue_cols[0]:
+            st.markdown("#### Needs action now")
+            urgent_open = sorted(
+                open_issues,
+                key=lambda item: (
+                    0 if item.get("urgency") == "critical" else 1 if item.get("urgency") == "high" else 2,
+                    item.get("due_date") or date.max,
+                ),
+            )
+            if urgent_open:
+                for item in urgent_open[:7]:
+                    due_label = format_due(item.get("due_date"))
+                    st.markdown(f"- **{item.get('title')}** · {item.get('urgency')} · {item.get('status')} · due {due_label}")
+            else:
+                st.markdown("No active issues.")
+
+        with queue_cols[1]:
+            st.markdown("#### Resolved today")
+            if resolved_today:
+                for item in resolved_today[:7]:
+                    st.markdown(f"- **{item.get('title')}** · closed by {item.get('owner_name') or 'unassigned'}")
+            else:
+                st.markdown("No items marked resolved today.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with triage_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Clinical Issue Triage Queue</h3><span>Capture requests from clinical staff, PSR, and leadership with clear escalation paths</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_new_issue", clear_on_submit=True):
+            create_cols = st.columns(3)
+            with create_cols[0]:
+                issue_title = st.text_input("Issue title")
+                issue_type = st.selectbox("Issue type", ["Clinical task", "PSR handoff", "Workflow blocker", "Staffing", "Patient callback", "Referral/authorization"])
+                source_lane = st.selectbox("Source", ["clinical_staff", "psr", "manager", "supervisor"])
+            with create_cols[1]:
+                urgency = st.selectbox("Urgency", ["critical", "high", "medium", "low"], index=2)
+                owner_name = st.text_input("Owner")
+                due_date = st.date_input("Due date", value=date.today())
+            with create_cols[2]:
+                due_time = st.time_input("Due time", value=time(16, 0))
+                escalation_target = st.selectbox("Escalation target", ["none", "psr_lead", "manager", "supervisor"])
+                decision_needed_by = st.date_input("Decision needed by", value=date.today() + timedelta(days=1))
+            details = st.text_area("Details", height=100, placeholder="What happened, who is affected, and what outcome is needed?")
+            dependency_owner = st.text_input("Dependency owner (optional)")
+            escalation_reason = st.text_area("Escalation reason (optional)", height=80)
+            submit_issue = st.form_submit_button("Add to triage queue", type="primary")
+
+        if submit_issue:
+            if not issue_title.strip():
+                st.warning("Issue title is required.")
+            else:
+                add_lead_clinical_issue(
+                    title=issue_title,
+                    details=details,
+                    issue_type=issue_type,
+                    source_lane=source_lane,
+                    urgency=urgency,
+                    owner_name=owner_name,
+                    due_date=due_date,
+                    due_time=due_time,
+                    escalation_target=escalation_target,
+                    escalation_reason=escalation_reason,
+                    decision_needed_by=decision_needed_by,
+                    dependency_owner=dependency_owner,
+                )
+                st.success("Issue added to clinical triage queue.")
+                st.rerun()
+
+        st.markdown("#### Open queue")
+        open_queue = sorted(
+            [item for item in lead_issues if item.get("status") in unresolved_statuses],
+            key=lambda item: (
+                0 if item.get("urgency") == "critical" else 1 if item.get("urgency") == "high" else 2,
+                item.get("due_date") or date.max,
+                item.get("id") or 0,
+            ),
+        )
+        if open_queue:
+            for item in open_queue[:20]:
+                issue_id = item.get("id")
+                with st.expander(f"#{issue_id} · {item.get('title')} · {item.get('urgency')} · {item.get('status')}", expanded=False):
+                    st.markdown(f"**Type:** {item.get('issue_type')}  ")
+                    st.markdown(f"**Source:** {item.get('source_lane')}  ")
+                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Unassigned'}  ")
+                    st.markdown(f"**Escalation target:** {item.get('escalation_target') or 'none'}")
+                    if item.get("details"):
+                        st.markdown(f"**Details:** {item.get('details')}")
+                    if item.get("dependency_owner"):
+                        st.markdown(f"**Dependency owner:** {item.get('dependency_owner')}")
+                    if item.get("escalation_reason"):
+                        st.markdown(f"**Escalation reason:** {item.get('escalation_reason')}")
+
+                    action_cols = st.columns(4)
+                    if action_cols[0].button("Mark In Review", key=f"{panel_key}_issue_review_{issue_id}"):
+                        update_lead_clinical_issue(issue_id, status="in_review")
+                        st.rerun()
+                    if action_cols[1].button("Escalate", key=f"{panel_key}_issue_escalate_{issue_id}"):
+                        update_lead_clinical_issue(issue_id, status="escalated")
+                        st.rerun()
+                    if action_cols[2].button("Resolve", key=f"{panel_key}_issue_resolve_{issue_id}"):
+                        update_lead_clinical_issue(issue_id, status="resolved", resolved_date=date.today())
+                        st.rerun()
+                    if action_cols[3].button("Reopen", key=f"{panel_key}_issue_reopen_{issue_id}"):
+                        update_lead_clinical_issue(issue_id, status="new", resolved_date=None)
+                        st.rerun()
+        else:
+            st.markdown('<div class="empty-state">No open triage issues.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with huddle_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Daily Huddle Builder</h3><span>Auto-generate agenda and send-ready recap notes</span></div>', unsafe_allow_html=True)
+
+        today_open = [item for item in open_issues if item.get("due_date") in (None, date.today())]
+        top_escalations = [item for item in escalated_issues if item.get("escalation_target") in ("manager", "supervisor")]
+        relationship_followups = [
+            person
+            for person in relationship_touchpoints
+            if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= date.today()
+        ]
+
+        generated_agenda = (
+            f"- Clinic overdue tasks: {len(clinical_overdue)}\n"
+            f"- Open triage issues due today: {len(today_open)}\n"
+            f"- Escalations for leadership: {len(top_escalations)}\n"
+            f"- PSR handoffs waiting: {len(waiting_psr)}\n"
+            f"- Relationship follow-ups due: {len(relationship_followups)}"
+        )
+
+        huddle_date = st.date_input("Huddle date", value=date.today(), key=f"{panel_key}_huddle_date")
+        priority_focus = st.text_area(
+            "Priority focus",
+            value=generated_agenda,
+            key=f"{panel_key}_priority_focus",
+            height=120,
+        )
+        staffing_notes = st.text_area(
+            "Staffing notes",
+            placeholder="Coverage gaps, rooming constraints, late starts, etc.",
+            key=f"{panel_key}_staffing_notes",
+            height=90,
+        )
+        escalation_notes = st.text_area(
+            "Escalation notes",
+            placeholder="What you need from PSR lead, manager, or supervisor today.",
+            key=f"{panel_key}_escalation_notes",
+            height=90,
+        )
+        recap_sent_to = st.text_input(
+            "Recap sent to",
+            placeholder="PSR lead, clinic manager, supervisor",
+            key=f"{panel_key}_recap_sent_to",
+        )
+        shift_notes = st.text_area(
+            "End-of-day recap draft",
+            placeholder="Wins, unresolved items, and tomorrow handoff.",
+            key=f"{panel_key}_shift_notes",
+            height=90,
+        )
+
+        if st.button("Save huddle note", key=f"{panel_key}_save_huddle", type="primary"):
+            add_lead_huddle_log(
+                huddle_date=huddle_date,
+                priority_focus=priority_focus,
+                staffing_notes=staffing_notes,
+                escalation_notes=escalation_notes,
+                recap_sent_to=recap_sent_to,
+                shift_notes=shift_notes,
+            )
+            st.success("Huddle note saved.")
+            st.rerun()
+
+        st.markdown("#### Recent huddles")
+        if huddle_logs:
+            for log in huddle_logs[:10]:
+                with st.expander(f"{log.get('huddle_date')} · recap to {log.get('recap_sent_to') or 'not set'}", expanded=False):
+                    st.markdown(f"**Priority focus**\n{log.get('priority_focus') or 'No notes'}")
+                    st.markdown(f"**Staffing notes**\n{log.get('staffing_notes') or 'No notes'}")
+                    st.markdown(f"**Escalation notes**\n{log.get('escalation_notes') or 'No notes'}")
+                    st.markdown(f"**Shift recap**\n{log.get('shift_notes') or 'No notes'}")
+        else:
+            st.caption("No huddle logs saved yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with sop_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>SOP + Playbook Library</h3><span>Quick-reference workflows for consistent clinic execution</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_sop_form", clear_on_submit=True):
+            sop_cols = st.columns(3)
+            with sop_cols[0]:
+                sop_title = st.text_input("SOP title")
+                sop_topic = st.selectbox("Topic", ["Rooming", "Referrals", "Imaging", "Authorizations", "Patient callbacks", "General"])
+            with sop_cols[1]:
+                sop_owner = st.text_input("Owner")
+                sop_version = st.text_input("Version", value="v1.0")
+            with sop_cols[2]:
+                sop_status = st.selectbox("Status", ["active", "draft", "archived"], index=0)
+                sop_link = st.text_input("Link (optional)")
+            sop_steps = st.text_area("Quick steps", height=110, placeholder="Step-by-step playbook summary")
+            submit_sop = st.form_submit_button("Add SOP entry", type="primary")
+
+        if submit_sop:
+            if not sop_title.strip():
+                st.warning("SOP title is required.")
+            else:
+                add_lead_sop_entry(
+                    title=sop_title,
+                    topic=sop_topic,
+                    owner_name=sop_owner,
+                    version_tag=sop_version,
+                    quick_steps=sop_steps,
+                    link_url=sop_link,
+                    status=sop_status,
+                )
+                st.success("SOP entry added.")
+                st.rerun()
+
+        sop_search = st.text_input("Search SOP library", key=f"{panel_key}_sop_search", placeholder="Topic, title, or owner")
+        query = (sop_search or "").strip().lower()
+        filtered_sops = [
+            item
+            for item in sop_entries
+            if not query
+            or query in str(item.get("title", "")).lower()
+            or query in str(item.get("topic", "")).lower()
+            or query in str(item.get("owner_name", "")).lower()
+        ]
+        if filtered_sops:
+            for item in filtered_sops[:40]:
+                with st.expander(f"{item.get('title')} · {item.get('topic')} · {item.get('version_tag')}", expanded=False):
+                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Not set'}")
+                    st.markdown(f"**Status:** {item.get('status')}")
+                    st.markdown(f"**Updated:** {item.get('updated_date')}")
+                    st.markdown(item.get("quick_steps") or "No quick steps added yet.")
+                    if item.get("link_url"):
+                        st.write(item.get("link_url"))
+        else:
+            st.markdown('<div class="empty-state">No SOP entries match that search.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with relationship_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Relationship Health Tracker</h3><span>Maintain strong working loops with PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_relationship_form", clear_on_submit=True):
+            rel_cols = st.columns(3)
+            with rel_cols[0]:
+                person_name = st.text_input("Name")
+                role_label = st.text_input("Role/Title")
+            with rel_cols[1]:
+                relationship_type = st.selectbox("Relationship lane", ["PSR lead", "Manager", "Supervisor", "Clinical staff"])
+                status_label = st.selectbox("Health", ["green", "yellow", "red"], index=0)
+            with rel_cols[2]:
+                last_touch_date = st.date_input("Last touch", value=date.today())
+                next_follow_up_date = st.date_input("Next follow-up", value=date.today() + timedelta(days=7))
+            open_asks = st.text_area("Open asks", height=80)
+            recent_win = st.text_area("Recent win", height=80)
+            rel_notes = st.text_area("Notes", height=80)
+            submit_relationship = st.form_submit_button("Save touchpoint", type="primary")
+
+        if submit_relationship:
+            if not person_name.strip():
+                st.warning("Name is required.")
+            else:
+                add_lead_relationship_touchpoint(
+                    person_name=person_name,
+                    role_label=role_label,
+                    relationship_type=relationship_type,
+                    status_label=status_label,
+                    last_touch_date=last_touch_date,
+                    next_follow_up_date=next_follow_up_date,
+                    open_asks=open_asks,
+                    recent_win=recent_win,
+                    notes=rel_notes,
+                )
+                st.success("Relationship touchpoint saved.")
+                st.rerun()
+
+        due_followups = sorted(
+            relationship_touchpoints,
+            key=lambda item: item.get("next_follow_up_date") or date.max,
+        )
+        if due_followups:
+            for item in due_followups[:30]:
+                item_id = item.get("id")
+                followup_date = item.get("next_follow_up_date")
+                due_flag = " (due)" if followup_date and followup_date <= date.today() else ""
+                with st.expander(f"{item.get('person_name')} · {item.get('relationship_type')} · {item.get('status_label')}{due_flag}", expanded=False):
+                    st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
+                    st.markdown(f"**Last touch:** {item.get('last_touch_date') or 'Not set'}")
+                    st.markdown(f"**Next follow-up:** {followup_date or 'Not set'}")
+                    if item.get("open_asks"):
+                        st.markdown(f"**Open asks:** {item.get('open_asks')}")
+                    if item.get("recent_win"):
+                        st.markdown(f"**Recent win:** {item.get('recent_win')}")
+                    if item.get("notes"):
+                        st.markdown(f"**Notes:** {item.get('notes')}")
+                    if st.button("Log touch today + move follow-up 7 days", key=f"{panel_key}_touch_{item_id}"):
+                        update_lead_relationship_touchpoint(
+                            item_id,
+                            last_touch_date=date.today(),
+                            next_follow_up_date=date.today() + timedelta(days=7),
+                        )
+                        st.rerun()
+        else:
+            st.caption("No relationship touchpoints tracked yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_settings_panel(app_settings, panel_key="settings"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -7112,6 +7566,16 @@ update_protocol_document = partial(data_access.update_protocol_document, db_enab
 delete_protocol_document = partial(data_access.delete_protocol_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 load_case_protocol_links = partial(data_access.load_case_protocol_links, db_enabled, get_connection, st_module=st)
 set_protocol_case_links = partial(data_access.set_protocol_case_links, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_clinical_issues = partial(data_access.load_lead_clinical_issues, db_enabled, get_connection, st_module=st)
+add_lead_clinical_issue = partial(data_access.add_lead_clinical_issue, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_lead_clinical_issue = partial(data_access.update_lead_clinical_issue, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_sop_entries = partial(data_access.load_lead_sop_entries, db_enabled, get_connection, st_module=st)
+add_lead_sop_entry = partial(data_access.add_lead_sop_entry, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_relationship_touchpoints = partial(data_access.load_lead_relationship_touchpoints, db_enabled, get_connection, st_module=st)
+add_lead_relationship_touchpoint = partial(data_access.add_lead_relationship_touchpoint, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_lead_relationship_touchpoint = partial(data_access.update_lead_relationship_touchpoint, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_huddle_logs = partial(data_access.load_lead_huddle_logs, db_enabled, get_connection, st_module=st)
+add_lead_huddle_log = partial(data_access.add_lead_huddle_log, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
 parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
@@ -7206,6 +7670,7 @@ app_bootstrap.run_app(
         "render_ai_panel": render_ai_panel,
         "render_review_command_panel": render_review_command_panel,
         "render_notifications_panel": render_notifications_panel,
+        "render_ma_lead_panel": render_ma_lead_panel,
         "render_settings_panel": render_settings_panel,
         "render_analytics_panel": render_analytics_panel,
         "render_daily_review_panel": render_daily_review_panel,

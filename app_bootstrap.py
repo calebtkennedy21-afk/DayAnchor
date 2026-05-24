@@ -77,6 +77,7 @@ def run_app(context, st_module=st):
     render_ai_panel = context["render_ai_panel"]
     render_review_command_panel = context["render_review_command_panel"]
     render_notifications_panel = context["render_notifications_panel"]
+    render_ma_lead_panel = context["render_ma_lead_panel"]
     render_settings_panel = context["render_settings_panel"]
     render_analytics_panel = context["render_analytics_panel"]
     render_daily_review_panel = context["render_daily_review_panel"]
@@ -139,7 +140,7 @@ def run_app(context, st_module=st):
         st_module.markdown("---")
         st_module.markdown("### Navigation")
         personal_pages = ["Personal", "Schedule", "Daily Review", "Notifications"]
-        clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols"]
+        clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols", "MA Lead"]
         additional_pages = ["News", "AI", "Analytics", "Settings"]
         all_pages = ["Overview"] + personal_pages + clinical_pages + additional_pages
 
@@ -596,6 +597,9 @@ def run_app(context, st_module=st):
     elif current_page == "Notifications":
         render_page_banner("overview", "Notifications", "A focused inbox for reminders and follow-ups.")
         render_notifications_panel(tasks, active_tasks, panel_key="notifications_page")
+    elif current_page == "MA Lead":
+        render_page_banner("clinic", "MA Lead", "Lead queue, huddles, playbooks, and relationship follow-through.")
+        render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead_page")
     elif current_page == "Daily Review":
         render_page_banner("review", "Daily Review", "Close the loop on today and draft tomorrow.")
         render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="review_page")
