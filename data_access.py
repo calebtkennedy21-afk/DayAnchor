@@ -893,3 +893,428 @@ def add_lead_huddle_log(
             "created_date": date.today(),
         }
     )
+
+
+def load_lead_skill_signoffs(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return list(st_module.session_state.get("lead_skill_signoffs", []))
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        staff_name,
+                        role_label,
+                        skill_name,
+                        status,
+                        due_date,
+                        signed_off_date,
+                        signed_off_by,
+                        notes,
+                        created_date
+                    FROM lead_skill_signoffs
+                    ORDER BY due_date NULLS LAST, created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st_module.session_state.get("lead_skill_signoffs", []))
+
+
+def add_lead_skill_signoff(
+    staff_name,
+    role_label,
+    skill_name,
+    due_date,
+    notes="",
+    status="pending",
+    signed_off_date=None,
+    signed_off_by="",
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    staff_value = str(staff_name or "").strip()
+    skill_value = str(skill_name or "").strip()
+    if not staff_value or not skill_value:
+        return None
+
+    role_value = str(role_label or "").strip()
+    status_value = str(status or "pending").strip() or "pending"
+    notes_value = str(notes or "").strip()
+    signed_by_value = str(signed_off_by or "").strip()
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lead_skill_signoffs (
+                        staff_name,
+                        role_label,
+                        skill_name,
+                        status,
+                        due_date,
+                        signed_off_date,
+                        signed_off_by,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        staff_value,
+                        role_value,
+                        skill_value,
+                        status_value,
+                        due_date,
+                        signed_off_date,
+                        signed_by_value,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    items = st_module.session_state.setdefault("lead_skill_signoffs", [])
+    next_id = max([item.get("id", 0) for item in items], default=0) + 1
+    items.append(
+        {
+            "id": next_id,
+            "staff_name": staff_value,
+            "role_label": role_value,
+            "skill_name": skill_value,
+            "status": status_value,
+            "due_date": due_date,
+            "signed_off_date": signed_off_date,
+            "signed_off_by": signed_by_value,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+    return next_id
+
+
+def update_lead_skill_signoff(signoff_id, db_enabled_fn=None, get_connection_fn=None, st_module=st, **fields):
+    allowed_fields = {
+        "staff_name",
+        "role_label",
+        "skill_name",
+        "status",
+        "due_date",
+        "signed_off_date",
+        "signed_off_by",
+        "notes",
+    }
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if db_enabled_fn and db_enabled_fn():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(signoff_id)
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE lead_skill_signoffs SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    items = st_module.session_state.setdefault("lead_skill_signoffs", [])
+    for item in items:
+        if item.get("id") == signoff_id:
+            item.update(sanitized)
+            return
+
+
+def load_lead_education_requests(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return list(st_module.session_state.get("lead_education_requests", []))
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        request_title,
+                        requesting_team,
+                        topic,
+                        priority,
+                        status,
+                        needed_by_date,
+                        session_date,
+                        owner_name,
+                        notes,
+                        created_date
+                    FROM lead_education_requests
+                    ORDER BY needed_by_date NULLS LAST, created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st_module.session_state.get("lead_education_requests", []))
+
+
+def add_lead_education_request(
+    request_title,
+    requesting_team,
+    topic,
+    priority,
+    needed_by_date,
+    session_date=None,
+    owner_name="",
+    notes="",
+    status="new",
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    title_value = str(request_title or "").strip()
+    if not title_value:
+        return None
+
+    team_value = str(requesting_team or "").strip()
+    topic_value = str(topic or "General").strip() or "General"
+    priority_value = str(priority or "medium").strip() or "medium"
+    status_value = str(status or "new").strip() or "new"
+    owner_value = str(owner_name or "").strip()
+    notes_value = str(notes or "").strip()
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lead_education_requests (
+                        request_title,
+                        requesting_team,
+                        topic,
+                        priority,
+                        status,
+                        needed_by_date,
+                        session_date,
+                        owner_name,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        title_value,
+                        team_value,
+                        topic_value,
+                        priority_value,
+                        status_value,
+                        needed_by_date,
+                        session_date,
+                        owner_value,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    items = st_module.session_state.setdefault("lead_education_requests", [])
+    next_id = max([item.get("id", 0) for item in items], default=0) + 1
+    items.append(
+        {
+            "id": next_id,
+            "request_title": title_value,
+            "requesting_team": team_value,
+            "topic": topic_value,
+            "priority": priority_value,
+            "status": status_value,
+            "needed_by_date": needed_by_date,
+            "session_date": session_date,
+            "owner_name": owner_value,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+    return next_id
+
+
+def update_lead_education_request(request_id, db_enabled_fn=None, get_connection_fn=None, st_module=st, **fields):
+    allowed_fields = {
+        "request_title",
+        "requesting_team",
+        "topic",
+        "priority",
+        "status",
+        "needed_by_date",
+        "session_date",
+        "owner_name",
+        "notes",
+    }
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if db_enabled_fn and db_enabled_fn():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(request_id)
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE lead_education_requests SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    items = st_module.session_state.setdefault("lead_education_requests", [])
+    for item in items:
+        if item.get("id") == request_id:
+            item.update(sanitized)
+            return
+
+
+def load_autoclave_maintenance_items(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return list(st_module.session_state.get("autoclave_maintenance_items", []))
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        unit_label,
+                        maintenance_type,
+                        frequency_label,
+                        last_completed_date,
+                        next_due_date,
+                        status,
+                        owner_name,
+                        vendor_contact,
+                        notes,
+                        created_date
+                    FROM autoclave_maintenance_items
+                    ORDER BY next_due_date NULLS LAST, created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st_module.session_state.get("autoclave_maintenance_items", []))
+
+
+def add_autoclave_maintenance_item(
+    unit_label,
+    maintenance_type,
+    frequency_label,
+    next_due_date,
+    last_completed_date=None,
+    status="due_soon",
+    owner_name="",
+    vendor_contact="",
+    notes="",
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    unit_value = str(unit_label or "").strip()
+    if not unit_value:
+        return None
+
+    maintenance_value = str(maintenance_type or "Routine check").strip() or "Routine check"
+    frequency_value = str(frequency_label or "Weekly").strip() or "Weekly"
+    status_value = str(status or "due_soon").strip() or "due_soon"
+    owner_value = str(owner_name or "").strip()
+    vendor_value = str(vendor_contact or "").strip()
+    notes_value = str(notes or "").strip()
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO autoclave_maintenance_items (
+                        unit_label,
+                        maintenance_type,
+                        frequency_label,
+                        last_completed_date,
+                        next_due_date,
+                        status,
+                        owner_name,
+                        vendor_contact,
+                        notes,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        unit_value,
+                        maintenance_value,
+                        frequency_value,
+                        last_completed_date,
+                        next_due_date,
+                        status_value,
+                        owner_value,
+                        vendor_value,
+                        notes_value,
+                        date.today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    items = st_module.session_state.setdefault("autoclave_maintenance_items", [])
+    next_id = max([item.get("id", 0) for item in items], default=0) + 1
+    items.append(
+        {
+            "id": next_id,
+            "unit_label": unit_value,
+            "maintenance_type": maintenance_value,
+            "frequency_label": frequency_value,
+            "last_completed_date": last_completed_date,
+            "next_due_date": next_due_date,
+            "status": status_value,
+            "owner_name": owner_value,
+            "vendor_contact": vendor_value,
+            "notes": notes_value,
+            "created_date": date.today(),
+        }
+    )
+    return next_id
+
+
+def update_autoclave_maintenance_item(item_id, db_enabled_fn=None, get_connection_fn=None, st_module=st, **fields):
+    allowed_fields = {
+        "unit_label",
+        "maintenance_type",
+        "frequency_label",
+        "last_completed_date",
+        "next_due_date",
+        "status",
+        "owner_name",
+        "vendor_contact",
+        "notes",
+    }
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    if db_enabled_fn and db_enabled_fn():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(item_id)
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE autoclave_maintenance_items SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    items = st_module.session_state.setdefault("autoclave_maintenance_items", [])
+    for item in items:
+        if item.get("id") == item_id:
+            item.update(sanitized)
+            return

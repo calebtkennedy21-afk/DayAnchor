@@ -112,6 +112,12 @@ if "lead_relationship_touchpoints" not in st.session_state:
     st.session_state.lead_relationship_touchpoints = []
 if "lead_huddle_logs" not in st.session_state:
     st.session_state.lead_huddle_logs = []
+if "lead_skill_signoffs" not in st.session_state:
+    st.session_state.lead_skill_signoffs = []
+if "lead_education_requests" not in st.session_state:
+    st.session_state.lead_education_requests = []
+if "autoclave_maintenance_items" not in st.session_state:
+    st.session_state.autoclave_maintenance_items = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -872,6 +878,56 @@ def initialize_database():
                             escalation_notes TEXT NOT NULL DEFAULT '',
                             recap_sent_to TEXT NOT NULL DEFAULT '',
                             shift_notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_skill_signoffs (
+                            id BIGSERIAL PRIMARY KEY,
+                            staff_name TEXT NOT NULL,
+                            role_label TEXT NOT NULL DEFAULT '',
+                            skill_name TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'pending',
+                            due_date DATE,
+                            signed_off_date DATE,
+                            signed_off_by TEXT NOT NULL DEFAULT '',
+                            notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_education_requests (
+                            id BIGSERIAL PRIMARY KEY,
+                            request_title TEXT NOT NULL,
+                            requesting_team TEXT NOT NULL DEFAULT '',
+                            topic TEXT NOT NULL DEFAULT 'General',
+                            priority TEXT NOT NULL DEFAULT 'medium',
+                            status TEXT NOT NULL DEFAULT 'new',
+                            needed_by_date DATE,
+                            session_date DATE,
+                            owner_name TEXT NOT NULL DEFAULT '',
+                            notes TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS autoclave_maintenance_items (
+                            id BIGSERIAL PRIMARY KEY,
+                            unit_label TEXT NOT NULL,
+                            maintenance_type TEXT NOT NULL DEFAULT 'Routine check',
+                            frequency_label TEXT NOT NULL DEFAULT 'Weekly',
+                            last_completed_date DATE,
+                            next_due_date DATE,
+                            status TEXT NOT NULL DEFAULT 'due_soon',
+                            owner_name TEXT NOT NULL DEFAULT '',
+                            vendor_contact TEXT NOT NULL DEFAULT '',
+                            notes TEXT NOT NULL DEFAULT '',
                             created_date DATE NOT NULL
                         )
                         """
@@ -4354,6 +4410,22 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
 
 
+def autoclave_next_due_date(last_completed_date, frequency_label, current_next_due=None):
+    if not isinstance(last_completed_date, date):
+        return current_next_due
+
+    normalized = str(frequency_label or "").strip().lower()
+    days_by_frequency = {
+        "daily": 1,
+        "weekly": 7,
+        "monthly": 30,
+        "quarterly": 90,
+    }
+    if normalized not in days_by_frequency:
+        return current_next_due
+    return last_completed_date + timedelta(days=days_by_frequency[normalized])
+
+
 def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -4362,6 +4434,9 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     sop_entries = load_lead_sop_entries() or []
     relationship_touchpoints = load_lead_relationship_touchpoints() or []
     huddle_logs = load_lead_huddle_logs() or []
+    skill_signoffs = load_lead_skill_signoffs() or []
+    education_requests = load_lead_education_requests() or []
+    autoclave_items = load_autoclave_maintenance_items() or []
 
     unresolved_statuses = {"new", "in_review", "escalated"}
     open_issues = [item for item in lead_issues if item.get("status") in unresolved_statuses]
@@ -4390,10 +4465,25 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     headline[2].metric("Waiting on manager/supervisor", len(waiting_leadership))
     headline[3].metric("Escalated", len(escalated_issues))
     headline[4].metric("Resolved today", len(resolved_today))
+    pending_signoffs = len([item for item in skill_signoffs if item.get("status") in ("pending", "in_progress")])
+    open_education_requests = len([item for item in education_requests if item.get("status") in ("new", "preparing", "delivered")])
+    autoclave_due_count = len([item for item in autoclave_items if item.get("status") in ("due_soon", "overdue")])
+    st.caption(
+        f"Preceptor sign-offs pending: {pending_signoffs} · Education requests open: {open_education_requests} · Autoclave checks due: {autoclave_due_count}"
+    )
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab = st.tabs(
-        ["Command Center", "Clinical Triage Queue", "Daily Huddle", "SOP Playbook", "Relationship Tracker"]
+    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab = st.tabs(
+        [
+            "Command Center",
+            "Clinical Triage Queue",
+            "Daily Huddle",
+            "SOP Playbook",
+            "Relationship Tracker",
+            "Preceptor Sign-offs",
+            "Education Liaison",
+            "Autoclave Maintenance",
+        ]
     )
 
     with command_tab:
@@ -4730,6 +4820,237 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             st.caption("No relationship touchpoints tracked yet.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    with preceptor_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Preceptor Skill Sign-offs</h3><span>Track onboarding skills and formal sign-off status</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_signoff_form", clear_on_submit=True):
+            signoff_cols = st.columns(3)
+            with signoff_cols[0]:
+                signoff_staff_name = st.text_input("Staff name")
+                signoff_role = st.selectbox("Role", ["Medical Assistant", "Extern", "Nurse", "Other"])
+            with signoff_cols[1]:
+                signoff_skill = st.text_input("Skill")
+                signoff_due_date = st.date_input("Sign-off due date", value=date.today() + timedelta(days=7))
+            with signoff_cols[2]:
+                signoff_status = st.selectbox("Status", ["pending", "in_progress", "signed_off"], index=0)
+                signoff_by = st.text_input("Signed off by", value="")
+            signoff_notes = st.text_area("Notes", height=90)
+            submit_signoff = st.form_submit_button("Add skill sign-off", type="primary")
+
+        if submit_signoff:
+            if not signoff_staff_name.strip() or not signoff_skill.strip():
+                st.warning("Staff name and skill are required.")
+            else:
+                add_lead_skill_signoff(
+                    staff_name=signoff_staff_name,
+                    role_label=signoff_role,
+                    skill_name=signoff_skill,
+                    due_date=signoff_due_date,
+                    notes=signoff_notes,
+                    status=signoff_status,
+                    signed_off_date=date.today() if signoff_status == "signed_off" else None,
+                    signed_off_by=signoff_by,
+                )
+                st.success("Skill sign-off added.")
+                st.rerun()
+
+        st.markdown("#### Skill tracker")
+        ordered_signoffs = sorted(
+            skill_signoffs,
+            key=lambda item: (
+                0 if item.get("status") in ("pending", "in_progress") else 1,
+                item.get("due_date") or date.max,
+            ),
+        )
+        if ordered_signoffs:
+            default_signer = st.text_input("Default signer", value="", key=f"{panel_key}_default_signer")
+            for item in ordered_signoffs[:40]:
+                signoff_id = item.get("id")
+                due_label = format_due(item.get("due_date"))
+                with st.expander(f"{item.get('staff_name')} · {item.get('skill_name')} · {item.get('status')} · due {due_label}", expanded=False):
+                    st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
+                    if item.get("notes"):
+                        st.markdown(f"**Notes:** {item.get('notes')}")
+                    if item.get("signed_off_date"):
+                        st.caption(f"Signed off on {item.get('signed_off_date')} by {item.get('signed_off_by') or 'Not recorded'}")
+
+                    action_cols = st.columns(3)
+                    if action_cols[0].button("Mark In Progress", key=f"{panel_key}_signoff_progress_{signoff_id}"):
+                        update_lead_skill_signoff(signoff_id, status="in_progress")
+                        st.rerun()
+                    if action_cols[1].button("Sign Off", key=f"{panel_key}_signoff_complete_{signoff_id}"):
+                        update_lead_skill_signoff(
+                            signoff_id,
+                            status="signed_off",
+                            signed_off_date=date.today(),
+                            signed_off_by=default_signer,
+                        )
+                        st.rerun()
+                    if action_cols[2].button("Reopen", key=f"{panel_key}_signoff_reopen_{signoff_id}"):
+                        update_lead_skill_signoff(signoff_id, status="pending", signed_off_date=None)
+                        st.rerun()
+        else:
+            st.caption("No skill sign-offs tracked yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with education_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Education Team Liaison</h3><span>Track hospital education requests, prep, and delivery status</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_education_form", clear_on_submit=True):
+            edu_cols = st.columns(3)
+            with edu_cols[0]:
+                edu_title = st.text_input("Request title")
+                edu_team = st.text_input("Requesting team", value="Hospital Education Team")
+            with edu_cols[1]:
+                edu_topic = st.selectbox("Topic", ["Clinical skills", "Workflow orientation", "Safety", "Sterile processing", "Other"])
+                edu_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+            with edu_cols[2]:
+                edu_needed_by = st.date_input("Needed by", value=date.today() + timedelta(days=5))
+                edu_session_date = st.date_input("Session date", value=date.today() + timedelta(days=7))
+            edu_owner = st.text_input("Owner", value="")
+            edu_notes = st.text_area("Notes", height=90)
+            submit_edu = st.form_submit_button("Add education request", type="primary")
+
+        if submit_edu:
+            if not edu_title.strip():
+                st.warning("Request title is required.")
+            else:
+                add_lead_education_request(
+                    request_title=edu_title,
+                    requesting_team=edu_team,
+                    topic=edu_topic,
+                    priority=edu_priority,
+                    needed_by_date=edu_needed_by,
+                    session_date=edu_session_date,
+                    owner_name=edu_owner,
+                    notes=edu_notes,
+                )
+                st.success("Education request saved.")
+                st.rerun()
+
+        st.markdown("#### Request queue")
+        ordered_requests = sorted(
+            education_requests,
+            key=lambda item: (
+                0 if item.get("status") in ("new", "preparing") else 1,
+                item.get("needed_by_date") or date.max,
+            ),
+        )
+        if ordered_requests:
+            for item in ordered_requests[:40]:
+                request_id = item.get("id")
+                with st.expander(f"{item.get('request_title')} · {item.get('status')} · need by {item.get('needed_by_date')}", expanded=False):
+                    st.markdown(f"**Team:** {item.get('requesting_team') or 'Not set'}")
+                    st.markdown(f"**Topic:** {item.get('topic')}")
+                    st.markdown(f"**Priority:** {item.get('priority')}")
+                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Unassigned'}")
+                    if item.get("notes"):
+                        st.markdown(f"**Notes:** {item.get('notes')}")
+
+                    action_cols = st.columns(4)
+                    if action_cols[0].button("Preparing", key=f"{panel_key}_edu_prepare_{request_id}"):
+                        update_lead_education_request(request_id, status="preparing")
+                        st.rerun()
+                    if action_cols[1].button("Delivered", key=f"{panel_key}_edu_delivered_{request_id}"):
+                        update_lead_education_request(request_id, status="delivered", session_date=date.today())
+                        st.rerun()
+                    if action_cols[2].button("Close", key=f"{panel_key}_edu_close_{request_id}"):
+                        update_lead_education_request(request_id, status="closed")
+                        st.rerun()
+                    if action_cols[3].button("Reopen", key=f"{panel_key}_edu_reopen_{request_id}"):
+                        update_lead_education_request(request_id, status="new")
+                        st.rerun()
+        else:
+            st.caption("No education liaison requests tracked yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with autoclave_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Autoclave Maintenance</h3><span>Monitor sterilizer checks, service, and overdue maintenance</span></div>', unsafe_allow_html=True)
+
+        with st.form(f"{panel_key}_autoclave_form", clear_on_submit=True):
+            auto_cols = st.columns(3)
+            with auto_cols[0]:
+                auto_unit = st.text_input("Autoclave unit")
+                auto_type = st.selectbox("Maintenance type", ["Spore test", "Biological indicator", "Routine cleaning", "Preventive service", "Repair"])
+            with auto_cols[1]:
+                auto_frequency = st.selectbox("Frequency", ["Daily", "Weekly", "Monthly", "Quarterly", "As needed"], index=1)
+                auto_next_due = st.date_input("Next due", value=date.today() + timedelta(days=7))
+            with auto_cols[2]:
+                auto_last_done = st.date_input("Last completed", value=date.today() - timedelta(days=7))
+                auto_status = st.selectbox("Status", ["due_soon", "overdue", "completed", "out_of_service"], index=0)
+            auto_owner = st.text_input("Owner")
+            auto_vendor = st.text_input("Vendor/contact")
+            auto_notes = st.text_area("Notes", height=90)
+            submit_auto = st.form_submit_button("Add maintenance item", type="primary")
+
+        if submit_auto:
+            if not auto_unit.strip():
+                st.warning("Autoclave unit is required.")
+            else:
+                add_autoclave_maintenance_item(
+                    unit_label=auto_unit,
+                    maintenance_type=auto_type,
+                    frequency_label=auto_frequency,
+                    next_due_date=auto_next_due,
+                    last_completed_date=auto_last_done,
+                    status=auto_status,
+                    owner_name=auto_owner,
+                    vendor_contact=auto_vendor,
+                    notes=auto_notes,
+                )
+                st.success("Maintenance item saved.")
+                st.rerun()
+
+        st.markdown("#### Maintenance board")
+        ordered_auto = sorted(
+            autoclave_items,
+            key=lambda item: (
+                0 if item.get("status") == "overdue" else 1 if item.get("status") == "due_soon" else 2,
+                item.get("next_due_date") or date.max,
+            ),
+        )
+        if ordered_auto:
+            for item in ordered_auto[:50]:
+                auto_id = item.get("id")
+                with st.expander(f"{item.get('unit_label')} · {item.get('maintenance_type')} · {item.get('status')} · next due {item.get('next_due_date')}", expanded=False):
+                    st.markdown(f"**Frequency:** {item.get('frequency_label')}")
+                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Not set'}")
+                    if item.get("vendor_contact"):
+                        st.markdown(f"**Vendor/contact:** {item.get('vendor_contact')}")
+                    if item.get("notes"):
+                        st.markdown(f"**Notes:** {item.get('notes')}")
+
+                    action_cols = st.columns(4)
+                    if action_cols[0].button("Mark Completed", key=f"{panel_key}_auto_complete_{auto_id}"):
+                        completed_on = date.today()
+                        next_due = autoclave_next_due_date(
+                            completed_on,
+                            item.get("frequency_label"),
+                            item.get("next_due_date"),
+                        )
+                        update_autoclave_maintenance_item(
+                            auto_id,
+                            status="completed",
+                            last_completed_date=completed_on,
+                            next_due_date=next_due,
+                        )
+                        st.rerun()
+                    if action_cols[1].button("Mark Due Soon", key=f"{panel_key}_auto_due_{auto_id}"):
+                        update_autoclave_maintenance_item(auto_id, status="due_soon")
+                        st.rerun()
+                    if action_cols[2].button("Mark Overdue", key=f"{panel_key}_auto_overdue_{auto_id}"):
+                        update_autoclave_maintenance_item(auto_id, status="overdue")
+                        st.rerun()
+                    if action_cols[3].button("Out of Service", key=f"{panel_key}_auto_oos_{auto_id}"):
+                        update_autoclave_maintenance_item(auto_id, status="out_of_service")
+                        st.rerun()
+        else:
+            st.caption("No autoclave maintenance items tracked yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Weekly Leadership Summary</h3><span>One-click update for PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
@@ -4809,16 +5130,38 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     leadership_waiting_count = len(
         [item for item in open_end_of_week if item.get("escalation_target") in ("manager", "supervisor")]
     )
+    signoffs_pending_count = len([item for item in skill_signoffs if item.get("status") in ("pending", "in_progress")])
+    signoffs_completed_week = len(
+        [
+            item
+            for item in skill_signoffs
+            if item.get("status") == "signed_off" and _is_date_in_week(item.get("signed_off_date"))
+        ]
+    )
+    education_open_count = len([item for item in education_requests if item.get("status") in ("new", "preparing", "delivered")])
+    education_delivered_week = len(
+        [
+            item
+            for item in education_requests
+            if item.get("status") == "delivered" and _is_date_in_week(item.get("session_date"))
+        ]
+    )
+    autoclave_overdue_count = len([item for item in autoclave_items if item.get("status") == "overdue"])
+    autoclave_due_soon_count = len([item for item in autoclave_items if item.get("status") == "due_soon"])
 
     wins_lines = [
         f"- Resolved {len(issues_resolved_week)} triage issue(s) this week.",
         f"- Logged {len(huddles_week)} huddle note(s) to keep team alignment visible.",
         f"- Completed {len(followups_completed_week)} relationship follow-up(s).",
+        f"- Signed off {signoffs_completed_week} skill competency item(s).",
+        f"- Delivered {education_delivered_week} education request(s).",
     ]
     risks_lines = [
         f"- {len(open_end_of_week)} issue(s) remain open in the lead queue.",
         f"- {psr_waiting_count} item(s) are waiting on PSR lane follow-through.",
         f"- {leadership_waiting_count} item(s) are waiting on manager/supervisor decisions.",
+        f"- {signoffs_pending_count} skill sign-off(s) are still pending/in progress.",
+        f"- Autoclave maintenance has {autoclave_overdue_count} overdue and {autoclave_due_soon_count} due-soon item(s).",
     ]
     asks_lines = [
         "- Support escalation closure on items with near-term due dates.",
@@ -4850,6 +5193,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         f"- Waiting on manager/supervisor: {leadership_waiting_count}\n"
         f"- Follow-ups due this week: {len(followups_due_week)}\n"
         f"- Follow-ups completed this week: {len(followups_completed_week)}\n\n"
+        "Preceptor + Education + Sterile Processing Snapshot\n"
+        f"- Skill sign-offs pending/in progress: {signoffs_pending_count}\n"
+        f"- Skill sign-offs completed this week: {signoffs_completed_week}\n"
+        f"- Education requests open: {education_open_count}\n"
+        f"- Education sessions delivered this week: {education_delivered_week}\n"
+        f"- Autoclave overdue: {autoclave_overdue_count}\n"
+        f"- Autoclave due soon: {autoclave_due_soon_count}\n\n"
         "Risks\n"
         f"{'\n'.join(risks_lines)}\n\n"
         "Asks\n"
@@ -4869,6 +5219,9 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         f"- Created/Resolved: {len(issues_created_week)}/{len(issues_resolved_week)}\n"
         f"- Open queue: {len(open_end_of_week)} (PSR wait: {psr_waiting_count}, leadership wait: {leadership_waiting_count})\n"
         f"- Escalations: {len(escalations_week)}\n"
+        f"- Skill sign-offs pending: {signoffs_pending_count} (completed this week: {signoffs_completed_week})\n"
+        f"- Education requests open: {education_open_count} (delivered this week: {education_delivered_week})\n"
+        f"- Autoclave overdue/due soon: {autoclave_overdue_count}/{autoclave_due_soon_count}\n"
         f"- Huddles logged: {len(huddles_week)}\n"
         f"- Relationship follow-ups completed: {len(followups_completed_week)}\n"
         f"- Top risk: {top_open_items[0].get('title') if top_open_items else 'No critical risk currently open'}\n"
@@ -7771,6 +8124,15 @@ add_lead_relationship_touchpoint = partial(data_access.add_lead_relationship_tou
 update_lead_relationship_touchpoint = partial(data_access.update_lead_relationship_touchpoint, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 load_lead_huddle_logs = partial(data_access.load_lead_huddle_logs, db_enabled, get_connection, st_module=st)
 add_lead_huddle_log = partial(data_access.add_lead_huddle_log, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_skill_signoffs = partial(data_access.load_lead_skill_signoffs, db_enabled, get_connection, st_module=st)
+add_lead_skill_signoff = partial(data_access.add_lead_skill_signoff, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_lead_skill_signoff = partial(data_access.update_lead_skill_signoff, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_education_requests = partial(data_access.load_lead_education_requests, db_enabled, get_connection, st_module=st)
+add_lead_education_request = partial(data_access.add_lead_education_request, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_lead_education_request = partial(data_access.update_lead_education_request, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_autoclave_maintenance_items = partial(data_access.load_autoclave_maintenance_items, db_enabled, get_connection, st_module=st)
+add_autoclave_maintenance_item = partial(data_access.add_autoclave_maintenance_item, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_autoclave_maintenance_item = partial(data_access.update_autoclave_maintenance_item, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
 parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
