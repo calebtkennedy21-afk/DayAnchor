@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import psycopg
 from psycopg.rows import dict_row
 import streamlit as st
+import streamlit.components.v1 as components
 from functools import partial
 
 from clinical_reference import (
@@ -4389,6 +4390,200 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     headline[2].metric("Waiting on manager/supervisor", len(waiting_leadership))
     headline[3].metric("Escalated", len(escalated_issues))
     headline[4].metric("Resolved today", len(resolved_today))
+
+    st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Weekly Leadership Summary</h3><span>One-click update for PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
+
+    summary_cols = st.columns([1.2, 1.2, 2])
+    with summary_cols[0]:
+        summary_anchor_date = st.date_input("Week of", value=date.today(), key=f"{panel_key}_summary_anchor")
+    week_start = summary_anchor_date - timedelta(days=summary_anchor_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    with summary_cols[1]:
+        summary_recipients = st.text_input(
+            "Recipients",
+            value="PSR lead, manager, supervisor",
+            key=f"{panel_key}_summary_recipients",
+        )
+    with summary_cols[2]:
+        summary_focus = st.text_input(
+            "Weekly focus",
+            value="Clinical flow, escalation closure, and team communication",
+            key=f"{panel_key}_summary_focus",
+        )
+    summary_format = st.radio(
+        "Summary format",
+        ["Full leadership email", "Executive short version"],
+        horizontal=True,
+        key=f"{panel_key}_summary_format",
+    )
+
+    def _is_date_in_week(value):
+        return isinstance(value, date) and week_start <= value <= week_end
+
+    issues_created_week = [item for item in lead_issues if _is_date_in_week(item.get("created_date"))]
+    issues_resolved_week = [item for item in lead_issues if _is_date_in_week(item.get("resolved_date"))]
+    escalations_week = [
+        item
+        for item in lead_issues
+        if item.get("status") == "escalated"
+        and (
+            _is_date_in_week(item.get("created_date"))
+            or _is_date_in_week(item.get("decision_needed_by"))
+        )
+    ]
+    huddles_week = [item for item in huddle_logs if _is_date_in_week(item.get("huddle_date"))]
+    followups_due_week = [
+        person
+        for person in relationship_touchpoints
+        if _is_date_in_week(person.get("next_follow_up_date"))
+    ]
+    followups_completed_week = [
+        person
+        for person in relationship_touchpoints
+        if _is_date_in_week(person.get("last_touch_date"))
+    ]
+    open_end_of_week = [item for item in lead_issues if item.get("status") in unresolved_statuses]
+
+    top_open_items = sorted(
+        open_end_of_week,
+        key=lambda item: (
+            0 if item.get("urgency") == "critical" else 1 if item.get("urgency") == "high" else 2,
+            item.get("due_date") or date.max,
+        ),
+    )[:5]
+    top_open_lines = [
+        f"- {item.get('title')} ({item.get('urgency')}, owner: {item.get('owner_name') or 'unassigned'})"
+        for item in top_open_items
+    ]
+    if not top_open_lines:
+        top_open_lines = ["- None"]
+
+    psr_waiting_count = len(
+        [
+            item
+            for item in open_end_of_week
+            if item.get("source_lane") == "psr" or item.get("escalation_target") == "psr_lead"
+        ]
+    )
+    leadership_waiting_count = len(
+        [item for item in open_end_of_week if item.get("escalation_target") in ("manager", "supervisor")]
+    )
+
+    wins_lines = [
+        f"- Resolved {len(issues_resolved_week)} triage issue(s) this week.",
+        f"- Logged {len(huddles_week)} huddle note(s) to keep team alignment visible.",
+        f"- Completed {len(followups_completed_week)} relationship follow-up(s).",
+    ]
+    risks_lines = [
+        f"- {len(open_end_of_week)} issue(s) remain open in the lead queue.",
+        f"- {psr_waiting_count} item(s) are waiting on PSR lane follow-through.",
+        f"- {leadership_waiting_count} item(s) are waiting on manager/supervisor decisions.",
+    ]
+    asks_lines = [
+        "- Support escalation closure on items with near-term due dates.",
+        "- Confirm owner coverage for unresolved PSR-clinical handoffs.",
+        "- Align on turnaround expectation for manager/supervisor decisions next week.",
+    ]
+    next_week_lines = [
+        "- Close critical/high triage items first.",
+        "- Resolve PSR handoff dependencies within 24 hours.",
+        "- Escalate unresolved leadership decisions with explicit due dates.",
+    ]
+    top_open_section = "\n".join(top_open_lines)
+
+    full_weekly_summary_text = (
+        f"Subject: MA Lead Weekly Update ({week_start.isoformat()} to {week_end.isoformat()})\n"
+        f"To: {summary_recipients}\n"
+        f"Focus: {summary_focus}\n\n"
+        "Hello team,\n\n"
+        "Here is this week's MA lead update.\n\n"
+        "Wins\n"
+        f"{'\n'.join(wins_lines)}\n\n"
+        "Operations Snapshot\n"
+        f"- Issues created: {len(issues_created_week)}\n"
+        f"- Issues resolved: {len(issues_resolved_week)}\n"
+        f"- Active escalations this week: {len(escalations_week)}\n"
+        f"- Huddles logged: {len(huddles_week)}\n"
+        f"- Open queue (current): {len(open_end_of_week)}\n"
+        f"- Waiting on PSR lane: {psr_waiting_count}\n"
+        f"- Waiting on manager/supervisor: {leadership_waiting_count}\n"
+        f"- Follow-ups due this week: {len(followups_due_week)}\n"
+        f"- Follow-ups completed this week: {len(followups_completed_week)}\n\n"
+        "Risks\n"
+        f"{'\n'.join(risks_lines)}\n\n"
+        "Asks\n"
+        f"{'\n'.join(asks_lines)}\n\n"
+        "Top Open Items\n"
+        f"{top_open_section}\n\n"
+        "Next Week Plan\n"
+        f"{'\n'.join(next_week_lines)}\n\n"
+        "Thank you,\n"
+        "MA Lead\n"
+    )
+
+    executive_short_summary_text = (
+        f"Subject: MA Lead Executive Snapshot ({week_start.isoformat()} to {week_end.isoformat()})\n"
+        f"To: {summary_recipients}\n\n"
+        f"- Focus: {summary_focus}\n"
+        f"- Created/Resolved: {len(issues_created_week)}/{len(issues_resolved_week)}\n"
+        f"- Open queue: {len(open_end_of_week)} (PSR wait: {psr_waiting_count}, leadership wait: {leadership_waiting_count})\n"
+        f"- Escalations: {len(escalations_week)}\n"
+        f"- Huddles logged: {len(huddles_week)}\n"
+        f"- Relationship follow-ups completed: {len(followups_completed_week)}\n"
+        f"- Top risk: {top_open_items[0].get('title') if top_open_items else 'No critical risk currently open'}\n"
+        "- This week ask: Help close unresolved PSR and leadership dependencies with due dates.\n"
+        "- Next week plan: Prioritize critical/high items and close escalations early in the week.\n"
+    )
+
+    weekly_summary_text = (
+        executive_short_summary_text
+        if summary_format == "Executive short version"
+        else full_weekly_summary_text
+    )
+
+    st.text_area(
+        "Generated weekly leadership email",
+        value=weekly_summary_text,
+        height=280,
+        key=f"{panel_key}_weekly_summary_preview",
+    )
+    st.download_button(
+        "Download leadership email",
+        data=weekly_summary_text,
+        file_name=(
+            f"ma_lead_executive_snapshot_{week_start.isoformat()}.txt"
+            if summary_format == "Executive short version"
+            else f"ma_lead_weekly_email_{week_start.isoformat()}.txt"
+        ),
+        mime="text/plain",
+        key=f"{panel_key}_download_weekly_summary",
+    )
+    copy_payload = json.dumps(weekly_summary_text).replace("</", "<\\/")
+    components.html(
+        f"""
+        <div style=\"display:flex; align-items:center; gap:0.6rem;\">
+            <button id=\"{panel_key}_copy_btn\" style=\"padding:0.35rem 0.75rem; border-radius:0.45rem; border:1px solid #64748b; background:#111827; color:#f8fafc; cursor:pointer;\">Copy leadership email</button>
+            <span id=\"{panel_key}_copy_status\" style=\"font-size:0.82rem; color:#0f766e;\"></span>
+        </div>
+        <script>
+            const payload = {copy_payload};
+            const button = document.getElementById("{panel_key}_copy_btn");
+            const status = document.getElementById("{panel_key}_copy_status");
+            button.addEventListener("click", async () => {{
+                try {{
+                    await navigator.clipboard.writeText(payload);
+                    status.textContent = "Copied to clipboard.";
+                }} catch (error) {{
+                    status.textContent = "Copy blocked by browser. Use Ctrl+C from the preview box.";
+                }}
+            }});
+        </script>
+        """,
+        height=48,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab = st.tabs(
