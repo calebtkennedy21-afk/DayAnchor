@@ -1318,3 +1318,128 @@ def update_autoclave_maintenance_item(item_id, db_enabled_fn=None, get_connectio
         if item.get("id") == item_id:
             item.update(sanitized)
             return
+
+
+def load_lead_documents(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return list(st_module.session_state.get("lead_documents", []))
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        section_key,
+                        record_type,
+                        record_id,
+                        title,
+                        file_name,
+                        file_mime,
+                        file_bytes,
+                        notes,
+                        uploaded_by,
+                        created_date
+                    FROM lead_documents
+                    ORDER BY created_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st_module.session_state.get("lead_documents", []))
+
+
+def add_lead_document(
+    section_key,
+    title,
+    file_name,
+    file_mime,
+    file_bytes,
+    notes="",
+    uploaded_by="",
+    record_type=None,
+    record_id=None,
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    section_value = str(section_key or "General").strip() or "General"
+    file_name_value = str(file_name or "").strip()
+    if not file_name_value or not file_bytes:
+        return None
+
+    title_value = str(title or "").strip() or file_name_value
+    notes_value = str(notes or "").strip()
+    uploaded_by_value = str(uploaded_by or "").strip()
+    record_type_value = str(record_type or "").strip() or None
+    try:
+        record_id_value = int(record_id) if record_id is not None else None
+    except (TypeError, ValueError):
+        record_id_value = None
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lead_documents (
+                        section_key,
+                        record_type,
+                        record_id,
+                        title,
+                        file_name,
+                        file_mime,
+                        file_bytes,
+                        notes,
+                        uploaded_by,
+                        created_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        section_value,
+                        record_type_value,
+                        record_id_value,
+                        title_value,
+                        file_name_value,
+                        file_mime,
+                        file_bytes,
+                        notes_value,
+                        uploaded_by_value,
+                        date.today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    docs = st_module.session_state.setdefault("lead_documents", [])
+    next_id = max([item.get("id", 0) for item in docs], default=0) + 1
+    docs.append(
+        {
+            "id": next_id,
+            "section_key": section_value,
+            "record_type": record_type_value,
+            "record_id": record_id_value,
+            "title": title_value,
+            "file_name": file_name_value,
+            "file_mime": file_mime,
+            "file_bytes": file_bytes,
+            "notes": notes_value,
+            "uploaded_by": uploaded_by_value,
+            "created_date": date.today(),
+        }
+    )
+    return next_id
+
+
+def delete_lead_document(document_id, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM lead_documents WHERE id = %s", (document_id,))
+        return
+
+    docs = st_module.session_state.setdefault("lead_documents", [])
+    st_module.session_state["lead_documents"] = [
+        item for item in docs if item.get("id") != document_id
+    ]

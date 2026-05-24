@@ -118,6 +118,8 @@ if "lead_education_requests" not in st.session_state:
     st.session_state.lead_education_requests = []
 if "autoclave_maintenance_items" not in st.session_state:
     st.session_state.autoclave_maintenance_items = []
+if "lead_documents" not in st.session_state:
+    st.session_state.lead_documents = []
 
 
 DEFAULT_APP_SETTINGS = {
@@ -932,6 +934,25 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_documents (
+                            id BIGSERIAL PRIMARY KEY,
+                            section_key TEXT NOT NULL DEFAULT 'General',
+                            record_type TEXT,
+                            record_id BIGINT,
+                            title TEXT NOT NULL,
+                            file_name TEXT NOT NULL,
+                            file_mime TEXT,
+                            file_bytes BYTEA NOT NULL,
+                            notes TEXT NOT NULL DEFAULT '',
+                            uploaded_by TEXT NOT NULL DEFAULT '',
+                            created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute("ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS record_type TEXT")
+                    cur.execute("ALTER TABLE lead_documents ADD COLUMN IF NOT EXISTS record_id BIGINT")
             DB_URL = candidate_url
             DB_CANDIDATE_SOURCE = source_name
             return
@@ -4437,6 +4458,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     skill_signoffs = load_lead_skill_signoffs() or []
     education_requests = load_lead_education_requests() or []
     autoclave_items = load_autoclave_maintenance_items() or []
+    lead_documents = load_lead_documents() or []
 
     unresolved_statuses = {"new", "in_review", "escalated"}
     open_issues = [item for item in lead_issues if item.get("status") in unresolved_statuses]
@@ -4473,7 +4495,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     )
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab = st.tabs(
+    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
         [
             "Command Center",
             "Clinical Triage Queue",
@@ -4483,8 +4505,67 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             "Preceptor Sign-offs",
             "Education Liaison",
             "Autoclave Maintenance",
+            "Documents",
         ]
     )
+
+    def render_record_attachments(section_key, record_type, record_id, default_title):
+        st.markdown("##### Attachments")
+        linked_documents = [
+            doc
+            for doc in lead_documents
+            if doc.get("record_type") == record_type and doc.get("record_id") == record_id
+        ]
+
+        attachment_file = st.file_uploader(
+            "Attach file",
+            key=f"{panel_key}_attach_file_{record_type}_{record_id}",
+            help="Upload supporting files for this specific record.",
+        )
+        if st.button("Upload attachment", key=f"{panel_key}_attach_upload_{record_type}_{record_id}"):
+            if not attachment_file:
+                st.warning("Choose a file before uploading.")
+            else:
+                file_bytes = attachment_file.getvalue()
+                if len(file_bytes) > 25 * 1024 * 1024:
+                    st.warning("File is over 25 MB and cannot be uploaded.")
+                else:
+                    add_lead_document(
+                        section_key=section_key,
+                        record_type=record_type,
+                        record_id=record_id,
+                        title=default_title,
+                        file_name=attachment_file.name,
+                        file_mime=getattr(attachment_file, "type", None),
+                        file_bytes=file_bytes,
+                    )
+                    st.success("Attachment uploaded.")
+                    st.rerun()
+
+        if linked_documents:
+            for doc in linked_documents:
+                doc_id = doc.get("id")
+                doc_bytes = doc.get("file_bytes")
+                if isinstance(doc_bytes, memoryview):
+                    doc_bytes = bytes(doc_bytes)
+                row = st.columns([2.2, 1.2, 1])
+                with row[0]:
+                    st.caption(f"{doc.get('file_name')} ({doc.get('created_date')})")
+                with row[1]:
+                    st.download_button(
+                        "Download",
+                        data=doc_bytes,
+                        file_name=doc.get("file_name") or f"document_{doc_id}",
+                        mime=doc.get("file_mime") or "application/octet-stream",
+                        key=f"{panel_key}_record_doc_download_{record_type}_{record_id}_{doc_id}",
+                    )
+                with row[2]:
+                    if st.button("Delete", key=f"{panel_key}_record_doc_delete_{record_type}_{record_id}_{doc_id}"):
+                        delete_lead_document(doc_id)
+                        st.success("Attachment deleted.")
+                        st.rerun()
+        else:
+            st.caption("No attachments for this item yet.")
 
     with command_tab:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -4890,6 +4971,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     if action_cols[2].button("Reopen", key=f"{panel_key}_signoff_reopen_{signoff_id}"):
                         update_lead_skill_signoff(signoff_id, status="pending", signed_off_date=None)
                         st.rerun()
+
+                    render_record_attachments(
+                        "Preceptor Sign-offs",
+                        "skill_signoff",
+                        signoff_id,
+                        f"{item.get('staff_name')} - {item.get('skill_name')}",
+                    )
         else:
             st.caption("No skill sign-offs tracked yet.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -4962,6 +5050,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     if action_cols[3].button("Reopen", key=f"{panel_key}_edu_reopen_{request_id}"):
                         update_lead_education_request(request_id, status="new")
                         st.rerun()
+
+                    render_record_attachments(
+                        "Education Liaison",
+                        "education_request",
+                        request_id,
+                        item.get("request_title") or "Education Request",
+                    )
         else:
             st.caption("No education liaison requests tracked yet.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5047,8 +5142,143 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     if action_cols[3].button("Out of Service", key=f"{panel_key}_auto_oos_{auto_id}"):
                         update_autoclave_maintenance_item(auto_id, status="out_of_service")
                         st.rerun()
+
+                    render_record_attachments(
+                        "Autoclave Maintenance",
+                        "autoclave_item",
+                        auto_id,
+                        f"{item.get('unit_label')} - {item.get('maintenance_type')}",
+                    )
         else:
             st.caption("No autoclave maintenance items tracked yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with documents_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>MA Lead Documents</h3><span>Upload and organize files for each leadership section</span></div>', unsafe_allow_html=True)
+
+        section_options = [
+            "Command Center",
+            "Clinical Triage Queue",
+            "Daily Huddle",
+            "SOP Playbook",
+            "Relationship Tracker",
+            "Preceptor Sign-offs",
+            "Education Liaison",
+            "Autoclave Maintenance",
+            "General",
+        ]
+
+        with st.form(f"{panel_key}_documents_form", clear_on_submit=True):
+            doc_cols = st.columns(3)
+            with doc_cols[0]:
+                doc_section = st.selectbox("Section", section_options)
+                doc_title = st.text_input("Title (optional)")
+            with doc_cols[1]:
+                doc_uploaded_by = st.text_input("Uploaded by")
+                doc_notes = st.text_area("Notes", height=90)
+            with doc_cols[2]:
+                doc_files = st.file_uploader(
+                    "Select file(s)",
+                    accept_multiple_files=True,
+                    key=f"{panel_key}_documents_uploader",
+                    help="Upload documents, images, PDFs, spreadsheets, or other support files.",
+                )
+            submit_docs = st.form_submit_button("Upload files", type="primary")
+
+        if submit_docs:
+            if not doc_files:
+                st.warning("Select at least one file to upload.")
+            else:
+                uploaded_count = 0
+                skipped_count = 0
+                for doc_file in doc_files:
+                    file_bytes = doc_file.getvalue()
+                    if len(file_bytes) > 25 * 1024 * 1024:
+                        skipped_count += 1
+                        continue
+                    add_lead_document(
+                        section_key=doc_section,
+                        title=doc_title,
+                        file_name=doc_file.name,
+                        file_mime=getattr(doc_file, "type", None),
+                        file_bytes=file_bytes,
+                        notes=doc_notes,
+                        uploaded_by=doc_uploaded_by,
+                    )
+                    uploaded_count += 1
+
+                if uploaded_count:
+                    st.success(f"Uploaded {uploaded_count} file(s).")
+                if skipped_count:
+                    st.warning(f"Skipped {skipped_count} file(s) over 25 MB.")
+                if uploaded_count:
+                    st.rerun()
+
+        filter_cols = st.columns(2)
+        with filter_cols[0]:
+            section_filter = st.selectbox(
+                "Filter by section",
+                ["All sections"] + section_options,
+                key=f"{panel_key}_documents_section_filter",
+            )
+        with filter_cols[1]:
+            document_query = st.text_input(
+                "Search files",
+                key=f"{panel_key}_documents_query",
+                placeholder="Title, filename, notes, or uploader",
+            )
+
+        normalized_query = (document_query or "").strip().lower()
+        visible_documents = []
+        for item in lead_documents:
+            if section_filter != "All sections" and item.get("section_key") != section_filter:
+                continue
+            if normalized_query:
+                searchable = " ".join(
+                    [
+                        str(item.get("title") or ""),
+                        str(item.get("file_name") or ""),
+                        str(item.get("notes") or ""),
+                        str(item.get("uploaded_by") or ""),
+                    ]
+                ).lower()
+                if normalized_query not in searchable:
+                    continue
+            visible_documents.append(item)
+
+        st.caption(f"Showing {len(visible_documents)} of {len(lead_documents)} file(s)")
+        if visible_documents:
+            for item in visible_documents[:120]:
+                doc_id = item.get("id")
+                file_bytes = item.get("file_bytes")
+                if isinstance(file_bytes, memoryview):
+                    file_bytes = bytes(file_bytes)
+                with st.expander(f"{item.get('title') or item.get('file_name')} · {item.get('section_key')} · {item.get('created_date')}", expanded=False):
+                    st.markdown(f"**File:** {item.get('file_name')}")
+                    st.markdown(f"**Section:** {item.get('section_key')}")
+                    if item.get("record_type") and item.get("record_id") is not None:
+                        st.markdown(f"**Linked record:** {item.get('record_type')} #{item.get('record_id')}")
+                    st.markdown(f"**Uploaded by:** {item.get('uploaded_by') or 'Not set'}")
+                    if item.get("notes"):
+                        st.markdown(f"**Notes:** {item.get('notes')}")
+                    button_cols = st.columns(2)
+                    with button_cols[0]:
+                        st.download_button(
+                            "Download",
+                            data=file_bytes,
+                            file_name=item.get("file_name") or f"document_{doc_id}",
+                            mime=item.get("file_mime") or "application/octet-stream",
+                            key=f"{panel_key}_doc_download_{doc_id}",
+                        )
+                    with button_cols[1]:
+                        if st.button("Delete", key=f"{panel_key}_doc_delete_{doc_id}"):
+                            delete_lead_document(doc_id)
+                            st.success("Document deleted.")
+                            st.rerun()
+        else:
+            st.caption("No documents found for the selected filters.")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
@@ -8133,6 +8363,9 @@ update_lead_education_request = partial(data_access.update_lead_education_reques
 load_autoclave_maintenance_items = partial(data_access.load_autoclave_maintenance_items, db_enabled, get_connection, st_module=st)
 add_autoclave_maintenance_item = partial(data_access.add_autoclave_maintenance_item, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 update_autoclave_maintenance_item = partial(data_access.update_autoclave_maintenance_item, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_documents = partial(data_access.load_lead_documents, db_enabled, get_connection, st_module=st)
+add_lead_document = partial(data_access.add_lead_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+delete_lead_document = partial(data_access.delete_lead_document, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
 parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
