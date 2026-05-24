@@ -138,17 +138,37 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        core_pages = ["Overview", "Personal", "Clinic", "Schedule"]
-        secondary_pages = ["Cases", "Anatomy", "Physical Therapy Protocols", "News", "AI", "Analytics", "Notifications", "Daily Review", "Settings"]
-        page_label_map = {f"Core - {page}": page for page in core_pages}
-        page_label_map.update({f"More - {page}": page for page in secondary_pages})
-        nav_labels = list(page_label_map.keys())
-        nav_key = "sidebar_nav_label"
-        if nav_key not in st_module.session_state or st_module.session_state.get(nav_key) not in nav_labels:
-            st_module.session_state[nav_key] = "Core - Overview"
-        current_nav_label = st_module.radio("Go to", nav_labels, label_visibility="collapsed", key=nav_key)
-        current_page = page_label_map.get(current_nav_label, "Overview")
-        st_module.session_state["current_page"] = current_page
+        personal_pages = ["Personal", "Schedule", "Daily Review", "Notifications"]
+        clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols"]
+        additional_pages = ["News", "AI", "Analytics", "Settings"]
+        all_pages = ["Overview"] + personal_pages + clinical_pages + additional_pages
+
+        current_page = st_module.session_state.get("current_page", "Overview")
+        if current_page not in all_pages:
+            current_page = "Overview"
+            st_module.session_state["current_page"] = current_page
+
+        def render_nav_button(label, page_name, key_suffix):
+            button_type = "primary" if current_page == page_name else "secondary"
+            if st_module.button(label, key=f"sidebar_nav_{key_suffix}", use_container_width=True, type=button_type):
+                st_module.session_state["current_page"] = page_name
+                st_module.rerun()
+
+        render_nav_button("Overview", "Overview", "overview")
+
+        with st_module.expander("Personal", expanded=current_page in personal_pages):
+            for page in personal_pages:
+                render_nav_button(page, page, page.lower().replace(" ", "_"))
+
+        with st_module.expander("Clinical", expanded=current_page in clinical_pages):
+            for page in clinical_pages:
+                render_nav_button(page, page, page.lower().replace(" ", "_"))
+
+        with st_module.expander("More", expanded=current_page in additional_pages):
+            for page in additional_pages:
+                render_nav_button(page, page, page.lower().replace(" ", "_"))
+
+        current_page = st_module.session_state.get("current_page", "Overview")
 
         st_module.markdown("---")
         with st_module.expander("Quick capture", expanded=False):
