@@ -342,3 +342,177 @@ def generate_daily_review(active_tasks, completed_today, user_notes, ai_enabled_
         return review_text, tomorrow_text, ""
     except Exception as exc:
         return "", "", f"AI review failed: {exc}"
+
+
+def _fallback_top_urgent_task(active_tasks):
+    if not active_tasks:
+        return None
+
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+
+    def sort_key(task):
+        due = task.get("due_date")
+        return (
+            priority_order.get(task.get("priority"), 1),
+            due or date.max,
+            str(task.get("title") or "").lower(),
+        )
+
+    return sorted(active_tasks, key=sort_key)[0]
+
+
+def generate_ai_daily_summary(
+    tasks,
+    active_tasks,
+    added_today,
+    completed_today,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    top_urgent = _fallback_top_urgent_task(active_tasks)
+    top_urgent_line = "No urgent active task detected."
+    if top_urgent:
+        top_urgent_line = (
+            f"{top_urgent.get('title')} "
+            f"(priority={top_urgent.get('priority')}, due={top_urgent.get('due_date') or 'none'})"
+        )
+
+    added_lines = [f"- {item.get('title')}" for item in (added_today or [])[:20]]
+    completed_lines = [f"- {item.get('title')}" for item in (completed_today or [])[:20]]
+
+    added_text = "\n".join(added_lines) if added_lines else "- None"
+    completed_text = "\n".join(completed_lines) if completed_lines else "- None"
+    active_snapshot = task_snapshot_for_ai(active_tasks or [], max_items=20)
+
+    if not ai_enabled_fn():
+        fallback = (
+            "## AI Daily Summary\n"
+            f"- Added today: {len(added_today or [])}\n"
+            f"- Completed today: {len(completed_today or [])}\n"
+            f"- Start first with: {top_urgent_line}\n"
+            "- Suggested improvement for tomorrow: pre-plan your first hour before ending tonight's routine."
+        )
+        return fallback, ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.35,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise productivity coach. Produce a daily operational summary that is direct, specific, and actionable."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"All visible tasks: {len(tasks or [])}\n"
+                        f"Added today count: {len(added_today or [])}\n"
+                        f"Completed today count: {len(completed_today or [])}\n"
+                        f"Top urgent candidate: {top_urgent_line}\n\n"
+                        "Added today:\n"
+                        f"{added_text}\n\n"
+                        "Completed today:\n"
+                        f"{completed_text}\n\n"
+                        "Active tasks snapshot:\n"
+                        f"{active_snapshot}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "## Added Tasks Today\n"
+                        "## Completed Tasks Today\n"
+                        "## Highest-Urgency Task First\n"
+                        "## Suggested Improvement for Tomorrow\n"
+                        "Keep it short and operational (4-8 lines total)."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty daily summary response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI daily summary failed: {exc}"
+
+
+def generate_weekly_nightly_insight(
+    weekly_trends,
+    recent_reflections,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    trends = weekly_trends or {}
+    feel_counts = trends.get("feel_counts") or {}
+    rough = int(feel_counts.get("Rough") or 0)
+    heavy = int(feel_counts.get("Heavy") or 0)
+    steady = int(feel_counts.get("Steady") or 0)
+    good = int(feel_counts.get("Good") or 0)
+    great = int(feel_counts.get("Great") or 0)
+    consistency_pct = int(round(float(trends.get("consistency_rate") or 0.0) * 100))
+    morning_rate = trends.get("morning_completion_rate")
+    morning_rate_label = "N/A" if morning_rate is None else f"{int(round(morning_rate * 100))}%"
+
+    recent_lines = []
+    for day_text, item in (recent_reflections or [])[:5]:
+        recent_lines.append(
+            f"- {day_text}: morning={item.get('morning_goal_status', 'Not applicable today')}, "
+            f"feel={item.get('day_feel', 'Steady')}, win={str(item.get('one_win') or '').strip() or 'none'}"
+        )
+    recent_text = "\n".join(recent_lines) if recent_lines else "- None"
+
+    if not ai_enabled_fn():
+        if consistency_pct < 60:
+            focus = "Set a fixed nightly alarm 30 minutes before bedtime to protect reflection consistency."
+        elif rough + heavy >= max(2, good + great):
+            focus = "Cut one low-value evening task tomorrow and protect a calmer shutdown window before journaling."
+        else:
+            focus = "Keep your current ritual and add one sentence after reading on what to repeat tomorrow."
+        return (
+            "### Weekly AI Insight\n"
+            f"Actionable adjustment: {focus}"
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise habit coach. Return one actionable weekly adjustment for the user's nightly ritual."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Weekly trend snapshot:\n"
+                        f"- check-ins: {trends.get('checkin_count', 0)}/{trends.get('window_days', 7)}\n"
+                        f"- consistency: {consistency_pct}%\n"
+                        f"- average feel: {trends.get('average_feel_label', 'No data')}\n"
+                        f"- morning goal hit rate: {morning_rate_label}\n"
+                        f"- wins logged: {trends.get('wins_logged', 0)}\n"
+                        f"- improvements logged: {trends.get('improvements_logged', 0)}\n"
+                        f"- feel spread: rough={rough}, heavy={heavy}, steady={steady}, good={good}, great={great}\n\n"
+                        "Recent nightly reflections:\n"
+                        f"{recent_text}\n\n"
+                        "Return markdown with exactly:\n"
+                        "### Weekly AI Insight\n"
+                        "One short paragraph (1-3 sentences) and exactly one actionable adjustment sentence starting with 'Actionable adjustment:'."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty weekly insight response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI weekly insight failed: {exc}"

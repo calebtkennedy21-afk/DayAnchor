@@ -161,7 +161,12 @@ DEFAULT_APP_SETTINGS = {
     "or_alternating_days": ["Monday", "Wednesday"],
     "or_alternating_cycle_offset": 0,
     "default_surgeon_label": "Dr. Braden Boyer (BB)",
+    "nightly_reflections": {},
 }
+
+
+MORNING_GOAL_STATUS_OPTIONS = ["Yes", "No", "Not applicable today"]
+DAY_FEEL_OPTIONS = ["Rough", "Heavy", "Steady", "Good", "Great"]
 
 
 def normalize_database_url(raw_url):
@@ -625,6 +630,153 @@ def generate_daily_review(active_tasks, completed_today, user_notes):
         return review_text, tomorrow_text, ""
     except Exception as exc:
         return "", "", f"Daily review generation failed: {exc}"
+
+
+def normalize_nightly_reflections(raw_reflections):
+    if not isinstance(raw_reflections, dict):
+        return {}
+
+    normalized = {}
+    for raw_day, raw_entry in raw_reflections.items():
+        try:
+            parsed_day = date.fromisoformat(str(raw_day))
+        except ValueError:
+            continue
+        if not isinstance(raw_entry, dict):
+            continue
+
+        morning_status = str(raw_entry.get("morning_goal_status") or "Not applicable today").strip()
+        if morning_status not in MORNING_GOAL_STATUS_OPTIONS:
+            morning_status = "Not applicable today"
+
+        day_feel = str(raw_entry.get("day_feel") or "Steady").strip()
+        if day_feel not in DAY_FEEL_OPTIONS:
+            day_feel = "Steady"
+
+        normalized[parsed_day.isoformat()] = {
+            "morning_goal_status": morning_status,
+            "day_feel": day_feel,
+            "area_of_improvement": str(raw_entry.get("area_of_improvement") or "").strip(),
+            "one_win": str(raw_entry.get("one_win") or "").strip(),
+            "journal_prompt": str(raw_entry.get("journal_prompt") or "").strip(),
+            "saved_at": str(raw_entry.get("saved_at") or "").strip(),
+        }
+
+    return dict(sorted(normalized.items()))
+
+
+def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
+    safe_window_days = max(3, int(window_days or 7))
+    anchor_day = end_day or date.today()
+    window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
+    window.reverse()
+
+    entries = []
+    for day_value in window:
+        day_key = day_value.isoformat()
+        entry = reflections.get(day_key)
+        if isinstance(entry, dict):
+            entries.append((day_value, entry))
+
+    checkin_count = len(entries)
+    consistency_rate = (checkin_count / float(safe_window_days)) if safe_window_days else 0.0
+
+    morning_yes_count = 0
+    morning_applicable_count = 0
+    feel_counts = {label: 0 for label in DAY_FEEL_OPTIONS}
+    wins_logged = 0
+    improvements_logged = 0
+
+    for _, entry in entries:
+        morning_status = entry.get("morning_goal_status")
+        if morning_status == "Yes":
+            morning_yes_count += 1
+            morning_applicable_count += 1
+        elif morning_status == "No":
+            morning_applicable_count += 1
+
+        day_feel = entry.get("day_feel")
+        if day_feel in feel_counts:
+            feel_counts[day_feel] += 1
+
+        if str(entry.get("one_win") or "").strip():
+            wins_logged += 1
+        if str(entry.get("area_of_improvement") or "").strip():
+            improvements_logged += 1
+
+    feel_score_map = {
+        "Rough": 1,
+        "Heavy": 2,
+        "Steady": 3,
+        "Good": 4,
+        "Great": 5,
+    }
+    scored_entries = [feel_score_map[entry.get("day_feel")] for _, entry in entries if entry.get("day_feel") in feel_score_map]
+    average_feel_score = (sum(scored_entries) / len(scored_entries)) if scored_entries else None
+
+    if average_feel_score is None:
+        average_feel_label = "No data"
+    elif average_feel_score >= 4.5:
+        average_feel_label = "Great"
+    elif average_feel_score >= 3.5:
+        average_feel_label = "Good"
+    elif average_feel_score >= 2.5:
+        average_feel_label = "Steady"
+    elif average_feel_score >= 1.5:
+        average_feel_label = "Heavy"
+    else:
+        average_feel_label = "Rough"
+
+    morning_completion_rate = None
+    if morning_applicable_count > 0:
+        morning_completion_rate = morning_yes_count / float(morning_applicable_count)
+
+    return {
+        "window_days": safe_window_days,
+        "checkin_count": checkin_count,
+        "consistency_rate": consistency_rate,
+        "morning_yes_count": morning_yes_count,
+        "morning_applicable_count": morning_applicable_count,
+        "morning_completion_rate": morning_completion_rate,
+        "feel_counts": feel_counts,
+        "average_feel_label": average_feel_label,
+        "average_feel_score": average_feel_score,
+        "wins_logged": wins_logged,
+        "improvements_logged": improvements_logged,
+    }
+
+
+def generate_nightly_journal_prompt(
+    review_day,
+    morning_goal_status,
+    day_feel,
+    area_of_improvement,
+    one_win,
+    completed_count,
+    active_count,
+):
+    prompt_openers = [
+        "Write about how today shaped who you are becoming.",
+        "Reflect on the moments that mattered most today.",
+        "Describe the lesson hidden inside today's pace.",
+        "Capture what today taught you about your priorities.",
+        "Close the day by naming what to carry forward and what to release.",
+    ]
+    opener = prompt_openers[review_day.toordinal() % len(prompt_openers)]
+
+    morning_line = {
+        "Yes": "You followed through on your morning goals.",
+        "No": "Your morning goals did not fully land today.",
+        "Not applicable today": "Morning goals were not in play today.",
+    }.get(morning_goal_status, "Morning goals were not in play today.")
+
+    improvement_line = area_of_improvement.strip() or "one habit to improve tomorrow"
+    win_line = one_win.strip() or "one win you are proud of"
+
+    return (
+        f"{opener} {morning_line} You completed {completed_count} task(s) and have {active_count} active task(s) left. "
+        f"The day felt {day_feel.lower()}. Journal about {win_line}, then write one concrete next step to improve {improvement_line}."
+    )
 
 
 DB_CANDIDATE_SOURCE = None
@@ -4284,10 +4436,12 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_review_command_panel(active_tasks, completed_today, app_settings, panel_key="review"):
+def render_review_command_panel(tasks, active_tasks, completed_today, app_settings, panel_key="review"):
+    today = date.today()
     clinic_completed = [task for task in completed_today if task.get("category") == "Clinic"]
     personal_completed = [task for task in completed_today if task.get("category") == "Personal"]
     clinic_open = [task for task in active_tasks if task.get("category") == "Clinic"]
+    added_today = [task for task in tasks if task.get("created_date") == today]
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Shift Debrief</h3><span>Capture what happened and what should happen next</span></div>', unsafe_allow_html=True)
@@ -4296,6 +4450,46 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
     metric_cols[1].metric("Clinic completed", len(clinic_completed))
     metric_cols[2].metric("Personal completed", len(personal_completed))
     metric_cols[3].metric("Active clinic tasks", len(clinic_open))
+
+    nightly_reflections = normalize_nightly_reflections((app_settings or {}).get("nightly_reflections"))
+    today_key = today.isoformat()
+    today_reflection = nightly_reflections.get(today_key, {})
+
+    morning_status_key = f"{panel_key}_{today_key}_morning_status"
+    day_feel_key = f"{panel_key}_{today_key}_day_feel"
+    area_improvement_key = f"{panel_key}_{today_key}_area_improvement"
+    one_win_key = f"{panel_key}_{today_key}_one_win"
+
+    default_morning_status = today_reflection.get("morning_goal_status") or "Not applicable today"
+    if default_morning_status not in MORNING_GOAL_STATUS_OPTIONS:
+        default_morning_status = "Not applicable today"
+    default_day_feel = today_reflection.get("day_feel") or "Steady"
+    if default_day_feel not in DAY_FEEL_OPTIONS:
+        default_day_feel = "Steady"
+
+    if morning_status_key not in st.session_state:
+        st.session_state[morning_status_key] = default_morning_status
+    if day_feel_key not in st.session_state:
+        st.session_state[day_feel_key] = default_day_feel
+    if area_improvement_key not in st.session_state:
+        st.session_state[area_improvement_key] = today_reflection.get("area_of_improvement", "")
+    if one_win_key not in st.session_state:
+        st.session_state[one_win_key] = today_reflection.get("one_win", "")
+
+    nightly_prompt_text = generate_nightly_journal_prompt(
+        today,
+        st.session_state[morning_status_key],
+        st.session_state[day_feel_key],
+        st.session_state[area_improvement_key],
+        st.session_state[one_win_key],
+        len(completed_today),
+        len(active_tasks),
+    )
+
+    daily_summary_key = f"{panel_key}_daily_ai_summary"
+    daily_summary_error_key = f"{panel_key}_daily_ai_summary_error"
+    weekly_insight_key = f"{panel_key}_weekly_ai_insight"
+    weekly_insight_error_key = f"{panel_key}_weekly_ai_insight_error"
 
     left_col, right_col = st.columns([1.05, 0.95], gap="large")
     with left_col:
@@ -4317,16 +4511,126 @@ def render_review_command_panel(active_tasks, completed_today, app_settings, pan
         if st.session_state.tomorrow_plan_text:
             st.markdown(st.session_state.tomorrow_plan_text)
 
+        if st.button("Generate AI Daily Summary", key=f"{panel_key}_generate_ai_daily_summary", type="secondary"):
+            summary_text, summary_error = generate_ai_daily_summary(tasks, active_tasks, added_today, completed_today)
+            st.session_state[daily_summary_key] = summary_text
+            st.session_state[daily_summary_error_key] = summary_error
+        if st.session_state.get(daily_summary_error_key):
+            st.warning(st.session_state[daily_summary_error_key])
+        if st.session_state.get(daily_summary_key):
+            st.markdown(st.session_state[daily_summary_key])
+
+        st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Nightly Reflection</h3><span>Set questions for every night before you unplug</span></div>', unsafe_allow_html=True)
+
+        morning_status = st.radio(
+            "Did you complete your morning personal goals?",
+            MORNING_GOAL_STATUS_OPTIONS,
+            key=morning_status_key,
+            horizontal=True,
+        )
+        day_feel = st.select_slider(
+            "How did the day feel overall?",
+            options=DAY_FEEL_OPTIONS,
+            key=day_feel_key,
+        )
+        area_of_improvement = st.text_area(
+            "One area of improvement",
+            placeholder="What can you tighten up tomorrow?",
+            key=area_improvement_key,
+            height=85,
+        )
+        one_win = st.text_area(
+            "One win",
+            placeholder="What went well today?",
+            key=one_win_key,
+            height=85,
+        )
+
+        nightly_prompt_text = generate_nightly_journal_prompt(
+            today,
+            morning_status,
+            day_feel,
+            area_of_improvement,
+            one_win,
+            len(completed_today),
+            len(active_tasks),
+        )
+        st.caption("Auto-generated journal prompt for tonight")
+        st.info(nightly_prompt_text)
+
+        if st.button("Save tonight's reflection", key=f"{panel_key}_save_nightly_reflection", type="secondary"):
+            updated_reflections = dict(nightly_reflections)
+            updated_reflections[today_key] = {
+                "morning_goal_status": morning_status,
+                "day_feel": day_feel,
+                "area_of_improvement": area_of_improvement.strip(),
+                "one_win": one_win.strip(),
+                "journal_prompt": nightly_prompt_text,
+                "saved_at": datetime.utcnow().isoformat(timespec="seconds"),
+            }
+            save_app_settings({
+                **(app_settings or {}),
+                "nightly_reflections": updated_reflections,
+            })
+            st.success("Nightly reflection saved.")
+            st.rerun()
+
     with right_col:
-        st.markdown('<div class="panel-title"><h3>Debrief Prompts</h3><span>Focus your reflection</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Night Ritual</h3><span>Transition into journaling, stretching, and reading</span></div>', unsafe_allow_html=True)
         st.markdown(
             "<div class='ai-list'>"
-            "<li>Did clinic flow stay on time?</li>"
-            "<li>What should be pre-charted or prepped before the next clinic block?</li>"
-            "<li>Which personal tasks can wait until the next non-clinic window?</li>"
+            "<li>1) Save your nightly reflection above.</li>"
+            "<li>2) Journal on the prompt shown for tonight.</li>"
+            "<li>3) Move into your stretching block.</li>"
+            "<li>4) Finish with reading before bed.</li>"
             "</div>",
             unsafe_allow_html=True,
         )
+        st.caption("Tonight's prompt")
+        st.info(nightly_prompt_text)
+
+        weekly_trends = weekly_nightly_reflection_trends(nightly_reflections, end_day=today, window_days=7)
+        st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Weekly Trend Summary</h3><span>Reflection pattern over the last 7 days</span></div>', unsafe_allow_html=True)
+        trend_cols = st.columns(4)
+        trend_cols[0].metric("Check-ins", f"{weekly_trends['checkin_count']}/7")
+        trend_cols[1].metric("Consistency", f"{int(round(weekly_trends['consistency_rate'] * 100))}%")
+        trend_cols[2].metric("Avg day feel", weekly_trends["average_feel_label"])
+        if weekly_trends["morning_completion_rate"] is None:
+            trend_cols[3].metric("Morning goal hit rate", "N/A")
+        else:
+            trend_cols[3].metric("Morning goal hit rate", f"{int(round(weekly_trends['morning_completion_rate'] * 100))}%")
+
+        st.markdown(
+            "<div class='ai-list'>"
+            f"<li>Wins logged: {weekly_trends['wins_logged']} of {weekly_trends['checkin_count']} check-ins.</li>"
+            f"<li>Improvement areas logged: {weekly_trends['improvements_logged']} of {weekly_trends['checkin_count']} check-ins.</li>"
+            f"<li>Day feel spread: Rough {weekly_trends['feel_counts']['Rough']} · Heavy {weekly_trends['feel_counts']['Heavy']} · Steady {weekly_trends['feel_counts']['Steady']} · Good {weekly_trends['feel_counts']['Good']} · Great {weekly_trends['feel_counts']['Great']}.</li>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        recent_reflections = sorted(nightly_reflections.items(), reverse=True)[:5]
+        if st.button("Generate Weekly AI Insight", key=f"{panel_key}_generate_weekly_ai_insight", type="secondary"):
+            insight_text, insight_error = generate_weekly_nightly_insight(weekly_trends, recent_reflections)
+            st.session_state[weekly_insight_key] = insight_text
+            st.session_state[weekly_insight_error_key] = insight_error
+        if st.session_state.get(weekly_insight_error_key):
+            st.warning(st.session_state[weekly_insight_error_key])
+        if st.session_state.get(weekly_insight_key):
+            st.markdown(st.session_state[weekly_insight_key])
+
+        if recent_reflections:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Recent Reflections</h3><span>Your recent nightly check-ins</span></div>', unsafe_allow_html=True)
+            for day_text, entry in recent_reflections:
+                st.markdown(
+                    f"- **{day_text}** · Morning goals: {entry.get('morning_goal_status', 'Not applicable today')} · Day feel: {entry.get('day_feel', 'Steady')}"
+                )
+                if entry.get("one_win"):
+                    st.caption(f"Win: {entry.get('one_win')}")
+                if entry.get("area_of_improvement"):
+                    st.caption(f"Improve: {entry.get('area_of_improvement')}")
+
         if clinic_completed:
             st.caption(f"Clinic completions today: {', '.join(task['title'] for task in clinic_completed[:4])}")
         if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
@@ -4355,7 +4659,7 @@ def render_metrics_row():
 def render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="review"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    render_review_command_panel(active_tasks, completed_today_all, app_settings, panel_key=panel_key)
+    render_review_command_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key=panel_key)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_task_list_panel(
@@ -8373,6 +8677,8 @@ task_snapshot_for_ai = ai_workflows.task_snapshot_for_ai
 generate_ai_plan = partial(ai_workflows.generate_ai_plan, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
 render_task_calendar_panel = partial(

@@ -475,7 +475,8 @@ def run_app(context, st_module=st):
                 "completed_today": len(completed_today_all),
                 "remaining_active": len(active_tasks),
             }
-            st_module.success("Day closed. Review snapshot recorded.")
+            st_module.session_state["current_page"] = "Daily Review"
+            st_module.rerun()
     with ritual_cols[2]:
         started_on = st_module.session_state.get(ritual_started_key)
         closed_on = st_module.session_state.get(ritual_closed_key)
