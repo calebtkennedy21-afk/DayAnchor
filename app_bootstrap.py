@@ -81,6 +81,7 @@ def run_app(context, st_module=st):
     render_settings_panel = context["render_settings_panel"]
     render_analytics_panel = context["render_analytics_panel"]
     render_daily_review_panel = context["render_daily_review_panel"]
+    render_morning_ritual_panel = context["render_morning_ritual_panel"]
     render_page_footer = context["render_page_footer"]
     render_hero_timeline = context.get("render_hero_timeline")
     render_clinic_overview_panel = context.get("render_clinic_overview_panel")
@@ -139,7 +140,7 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        personal_pages = ["Personal", "Schedule", "Daily Review", "Notifications"]
+        personal_pages = ["Morning Ritual", "Personal", "Schedule", "Daily Review", "Notifications"]
         clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols", "MA Lead"]
         additional_pages = ["News", "AI", "Analytics", "Settings"]
         all_pages = ["Overview"] + personal_pages + clinical_pages + additional_pages
@@ -467,7 +468,8 @@ def run_app(context, st_module=st):
                 "started_active": len(active_tasks),
                 "started_due_today": len(due_today),
             }
-            st_module.success("Day started. Priorities and queue are locked in.")
+            st_module.session_state["current_page"] = "Morning Ritual"
+            st_module.rerun()
     with ritual_cols[1]:
         if st_module.button("Close My Day", key="day_ritual_close", use_container_width=True):
             st_module.session_state[ritual_closed_key] = date.today().isoformat()
@@ -520,6 +522,9 @@ def run_app(context, st_module=st):
                     render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
                 else:
                     st_module.info("No news digest is available right now.")
+    elif current_page == "Morning Ritual":
+        render_page_banner("personal", "Morning Ritual", "Start intentionally before the day gets noisy.")
+        render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="morning_ritual_page")
     elif current_page == "Personal":
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_one_thing(personal_tasks, "personal_one_thing")

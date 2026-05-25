@@ -162,11 +162,16 @@ DEFAULT_APP_SETTINGS = {
     "or_alternating_cycle_offset": 0,
     "default_surgeon_label": "Dr. Braden Boyer (BB)",
     "nightly_reflections": {},
+    "morning_ritual_checkins": {},
 }
 
 
 MORNING_GOAL_STATUS_OPTIONS = ["Yes", "No", "Not applicable today"]
 DAY_FEEL_OPTIONS = ["Rough", "Heavy", "Steady", "Good", "Great"]
+MORNING_SLEEP_OPTIONS = ["Poor", "Fair", "Good", "Great"]
+MORNING_ENERGY_OPTIONS = ["Low", "Medium", "High"]
+MORNING_MOOD_OPTIONS = ["Drained", "Neutral", "Positive", "Focused"]
+MORNING_PLANNED_OPTIONS = ["Yes", "No"]
 
 
 def normalize_database_url(raw_url):
@@ -665,18 +670,213 @@ def normalize_nightly_reflections(raw_reflections):
     return dict(sorted(normalized.items()))
 
 
+def normalize_morning_ritual_checkins(raw_checkins):
+    if not isinstance(raw_checkins, dict):
+        return {}
+
+    normalized = {}
+    for raw_day, raw_entry in raw_checkins.items():
+        try:
+            parsed_day = date.fromisoformat(str(raw_day))
+        except ValueError:
+            continue
+        if not isinstance(raw_entry, dict):
+            continue
+
+        sleep_quality = str(raw_entry.get("sleep_quality") or "Good").strip()
+        if sleep_quality not in MORNING_SLEEP_OPTIONS:
+            sleep_quality = "Good"
+
+        energy_level = str(raw_entry.get("energy_level") or "Medium").strip()
+        if energy_level not in MORNING_ENERGY_OPTIONS:
+            energy_level = "Medium"
+
+        mood = str(raw_entry.get("mood") or "Neutral").strip()
+        if mood not in MORNING_MOOD_OPTIONS:
+            mood = "Neutral"
+
+        planned_morning_goals = str(raw_entry.get("planned_morning_goals") or "Yes").strip()
+        if planned_morning_goals not in MORNING_PLANNED_OPTIONS:
+            planned_morning_goals = "Yes"
+
+        normalized[parsed_day.isoformat()] = {
+            "sleep_quality": sleep_quality,
+            "energy_level": energy_level,
+            "mood": mood,
+            "top_intention": str(raw_entry.get("top_intention") or "").strip(),
+            "planned_morning_goals": planned_morning_goals,
+            "optional_grounding_complete": bool(raw_entry.get("optional_grounding_complete")),
+            "morning_brief_text": str(raw_entry.get("morning_brief_text") or "").strip(),
+            "saved_at": str(raw_entry.get("saved_at") or "").strip(),
+        }
+
+    return dict(sorted(normalized.items()))
+
+
+def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
+    safe_window_days = max(3, int(window_days or 7))
+    anchor_day = end_day or date.today()
+    window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
+    window.reverse()
+
+    sleep_score_map = {"Poor": 1, "Fair": 2, "Good": 3, "Great": 4}
+    energy_score_map = {"Low": 1, "Medium": 2, "High": 3}
+    mood_score_map = {"Drained": 1, "Neutral": 2, "Positive": 3, "Focused": 4}
+
+    entries = []
+    sleep_series = []
+    energy_series = []
+    mood_series = []
+    day_labels = []
+    for day_value in window:
+        day_key = day_value.isoformat()
+        day_labels.append(day_value.strftime("%a"))
+        entry = checkins.get(day_key)
+        if isinstance(entry, dict):
+            entries.append((day_value, entry))
+            sleep_series.append(sleep_score_map.get(entry.get("sleep_quality")))
+            energy_series.append(energy_score_map.get(entry.get("energy_level")))
+            mood_series.append(mood_score_map.get(entry.get("mood")))
+        else:
+            sleep_series.append(None)
+            energy_series.append(None)
+            mood_series.append(None)
+
+    checkin_count = len(entries)
+    consistency_rate = (checkin_count / float(safe_window_days)) if safe_window_days else 0.0
+
+    sleep_counts = {label: 0 for label in MORNING_SLEEP_OPTIONS}
+    energy_counts = {label: 0 for label in MORNING_ENERGY_OPTIONS}
+    mood_counts = {label: 0 for label in MORNING_MOOD_OPTIONS}
+    planned_yes_count = 0
+    grounding_complete_count = 0
+
+    sleep_scores = []
+    energy_scores = []
+    mood_scores = []
+
+    for _, entry in entries:
+        sleep_quality = entry.get("sleep_quality")
+        if sleep_quality in sleep_counts:
+            sleep_counts[sleep_quality] += 1
+            sleep_scores.append(sleep_score_map[sleep_quality])
+
+        energy_level = entry.get("energy_level")
+        if energy_level in energy_counts:
+            energy_counts[energy_level] += 1
+            energy_scores.append(energy_score_map[energy_level])
+
+        mood = entry.get("mood")
+        if mood in mood_counts:
+            mood_counts[mood] += 1
+            mood_scores.append(mood_score_map[mood])
+
+        if entry.get("planned_morning_goals") == "Yes":
+            planned_yes_count += 1
+        if entry.get("optional_grounding_complete"):
+            grounding_complete_count += 1
+
+    average_sleep = (sum(sleep_scores) / len(sleep_scores)) if sleep_scores else None
+    average_energy = (sum(energy_scores) / len(energy_scores)) if energy_scores else None
+    average_mood = (sum(mood_scores) / len(mood_scores)) if mood_scores else None
+
+    def nearest_label(value, score_map):
+        if value is None:
+            return "No data"
+        best_label = None
+        best_distance = None
+        for label, score in score_map.items():
+            distance = abs(float(value) - float(score))
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_label = label
+        return best_label or "No data"
+
+    return {
+        "window_days": safe_window_days,
+        "checkin_count": checkin_count,
+        "consistency_rate": consistency_rate,
+        "sleep_counts": sleep_counts,
+        "energy_counts": energy_counts,
+        "mood_counts": mood_counts,
+        "average_sleep_label": nearest_label(average_sleep, sleep_score_map),
+        "average_energy_label": nearest_label(average_energy, energy_score_map),
+        "average_mood_label": nearest_label(average_mood, mood_score_map),
+        "planned_yes_count": planned_yes_count,
+        "grounding_complete_count": grounding_complete_count,
+        "sleep_series": sleep_series,
+        "energy_series": energy_series,
+        "mood_series": mood_series,
+        "day_labels": day_labels,
+    }
+
+
+def render_mini_sparkline(label, values, max_value, day_labels):
+    bars = []
+    for index, value in enumerate(values):
+        day_label = day_labels[index] if index < len(day_labels) else ""
+        if value is None:
+            bars.append(
+                f"<div title='{day_label}: no check-in' style='width:10px; height:8px; border-radius:3px; border:1px dashed rgba(148,163,184,0.45); background:transparent;'></div>"
+            )
+            continue
+
+        normalized = float(value - 1) / float(max(1, max_value - 1))
+        if normalized >= 0.67:
+            color = "#22c55e"
+        elif normalized >= 0.34:
+            color = "#f59e0b"
+        else:
+            color = "#ef4444"
+        height = 8 + int(round(normalized * 14))
+        bars.append(
+            f"<div title='{day_label}: {value}/{max_value}' style='width:10px; height:{height}px; border-radius:3px; background:{color}; opacity:0.95;'></div>"
+        )
+
+    return (
+        "<div style='margin:0.25rem 0 0.5rem;'>"
+        f"<div style='font-size:0.78rem; color:rgba(226,232,240,0.9); margin-bottom:0.2rem;'>{label}</div>"
+        "<div style='display:flex; align-items:flex-end; gap:4px;'>"
+        + "".join(bars)
+        + "</div></div>"
+    )
+
+
 def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
     safe_window_days = max(3, int(window_days or 7))
     anchor_day = end_day or date.today()
     window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
     window.reverse()
 
+    feel_score_map = {
+        "Rough": 1,
+        "Heavy": 2,
+        "Steady": 3,
+        "Good": 4,
+        "Great": 5,
+    }
+
     entries = []
+    day_labels = []
+    feel_series = []
+    morning_series = []
     for day_value in window:
         day_key = day_value.isoformat()
+        day_labels.append(day_value.strftime("%a"))
         entry = reflections.get(day_key)
         if isinstance(entry, dict):
             entries.append((day_value, entry))
+            feel_series.append(feel_score_map.get(entry.get("day_feel")))
+            morning_status = entry.get("morning_goal_status")
+            if morning_status == "Yes":
+                morning_series.append(2)
+            elif morning_status == "No":
+                morning_series.append(1)
+            else:
+                morning_series.append(None)
+        else:
+            feel_series.append(None)
+            morning_series.append(None)
 
     checkin_count = len(entries)
     consistency_rate = (checkin_count / float(safe_window_days)) if safe_window_days else 0.0
@@ -704,13 +904,6 @@ def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
         if str(entry.get("area_of_improvement") or "").strip():
             improvements_logged += 1
 
-    feel_score_map = {
-        "Rough": 1,
-        "Heavy": 2,
-        "Steady": 3,
-        "Good": 4,
-        "Great": 5,
-    }
     scored_entries = [feel_score_map[entry.get("day_feel")] for _, entry in entries if entry.get("day_feel") in feel_score_map]
     average_feel_score = (sum(scored_entries) / len(scored_entries)) if scored_entries else None
 
@@ -743,6 +936,9 @@ def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
         "average_feel_score": average_feel_score,
         "wins_logged": wins_logged,
         "improvements_logged": improvements_logged,
+        "feel_series": feel_series,
+        "morning_series": morning_series,
+        "day_labels": day_labels,
     }
 
 
@@ -4602,6 +4798,15 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
             trend_cols[3].metric("Morning goal hit rate", f"{int(round(weekly_trends['morning_completion_rate'] * 100))}%")
 
         st.markdown(
+            render_mini_sparkline("Nightly feel sparkline", weekly_trends["feel_series"], 5, weekly_trends["day_labels"]),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_mini_sparkline("Morning goal sparkline", weekly_trends["morning_series"], 2, weekly_trends["day_labels"]),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
             "<div class='ai-list'>"
             f"<li>Wins logged: {weekly_trends['wins_logged']} of {weekly_trends['checkin_count']} check-ins.</li>"
             f"<li>Improvement areas logged: {weekly_trends['improvements_logged']} of {weekly_trends['checkin_count']} check-ins.</li>"
@@ -4635,6 +4840,187 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
             st.caption(f"Clinic completions today: {', '.join(task['title'] for task in clinic_completed[:4])}")
         if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
             st.markdown('<div class="empty-state">Run the debrief after a clinic or non-clinic day to capture the transition to tomorrow.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="morning_ritual"):
+    today = date.today()
+    today_key = today.isoformat()
+
+    morning_checkins = normalize_morning_ritual_checkins((app_settings or {}).get("morning_ritual_checkins"))
+    today_checkin = morning_checkins.get(today_key, {})
+    nightly_reflections = normalize_nightly_reflections((app_settings or {}).get("nightly_reflections"))
+    recent_nightly = sorted(nightly_reflections.items(), reverse=True)
+    latest_nightly_improvement = ""
+    for _, entry in recent_nightly:
+        improvement = str(entry.get("area_of_improvement") or "").strip()
+        if improvement:
+            latest_nightly_improvement = improvement
+            break
+
+    sleep_key = f"{panel_key}_{today_key}_sleep_quality"
+    energy_key = f"{panel_key}_{today_key}_energy_level"
+    mood_key = f"{panel_key}_{today_key}_mood"
+    intention_key = f"{panel_key}_{today_key}_top_intention"
+    planned_key = f"{panel_key}_{today_key}_planned_morning_goals"
+    grounding_key = f"{panel_key}_{today_key}_optional_grounding"
+    brief_key = f"{panel_key}_{today_key}_brief"
+    brief_error_key = f"{panel_key}_{today_key}_brief_error"
+
+    if sleep_key not in st.session_state:
+        st.session_state[sleep_key] = today_checkin.get("sleep_quality") or "Good"
+    if energy_key not in st.session_state:
+        st.session_state[energy_key] = today_checkin.get("energy_level") or "Medium"
+    if mood_key not in st.session_state:
+        st.session_state[mood_key] = today_checkin.get("mood") or "Neutral"
+    if intention_key not in st.session_state:
+        st.session_state[intention_key] = today_checkin.get("top_intention") or ""
+    if planned_key not in st.session_state:
+        st.session_state[planned_key] = today_checkin.get("planned_morning_goals") or "Yes"
+    if grounding_key not in st.session_state:
+        st.session_state[grounding_key] = bool(today_checkin.get("optional_grounding_complete"))
+    if brief_key not in st.session_state and today_checkin.get("morning_brief_text"):
+        st.session_state[brief_key] = today_checkin.get("morning_brief_text")
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Morning Ritual</h3><span>Set your daily intention and lock in the first move</span></div>', unsafe_allow_html=True)
+
+    metric_cols = st.columns(4)
+    due_today = [task for task in active_tasks if task.get("due_date") == today]
+    high_unscheduled = [
+        task
+        for task in active_tasks
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
+    ]
+    metric_cols[0].metric("Active tasks", len(active_tasks))
+    metric_cols[1].metric("Due today", len(due_today))
+    metric_cols[2].metric("High unscheduled", len(high_unscheduled))
+    metric_cols[3].metric("Captured today", len([task for task in tasks if task.get("created_date") == today]))
+
+    left_col, right_col = st.columns([1.05, 0.95], gap="large")
+    with left_col:
+        st.select_slider("Sleep quality", options=MORNING_SLEEP_OPTIONS, key=sleep_key)
+        st.select_slider("Energy level", options=MORNING_ENERGY_OPTIONS, key=energy_key)
+        st.select_slider("Mood", options=MORNING_MOOD_OPTIONS, key=mood_key)
+        st.text_area(
+            "Top intention for today",
+            placeholder="What matters most today?",
+            key=intention_key,
+            height=85,
+        )
+        st.radio(
+            "Morning personal goals planned?",
+            MORNING_PLANNED_OPTIONS,
+            key=planned_key,
+            horizontal=True,
+        )
+        st.checkbox(
+            "Optional reading/grounding complete",
+            key=grounding_key,
+            help="A short grounding or reading block before deep work.",
+        )
+
+        if st.button("Generate AI Morning Brief", key=f"{panel_key}_generate_morning_brief", type="primary"):
+            brief_text, brief_error = generate_ai_morning_ritual_brief(
+                active_tasks,
+                latest_nightly_improvement,
+                st.session_state[sleep_key],
+                st.session_state[energy_key],
+                st.session_state[mood_key],
+                st.session_state[intention_key],
+                st.session_state[planned_key],
+                st.session_state[grounding_key],
+            )
+            st.session_state[brief_key] = brief_text
+            st.session_state[brief_error_key] = brief_error
+
+        if st.session_state.get(brief_error_key):
+            st.warning(st.session_state[brief_error_key])
+        if st.session_state.get(brief_key):
+            st.markdown(st.session_state[brief_key])
+
+        if st.button("Save morning ritual", key=f"{panel_key}_save", type="secondary"):
+            updated = dict(morning_checkins)
+            updated[today_key] = {
+                "sleep_quality": st.session_state[sleep_key],
+                "energy_level": st.session_state[energy_key],
+                "mood": st.session_state[mood_key],
+                "top_intention": st.session_state[intention_key].strip(),
+                "planned_morning_goals": st.session_state[planned_key],
+                "optional_grounding_complete": bool(st.session_state[grounding_key]),
+                "morning_brief_text": str(st.session_state.get(brief_key) or "").strip(),
+                "saved_at": datetime.utcnow().isoformat(timespec="seconds"),
+            }
+            save_app_settings({
+                **(app_settings or {}),
+                "morning_ritual_checkins": updated,
+            })
+            st.success("Morning ritual saved.")
+            st.rerun()
+
+    with right_col:
+        st.markdown('<div class="panel-title"><h3>Morning Focus</h3><span>Bridge last night into today</span></div>', unsafe_allow_html=True)
+        if latest_nightly_improvement:
+            st.info(f"Carry-over from last night: {latest_nightly_improvement}")
+        else:
+            st.caption("No nightly improvement note found yet. Use Daily Review tonight to create one.")
+
+        morning_trends = weekly_morning_ritual_trends(morning_checkins, end_day=today, window_days=7)
+        st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Morning Trend Summary</h3><span>Pattern over the last 7 days</span></div>', unsafe_allow_html=True)
+        trend_cols = st.columns(4)
+        trend_cols[0].metric("Check-ins", f"{morning_trends['checkin_count']}/7")
+        trend_cols[1].metric("Consistency", f"{int(round(morning_trends['consistency_rate'] * 100))}%")
+        trend_cols[2].metric("Avg sleep", morning_trends["average_sleep_label"])
+        trend_cols[3].metric("Avg energy", morning_trends["average_energy_label"])
+        st.markdown(
+            render_mini_sparkline("Sleep 7-day sparkline", morning_trends["sleep_series"], 4, morning_trends["day_labels"]),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_mini_sparkline("Energy 7-day sparkline", morning_trends["energy_series"], 3, morning_trends["day_labels"]),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_mini_sparkline("Mood 7-day sparkline", morning_trends["mood_series"], 4, morning_trends["day_labels"]),
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Mood trend: "
+            f"{morning_trends['average_mood_label']} · "
+            f"Planned goals: {morning_trends['planned_yes_count']}/{morning_trends['checkin_count']} · "
+            f"Grounding complete: {morning_trends['grounding_complete_count']}/{morning_trends['checkin_count']}"
+        )
+        st.markdown(
+            "<div class='ai-list'>"
+            f"<li>Sleep spread: Poor {morning_trends['sleep_counts']['Poor']} · Fair {morning_trends['sleep_counts']['Fair']} · Good {morning_trends['sleep_counts']['Good']} · Great {morning_trends['sleep_counts']['Great']}.</li>"
+            f"<li>Energy spread: Low {morning_trends['energy_counts']['Low']} · Medium {morning_trends['energy_counts']['Medium']} · High {morning_trends['energy_counts']['High']}.</li>"
+            f"<li>Mood spread: Drained {morning_trends['mood_counts']['Drained']} · Neutral {morning_trends['mood_counts']['Neutral']} · Positive {morning_trends['mood_counts']['Positive']} · Focused {morning_trends['mood_counts']['Focused']}.</li>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        top_urgent = sorted(
+            active_tasks,
+            key=lambda task: task_attention_sort_key(task, today),
+        )[:1]
+        if top_urgent:
+            task = top_urgent[0]
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Start Here</h3><span>Highest urgency task first</span></div>', unsafe_allow_html=True)
+            st.markdown(
+                f"- **{task.get('title')}** · {task.get('priority', 'medium').title()} priority · due {format_due(task)}"
+            )
+        else:
+            st.markdown('<div class="empty-state">No active tasks available. Add one from Quick Command Bar.</div>', unsafe_allow_html=True)
+
+        recent_checkins = sorted(morning_checkins.items(), reverse=True)[:5]
+        if recent_checkins:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Recent Morning Check-ins</h3><span>Last few starts</span></div>', unsafe_allow_html=True)
+            for day_text, entry in recent_checkins:
+                st.markdown(
+                    f"- **{day_text}** · Sleep {entry.get('sleep_quality', 'Good')} · Energy {entry.get('energy_level', 'Medium')} · Mood {entry.get('mood', 'Neutral')}"
+                )
+                if entry.get("top_intention"):
+                    st.caption(f"Intention: {entry.get('top_intention')}")
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -8679,6 +9065,7 @@ generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
 render_task_calendar_panel = partial(
@@ -8770,6 +9157,7 @@ app_bootstrap.run_app(
         "render_settings_panel": render_settings_panel,
         "render_analytics_panel": render_analytics_panel,
         "render_daily_review_panel": render_daily_review_panel,
+        "render_morning_ritual_panel": render_morning_ritual_panel,
         "render_page_footer": render_page_footer,
         "render_msk_anatomy_panel": render_msk_anatomy_panel,
         "render_personal_quick_capture": render_personal_quick_capture,

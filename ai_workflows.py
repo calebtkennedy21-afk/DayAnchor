@@ -516,3 +516,86 @@ def generate_weekly_nightly_insight(
         return text.strip(), ""
     except Exception as exc:
         return "", f"AI weekly insight failed: {exc}"
+
+
+def generate_ai_morning_ritual_brief(
+    active_tasks,
+    latest_nightly_improvement,
+    sleep_quality,
+    energy_level,
+    mood,
+    top_intention,
+    morning_goals_planned,
+    grounding_selected,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    top_urgent = _fallback_top_urgent_task(active_tasks or [])
+    if top_urgent:
+        top_urgent_line = (
+            f"{top_urgent.get('title')} "
+            f"(priority={top_urgent.get('priority')}, due={top_urgent.get('due_date') or 'none'})"
+        )
+    else:
+        top_urgent_line = "No urgent active task detected."
+
+    improvement_note = (latest_nightly_improvement or "").strip()
+    if not improvement_note:
+        improvement_note = "No improvement note was logged last night."
+
+    if not ai_enabled_fn():
+        grounding_line = (
+            "Complete your optional reading/grounding step before starting deep work."
+            if not grounding_selected
+            else "Optional reading/grounding is already complete."
+        )
+        fallback = (
+            "## Morning Priority\n"
+            f"Start first with: {top_urgent_line}\n\n"
+            "## Behavior Adjustment From Last Night\n"
+            f"Carry this forward today: {improvement_note}\n\n"
+            "## Grounding Cue\n"
+            f"{grounding_line}"
+        )
+        return fallback, ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise morning operations coach. Keep output practical and short."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Morning inputs: sleep={sleep_quality}, energy={energy_level}, mood={mood}, "
+                        f"morning_goals_planned={morning_goals_planned}, grounding_selected={grounding_selected}\n"
+                        f"Top intention: {top_intention or 'none'}\n"
+                        f"Highest urgency task candidate: {top_urgent_line}\n"
+                        f"Last night improvement note: {improvement_note}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "## Morning Priority\n"
+                        "## Behavior Adjustment From Last Night\n"
+                        "## Grounding Cue\n"
+                        "Requirements:\n"
+                        "- In Morning Priority, explicitly name the one highest-urgency task to do first.\n"
+                        "- In Behavior Adjustment, convert last night's improvement note into one concrete action for today.\n"
+                        "- Keep all sections combined to 4-8 short lines."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty morning brief response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI morning brief failed: {exc}"
