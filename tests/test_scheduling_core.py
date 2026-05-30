@@ -5,6 +5,8 @@ from scheduling_core import (
     clinic_visit_templates,
     personal_schedule_templates,
     priority_rank,
+    parse_on_call_schedule_document,
+    providers_for_schedule_date,
     safe_int,
     scheduled_date_range,
     scheduled_minutes_on_day,
@@ -138,3 +140,21 @@ def test_personal_schedule_templates_contains_vacation_defaults():
     assert "vacation" in templates
     assert templates["vacation"]["all_day"] is True
     assert templates["vacation"]["scheduled_end_offset_days"] == 4
+
+
+def test_parse_on_call_schedule_document_reads_csv_rows():
+    schedule_bytes = b"Date,On Call\n05/01/2026,Dr. Adams\n05/02/2026,Dr. Baker\n"
+
+    schedule = parse_on_call_schedule_document("may_on_call.csv", schedule_bytes)
+
+    assert schedule["entry_count"] == 2
+    assert providers_for_schedule_date(schedule, date(2026, 5, 2)) == "Dr. Baker"
+
+
+def test_parse_on_call_schedule_document_reads_freeform_lines():
+    schedule_bytes = b"May 3, 2026 - Dr. Chen\nMay 4, 2026 - Dr. Diaz\n"
+
+    schedule = parse_on_call_schedule_document("may_on_call.txt", schedule_bytes)
+
+    assert schedule["entry_count"] == 2
+    assert providers_for_schedule_date(schedule, date(2026, 5, 4)) == "Dr. Diaz"

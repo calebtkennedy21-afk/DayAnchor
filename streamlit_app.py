@@ -53,7 +53,9 @@ from scheduling_core import (
     clinic_visit_templates,
     personal_schedule_templates,
     priority_rank,
+    parse_on_call_schedule_document,
     safe_int,
+    providers_for_schedule_date,
     scheduled_date_range,
     scheduled_minutes_on_day,
     scheduled_span_position,
@@ -5180,6 +5182,38 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     autoclave_items = load_autoclave_maintenance_items() or []
     lead_documents = load_lead_documents() or []
 
+    def _load_on_call_schedule_document(document_items):
+        schedule_keywords = ("on call", "on-call", "schedule", "roster")
+        candidate_documents = []
+        for document in document_items:
+            searchable_text = " ".join(
+                [
+                    str(document.get("section_key") or ""),
+                    str(document.get("title") or ""),
+                    str(document.get("file_name") or ""),
+                    str(document.get("notes") or ""),
+                ]
+            ).lower()
+            if document.get("section_key") == "Daily Huddle" or any(keyword in searchable_text for keyword in schedule_keywords):
+                candidate_documents.append(document)
+
+        candidate_documents.sort(
+            key=lambda item: (
+                item.get("created_date") or date.min,
+                item.get("id") or 0,
+            ),
+            reverse=True,
+        )
+
+        for document in candidate_documents:
+            file_bytes = document.get("file_bytes")
+            if isinstance(file_bytes, memoryview):
+                file_bytes = bytes(file_bytes)
+            schedule_document = parse_on_call_schedule_document(document.get("file_name") or document.get("title") or "on-call schedule", file_bytes)
+            if schedule_document.get("entry_count"):
+                return document, schedule_document
+        return None, None
+
     unresolved_statuses = {"new", "in_review", "escalated"}
     open_issues = [item for item in lead_issues if item.get("status") in unresolved_statuses]
     escalated_issues = [item for item in open_issues if item.get("status") == "escalated"]
@@ -5596,6 +5630,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             key=f"{panel_key}_attendees",
         )
 
+        on_call_schedule_document, on_call_schedule = _load_on_call_schedule_document(lead_documents)
+
         st.markdown("**Daily metrics table**")
         table_cols = st.columns([1.1, 1.1, 0.8, 1.0, 1.1, 1.0, 1.2])
         with table_cols[0]:
@@ -5617,10 +5653,37 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 key=f"{panel_key}_waitlist_recall_status",
             )
 
+        providers_on_call_key = f"{panel_key}_providers_on_call"
+        providers_on_call_seed_key = f"{panel_key}_providers_on_call_seed"
+        auto_filled_providers_on_call = ""
+        on_call_schedule_source_label = ""
+        if on_call_schedule:
+            auto_filled_providers_on_call = providers_for_schedule_date(on_call_schedule, huddle_date)
+            on_call_schedule_source_label = on_call_schedule_document.get("title") or on_call_schedule_document.get("file_name") or "on-call schedule"
+            current_providers_value = str(st.session_state.get(providers_on_call_key) or "")
+            previous_seed_value = st.session_state.get(providers_on_call_seed_key)
+            if auto_filled_providers_on_call and (not current_providers_value or current_providers_value == previous_seed_value):
+                st.session_state[providers_on_call_key] = auto_filled_providers_on_call
+                st.session_state[providers_on_call_seed_key] = auto_filled_providers_on_call
+
+        if on_call_schedule and on_call_schedule_source_label:
+            schedule_caption_cols = st.columns([4, 1])
+            with schedule_caption_cols[0]:
+                if auto_filled_providers_on_call:
+                    st.caption(f"Auto-filled from {on_call_schedule_source_label} for {huddle_date.strftime('%m/%d/%y')}.")
+                else:
+                    st.caption(f"Loaded {on_call_schedule_source_label}, but no entry matched {huddle_date.strftime('%m/%d/%y')} yet.")
+            with schedule_caption_cols[1]:
+                if st.button("Use schedule", key=f"{panel_key}_use_on_call_schedule"):
+                    if auto_filled_providers_on_call:
+                        st.session_state[providers_on_call_key] = auto_filled_providers_on_call
+                        st.session_state[providers_on_call_seed_key] = auto_filled_providers_on_call
+                        st.rerun()
+
         providers_on_call = st.text_area(
             "Providers on Call",
             placeholder="List providers on call for this day.",
-            key=f"{panel_key}_providers_on_call",
+            key=providers_on_call_key,
             height=80,
         )
         st.markdown("**Barriers/Gaps Identified**")
@@ -6190,6 +6253,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     key=f"{panel_key}_documents_uploader",
                     help="Upload documents, images, PDFs, spreadsheets, or other support files.",
                 )
+                st.caption("For monthly on-call schedules, use a file with a Date column and a Provider/On Call column.")
             submit_docs = st.form_submit_button("Upload files", type="primary")
 
         if submit_docs:
