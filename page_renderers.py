@@ -107,7 +107,17 @@ def _parse_date_overrides_text(text):
     return dict(sorted(overrides.items())), None
 
 
-def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_text, render_task_card_fn, st_module=st, max_items=None):
+def render_task_list_panel(
+    title,
+    subtitle,
+    tasks_to_render,
+    key_prefix,
+    empty_text,
+    render_task_card_fn,
+    st_module=st,
+    max_items=None,
+    show_remaining_dropdown=False,
+):
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
     if tasks_to_render:
@@ -118,6 +128,11 @@ def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_t
             render_task_card_fn(task, key_prefix=key_prefix)
         if len(visible_tasks) < len(tasks_to_render):
             st_module.caption(f"Showing {len(visible_tasks)} of {len(tasks_to_render)} tasks.")
+            if show_remaining_dropdown:
+                remaining_tasks = tasks_to_render[len(visible_tasks) :]
+                with st_module.expander(f"Show remaining {len(remaining_tasks)} tasks"):
+                    for task in remaining_tasks:
+                        render_task_card_fn(task, key_prefix=f"{key_prefix}_remaining")
     else:
         st_module.markdown(f'<div class="empty-state">{empty_text}</div>', unsafe_allow_html=True)
     st_module.markdown('</div>', unsafe_allow_html=True)

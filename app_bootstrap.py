@@ -649,7 +649,15 @@ def run_app(context, st_module=st):
         render_page_banner("personal", "Personal Focus", "Keep your own work clear, bounded, and visible.")
         render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.", max_items=list_preview_limit)
+        render_task_list_panel(
+            "Personal Tasks",
+            "Work that belongs outside clinic",
+            personal_tasks,
+            "personal_task",
+            "No personal tasks match the current filters.",
+            max_items=5,
+            show_remaining_dropdown=True,
+        )
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_saved_notes_panel(
             "Personal Notes",
@@ -682,7 +690,8 @@ def run_app(context, st_module=st):
             clinic_tasks_all,
             "clinic_task",
             "No clinic tasks match the current filters.",
-            max_items=list_preview_limit,
+            max_items=5,
+            show_remaining_dropdown=True,
         )
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_saved_notes_panel(
