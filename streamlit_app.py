@@ -118,6 +118,8 @@ if "lead_sop_entries" not in st.session_state:
     st.session_state.lead_sop_entries = []
 if "lead_relationship_touchpoints" not in st.session_state:
     st.session_state.lead_relationship_touchpoints = []
+if "lead_ma_assignments" not in st.session_state:
+    st.session_state.lead_ma_assignments = []
 if "lead_huddle_logs" not in st.session_state:
     st.session_state.lead_huddle_logs = []
 if "lead_skill_signoffs" not in st.session_state:
@@ -1227,6 +1229,21 @@ def initialize_database():
                             recent_win TEXT NOT NULL DEFAULT '',
                             notes TEXT NOT NULL DEFAULT '',
                             created_date DATE NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS lead_ma_assignments (
+                            id BIGSERIAL PRIMARY KEY,
+                            ma_name TEXT NOT NULL,
+                            provider_name TEXT NOT NULL DEFAULT '',
+                            stocking_rooms TEXT NOT NULL DEFAULT '',
+                            additional_tasks TEXT NOT NULL DEFAULT '',
+                            clinic_days TEXT NOT NULL DEFAULT '',
+                            status TEXT NOT NULL DEFAULT 'active',
+                            created_date DATE NOT NULL,
+                            updated_date DATE NOT NULL
                         )
                         """
                     )
@@ -5156,6 +5173,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     lead_issues = load_lead_clinical_issues() or []
     sop_entries = load_lead_sop_entries() or []
     relationship_touchpoints = load_lead_relationship_touchpoints() or []
+    ma_assignments = load_lead_ma_assignments() or []
     huddle_logs = load_lead_huddle_logs() or []
     skill_signoffs = load_lead_skill_signoffs() or []
     education_requests = load_lead_education_requests() or []
@@ -5192,15 +5210,17 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     pending_signoffs = len([item for item in skill_signoffs if item.get("status") in ("pending", "in_progress")])
     open_education_requests = len([item for item in education_requests if item.get("status") in ("new", "preparing", "delivered")])
     autoclave_due_count = len([item for item in autoclave_items if item.get("status") in ("due_soon", "overdue")])
+    active_ma_assignments = len([item for item in ma_assignments if item.get("status") == "active"])
     st.caption(
-        f"Preceptor sign-offs pending: {pending_signoffs} · Education requests open: {open_education_requests} · Autoclave checks due: {autoclave_due_count}"
+        f"Preceptor sign-offs pending: {pending_signoffs} · Education requests open: {open_education_requests} · Autoclave checks due: {autoclave_due_count} · Active MA assignments: {active_ma_assignments}"
     )
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    command_tab, triage_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
+    command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
         [
             "Command Center",
             "Clinical Triage Queue",
+            "MA Assignments",
             "Daily Huddle",
             "SOP Playbook",
             "Relationship Tracker",
@@ -5401,6 +5421,143 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         st.rerun()
         else:
             st.markdown('<div class="empty-state">No open triage issues.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with ma_assignments_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>MA Assignment Tracker</h3><span>Track MA provider pairings, room stocking ownership, additional tasks, and clinic days</span></div>', unsafe_allow_html=True)
+
+        weekday_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        with st.form(f"{panel_key}_ma_assignment_form", clear_on_submit=True):
+            assignment_cols = st.columns(3)
+            with assignment_cols[0]:
+                ma_name = st.text_input("MA name")
+                provider_name = st.text_input("Provider")
+            with assignment_cols[1]:
+                stocking_rooms = st.text_input("Rooms assigned for stocking", placeholder="Room 1, Room 3, Cast room")
+                assignment_status = st.selectbox("Status", ["active", "backup", "inactive"], index=0)
+            with assignment_cols[2]:
+                clinic_days = st.multiselect("Clinic days", weekday_options, default=["Monday", "Thursday"])
+            additional_tasks = st.text_area(
+                "Additional tasks",
+                placeholder="Phone coverage, supply audit, callback list, pre-chart prep...",
+                height=90,
+            )
+            submit_assignment = st.form_submit_button("Add MA assignment", type="primary")
+
+        if submit_assignment:
+            if not ma_name.strip():
+                st.warning("MA name is required.")
+            else:
+                add_lead_ma_assignment(
+                    ma_name=ma_name,
+                    provider_name=provider_name,
+                    stocking_rooms=stocking_rooms,
+                    additional_tasks=additional_tasks,
+                    clinic_days=", ".join(clinic_days),
+                    status=assignment_status,
+                )
+                st.success("MA assignment saved.")
+                st.rerun()
+
+        st.markdown("#### Weekly coverage summary")
+        active_assignments = [item for item in ma_assignments if item.get("status") in ("active", "backup")]
+        if active_assignments:
+            weekday_columns = st.columns(len(weekday_options))
+            for idx, weekday in enumerate(weekday_options):
+                day_matches = []
+                for item in active_assignments:
+                    assigned_days = [
+                        day.strip()
+                        for day in str(item.get("clinic_days") or "").split(",")
+                        if day.strip()
+                    ]
+                    if weekday in assigned_days:
+                        day_matches.append(item)
+
+                active_count = len([item for item in day_matches if item.get("status") == "active"])
+                backup_count = len([item for item in day_matches if item.get("status") == "backup"])
+
+                with weekday_columns[idx]:
+                    st.markdown(f"**{weekday}**")
+                    st.caption(f"Active: {active_count} · Backup: {backup_count}")
+                    if day_matches:
+                        for item in day_matches:
+                            ma_label = item.get("ma_name") or "Unnamed MA"
+                            provider_label = item.get("provider_name") or "No provider"
+                            status_label = item.get("status") or "active"
+                            st.markdown(f"- {ma_label} ({provider_label}) [{status_label}]")
+                    else:
+                        st.caption("No assignment")
+        else:
+            st.caption("No active or backup assignments available for weekly coverage yet.")
+
+        st.markdown("#### Current assignments")
+        ordered_assignments = sorted(
+            ma_assignments,
+            key=lambda item: (
+                0 if item.get("status") == "active" else 1 if item.get("status") == "backup" else 2,
+                str(item.get("ma_name") or "").lower(),
+            ),
+        )
+        if ordered_assignments:
+            for item in ordered_assignments:
+                assignment_id = item.get("id")
+                ma_label = item.get("ma_name") or "Unnamed MA"
+                provider_label = item.get("provider_name") or "No provider assigned"
+                status_label = item.get("status") or "active"
+                with st.expander(f"{ma_label} · {provider_label} · {status_label}", expanded=False):
+                    st.markdown(f"**Rooms assigned for stocking:** {item.get('stocking_rooms') or 'Not set'}")
+                    st.markdown(f"**Clinic days:** {item.get('clinic_days') or 'Not set'}")
+                    st.markdown(f"**Additional tasks:** {item.get('additional_tasks') or 'None listed'}")
+
+                    edit_cols = st.columns(3)
+                    with edit_cols[0]:
+                        edit_provider = st.text_input("Provider", value=item.get("provider_name") or "", key=f"{panel_key}_ma_provider_{assignment_id}")
+                        edit_rooms = st.text_input(
+                            "Rooms assigned",
+                            value=item.get("stocking_rooms") or "",
+                            key=f"{panel_key}_ma_rooms_{assignment_id}",
+                        )
+                    with edit_cols[1]:
+                        current_days = [
+                            day.strip()
+                            for day in str(item.get("clinic_days") or "").split(",")
+                            if day.strip() in weekday_options
+                        ]
+                        edit_days = st.multiselect(
+                            "Clinic days",
+                            weekday_options,
+                            default=current_days,
+                            key=f"{panel_key}_ma_days_{assignment_id}",
+                        )
+                        edit_status = st.selectbox(
+                            "Status",
+                            ["active", "backup", "inactive"],
+                            index=["active", "backup", "inactive"].index(status_label) if status_label in ["active", "backup", "inactive"] else 0,
+                            key=f"{panel_key}_ma_status_{assignment_id}",
+                        )
+                    with edit_cols[2]:
+                        edit_tasks = st.text_area(
+                            "Additional tasks",
+                            value=item.get("additional_tasks") or "",
+                            key=f"{panel_key}_ma_tasks_{assignment_id}",
+                            height=100,
+                        )
+                        if st.button("Save assignment", key=f"{panel_key}_ma_save_{assignment_id}", type="secondary"):
+                            update_lead_ma_assignment(
+                                assignment_id,
+                                provider_name=edit_provider,
+                                stocking_rooms=edit_rooms,
+                                clinic_days=", ".join(edit_days),
+                                additional_tasks=edit_tasks,
+                                status=edit_status,
+                            )
+                            st.success("Assignment updated.")
+                            st.rerun()
+        else:
+            st.caption("No MA assignments tracked yet.")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     with huddle_tab:
@@ -9184,6 +9341,9 @@ add_lead_sop_entry = partial(data_access.add_lead_sop_entry, db_enabled_fn=db_en
 load_lead_relationship_touchpoints = partial(data_access.load_lead_relationship_touchpoints, db_enabled, get_connection, st_module=st)
 add_lead_relationship_touchpoint = partial(data_access.add_lead_relationship_touchpoint, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 update_lead_relationship_touchpoint = partial(data_access.update_lead_relationship_touchpoint, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+load_lead_ma_assignments = partial(data_access.load_lead_ma_assignments, db_enabled, get_connection, st_module=st)
+add_lead_ma_assignment = partial(data_access.add_lead_ma_assignment, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
+update_lead_ma_assignment = partial(data_access.update_lead_ma_assignment, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 load_lead_huddle_logs = partial(data_access.load_lead_huddle_logs, db_enabled, get_connection, st_module=st)
 add_lead_huddle_log = partial(data_access.add_lead_huddle_log, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st)
 load_lead_skill_signoffs = partial(data_access.load_lead_skill_signoffs, db_enabled, get_connection, st_module=st)

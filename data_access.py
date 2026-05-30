@@ -822,6 +822,137 @@ def update_lead_relationship_touchpoint(touchpoint_id, db_enabled_fn=None, get_c
             return
 
 
+def load_lead_ma_assignments(db_enabled_fn, get_connection_fn, st_module=st):
+    if not db_enabled_fn():
+        return list(st_module.session_state.get("lead_ma_assignments", []))
+    try:
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        ma_name,
+                        provider_name,
+                        stocking_rooms,
+                        additional_tasks,
+                        clinic_days,
+                        status,
+                        created_date,
+                        updated_date
+                    FROM lead_ma_assignments
+                    ORDER BY ma_name ASC, updated_date DESC, id DESC
+                    """
+                )
+                return cur.fetchall()
+    except psycopg.Error:
+        return list(st_module.session_state.get("lead_ma_assignments", []))
+
+
+def add_lead_ma_assignment(
+    ma_name,
+    provider_name,
+    stocking_rooms,
+    additional_tasks,
+    clinic_days,
+    status="active",
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    ma_name_value = str(ma_name or "").strip()
+    if not ma_name_value:
+        return None
+
+    provider_value = str(provider_name or "").strip()
+    rooms_value = str(stocking_rooms or "").strip()
+    tasks_value = str(additional_tasks or "").strip()
+    days_value = str(clinic_days or "").strip()
+    status_value = str(status or "active").strip() or "active"
+
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lead_ma_assignments (
+                        ma_name,
+                        provider_name,
+                        stocking_rooms,
+                        additional_tasks,
+                        clinic_days,
+                        status,
+                        created_date,
+                        updated_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        ma_name_value,
+                        provider_value,
+                        rooms_value,
+                        tasks_value,
+                        days_value,
+                        status_value,
+                        mountain_today(),
+                        mountain_today(),
+                    ),
+                )
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
+
+    assignments = st_module.session_state.setdefault("lead_ma_assignments", [])
+    next_id = max([item.get("id", 0) for item in assignments], default=0) + 1
+    assignments.append(
+        {
+            "id": next_id,
+            "ma_name": ma_name_value,
+            "provider_name": provider_value,
+            "stocking_rooms": rooms_value,
+            "additional_tasks": tasks_value,
+            "clinic_days": days_value,
+            "status": status_value,
+            "created_date": mountain_today(),
+            "updated_date": mountain_today(),
+        }
+    )
+    return next_id
+
+
+def update_lead_ma_assignment(assignment_id, db_enabled_fn=None, get_connection_fn=None, st_module=st, **fields):
+    allowed_fields = {
+        "ma_name",
+        "provider_name",
+        "stocking_rooms",
+        "additional_tasks",
+        "clinic_days",
+        "status",
+    }
+    sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not sanitized:
+        return
+
+    sanitized["updated_date"] = mountain_today()
+
+    if db_enabled_fn and db_enabled_fn():
+        set_parts = []
+        values = []
+        for key, value in sanitized.items():
+            set_parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(assignment_id)
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE lead_ma_assignments SET {', '.join(set_parts)} WHERE id = %s", tuple(values))
+        return
+
+    assignments = st_module.session_state.setdefault("lead_ma_assignments", [])
+    for item in assignments:
+        if item.get("id") == assignment_id:
+            item.update(sanitized)
+            return
+
+
 def load_lead_huddle_logs(db_enabled_fn, get_connection_fn, st_module=st):
     if not db_enabled_fn():
         return list(st_module.session_state.get("lead_huddle_logs", []))
