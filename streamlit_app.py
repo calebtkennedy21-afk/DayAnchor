@@ -5415,33 +5415,103 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= mountain_today()
         ]
 
-        generated_agenda = (
-            f"- Clinic overdue tasks: {len(clinical_overdue)}\n"
-            f"- Open triage issues due today: {len(today_open)}\n"
-            f"- Escalations for leadership: {len(top_escalations)}\n"
-            f"- PSR handoffs waiting: {len(waiting_psr)}\n"
-            f"- Relationship follow-ups due: {len(relationship_followups)}"
+        huddle_date = st.date_input("Huddle date", value=mountain_today(), key=f"{panel_key}_huddle_date")
+        st.caption("Daily huddle template")
+        attendees = st.text_input(
+            "Attendees",
+            placeholder="Kayleigh, Savannah, Zach, Carla, Kara, Manny, Liz, Tania, Maylon, Jenna",
+            key=f"{panel_key}_attendees",
         )
 
-        huddle_date = st.date_input("Huddle date", value=mountain_today(), key=f"{panel_key}_huddle_date")
-        priority_focus = st.text_area(
-            "Priority focus",
-            value=generated_agenda,
-            key=f"{panel_key}_priority_focus",
-            height=120,
+        st.markdown("**Daily metrics table**")
+        table_cols = st.columns([1.1, 1.1, 0.8, 1.0, 1.1, 1.0, 1.2])
+        with table_cols[0]:
+            provider_label = st.text_input("Provider", value="Clinic-", key=f"{panel_key}_provider_label")
+        with table_cols[1]:
+            schedule_utilization = st.text_input("Schedule Utilization", value="", key=f"{panel_key}_schedule_utilization")
+        with table_cols[2]:
+            pts_count = st.number_input("# of pts", min_value=0, step=1, key=f"{panel_key}_pts_count")
+        with table_cols[3]:
+            open_spots = st.number_input("# of open spots", min_value=0, step=1, key=f"{panel_key}_open_spots")
+        with table_cols[4]:
+            referral_wq_status = st.text_input("Referral WQ Status", value="", key=f"{panel_key}_referral_wq_status")
+        with table_cols[5]:
+            oldest_referral_age = st.text_input("Oldest Referral Age", value="", key=f"{panel_key}_oldest_referral_age")
+        with table_cols[6]:
+            waitlist_recall_status = st.text_input(
+                "Waitlist/Recall List Status",
+                value="",
+                key=f"{panel_key}_waitlist_recall_status",
+            )
+
+        providers_on_call = st.text_area(
+            "Providers on Call",
+            placeholder="List providers on call for this day.",
+            key=f"{panel_key}_providers_on_call",
+            height=80,
         )
-        staffing_notes = st.text_area(
-            "Staffing notes",
-            placeholder="Coverage gaps, rooming constraints, late starts, etc.",
-            key=f"{panel_key}_staffing_notes",
+        st.markdown("**Barriers/Gaps Identified**")
+        providers_in_clinic = st.text_area(
+            "Providers in clinic",
+            placeholder="Clinic coverage, rooming balance, assignment gaps...",
+            key=f"{panel_key}_providers_in_clinic",
+            height=70,
+        )
+        out_pto = st.text_area(
+            "Out/PTO",
+            placeholder="Who is out and how coverage is being handled.",
+            key=f"{panel_key}_out_pto",
+            height=70,
+        )
+        break_coverage = st.text_area(
+            "Break Coverage",
+            placeholder="Lunch/break coverage plan.",
+            key=f"{panel_key}_break_coverage",
+            height=70,
+        )
+        need_help_with = st.text_area(
+            "What do we need help with",
+            value=(
+                f"Open triage issues due today: {len(today_open)}\n"
+                f"Escalations for leadership: {len(top_escalations)}\n"
+                f"PSR handoffs waiting: {len(waiting_psr)}"
+            ),
+            key=f"{panel_key}_need_help_with",
             height=90,
         )
-        escalation_notes = st.text_area(
-            "Escalation notes",
-            placeholder="What you need from PSR lead, manager, or supervisor today.",
-            key=f"{panel_key}_escalation_notes",
+        items_to_work_on = st.text_area(
+            "Items we need to work on",
+            value=(
+                f"Clinic overdue tasks: {len(clinical_overdue)}\n"
+                f"Relationship follow-ups due: {len(relationship_followups)}"
+            ),
+            key=f"{panel_key}_items_to_work_on",
             height=90,
         )
+        safety_concerns = st.text_area(
+            "Safety Concerns/Great Catch",
+            placeholder="Capture safety concerns or great catches from the team.",
+            key=f"{panel_key}_safety_concerns",
+            height=80,
+        )
+        goals_identified = st.text_area(
+            "Goals Identified",
+            placeholder="Daily huddle goals identified by the team.",
+            key=f"{panel_key}_goals_identified",
+            height=80,
+        )
+        dad_joke = st.text_input(
+            "Dad Joke",
+            placeholder="Optional team icebreaker.",
+            key=f"{panel_key}_dad_joke",
+        )
+        barriers_gaps_closeout = st.text_area(
+            "Barriers/Gaps Identified (closeout)",
+            placeholder="Capture end-of-huddle barriers/gaps updates.",
+            key=f"{panel_key}_barriers_gaps_closeout",
+            height=80,
+        )
+
         recap_sent_to = st.text_input(
             "Recap sent to",
             placeholder="PSR lead, clinic manager, supervisor",
@@ -5454,25 +5524,85 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             height=90,
         )
 
-        if st.button("Save huddle note", key=f"{panel_key}_save_huddle", type="primary"):
-            add_lead_huddle_log(
-                huddle_date=huddle_date,
-                priority_focus=priority_focus,
-                staffing_notes=staffing_notes,
-                escalation_notes=escalation_notes,
-                recap_sent_to=recap_sent_to,
-                shift_notes=shift_notes,
+        priority_focus = (
+            f"Attendees: {attendees.strip()}\n"
+            "| Provider | Schedule Utilization | # of pts | # of open spots | Referral WQ Status | Oldest Referral Age | Waitlist/Recall List Status |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| {provider_label.strip() or '-'} | {schedule_utilization.strip() or '-'} | {int(pts_count)} | {int(open_spots)} | {referral_wq_status.strip() or '-'} | {oldest_referral_age.strip() or '-'} | {waitlist_recall_status.strip() or '-'} |\n\n"
+            "Providers on Call:\n"
+            f"{providers_on_call.strip()}\n\n"
+            "Barriers/Gaps Identified:\n"
+            f"- Providers in clinic: {providers_in_clinic.strip()}\n"
+            f"- Out/PTO: {out_pto.strip()}\n"
+            f"- Break Coverage: {break_coverage.strip()}\n"
+            f"- What do we need help with: {need_help_with.strip()}\n"
+            f"- Items we need to work on: {items_to_work_on.strip()}\n"
+            f"- Safety Concerns/Great Catch: {safety_concerns.strip()}"
+        )
+        staffing_notes = (
+            "Goals Identified:\n"
+            f"{goals_identified.strip()}\n\n"
+            "Dad Joke:\n"
+            f"{dad_joke.strip()}"
+        )
+        escalation_notes = (
+            "Barriers/Gaps Identified (closeout):\n"
+            f"{barriers_gaps_closeout.strip()}"
+        )
+
+        huddle_date_label = huddle_date.strftime("%m/%d/%y") if hasattr(huddle_date, "strftime") else str(huddle_date)
+        email_body = (
+            f"Morning Huddle {huddle_date_label}\n\n"
+            f"Attendees: {attendees.strip() or 'N/A'}\n\n"
+            "Daily Metrics\n"
+            f"Provider: {provider_label.strip() or '-'}\n"
+            f"Schedule Utilization: {schedule_utilization.strip() or '-'}\n"
+            f"# of pts: {int(pts_count)}\n"
+            f"# of open spots: {int(open_spots)}\n"
+            f"Referral WQ Status: {referral_wq_status.strip() or '-'}\n"
+            f"Oldest Referral Age: {oldest_referral_age.strip() or '-'}\n"
+            f"Waitlist/Recall List Status: {waitlist_recall_status.strip() or '-'}\n\n"
+            f"{priority_focus}\n\n"
+            f"{staffing_notes}\n\n"
+            f"{escalation_notes}\n\n"
+            f"Shift recap:\n{shift_notes.strip() or 'No notes'}\n"
+        )
+
+        copy_ready_key = f"{panel_key}_copy_email_ready"
+        copy_text_key = f"{panel_key}_copy_email_text"
+        button_cols = st.columns(2)
+        with button_cols[0]:
+            if st.button("Save huddle note", key=f"{panel_key}_save_huddle", type="primary"):
+                add_lead_huddle_log(
+                    huddle_date=huddle_date,
+                    priority_focus=priority_focus,
+                    staffing_notes=staffing_notes,
+                    escalation_notes=escalation_notes,
+                    recap_sent_to=recap_sent_to,
+                    shift_notes=shift_notes,
+                )
+                st.success("Huddle note saved.")
+                st.rerun()
+        with button_cols[1]:
+            if st.button("Copy Email Format", key=f"{panel_key}_copy_email", type="secondary"):
+                st.session_state[copy_ready_key] = True
+
+        if st.session_state.get(copy_ready_key):
+            st.caption("Copy and paste this into your huddle email.")
+            st.text_area(
+                "Email format",
+                value=email_body,
+                key=copy_text_key,
+                height=320,
             )
-            st.success("Huddle note saved.")
-            st.rerun()
 
         st.markdown("#### Recent huddles")
         if huddle_logs:
             for log in huddle_logs[:10]:
                 with st.expander(f"{log.get('huddle_date')} · recap to {log.get('recap_sent_to') or 'not set'}", expanded=False):
-                    st.markdown(f"**Priority focus**\n{log.get('priority_focus') or 'No notes'}")
-                    st.markdown(f"**Staffing notes**\n{log.get('staffing_notes') or 'No notes'}")
-                    st.markdown(f"**Escalation notes**\n{log.get('escalation_notes') or 'No notes'}")
+                    st.markdown(f"**Huddle Template Snapshot**\n{log.get('priority_focus') or 'No notes'}")
+                    st.markdown(f"**Goals + Dad Joke**\n{log.get('staffing_notes') or 'No notes'}")
+                    st.markdown(f"**Barriers/Gaps Closeout**\n{log.get('escalation_notes') or 'No notes'}")
                     st.markdown(f"**Shift recap**\n{log.get('shift_notes') or 'No notes'}")
         else:
             st.caption("No huddle logs saved yet.")
