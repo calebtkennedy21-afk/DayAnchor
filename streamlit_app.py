@@ -5216,20 +5216,36 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     )
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
-        [
-            "Command Center",
-            "Clinical Triage Queue",
-            "MA Assignments",
-            "Daily Huddle",
-            "SOP Playbook",
-            "Relationship Tracker",
-            "Preceptor Sign-offs",
-            "Education Liaison",
-            "Autoclave Maintenance",
-            "Documents",
-        ]
-    )
+    show_relationship_tracker = False
+    if show_relationship_tracker:
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
+            [
+                "Command Center",
+                "Clinical Triage Queue",
+                "MA Assignments",
+                "Daily Huddle",
+                "SOP Playbook",
+                "Relationship Tracker",
+                "Preceptor Sign-offs",
+                "Education Liaison",
+                "Autoclave Maintenance",
+                "Documents",
+            ]
+        )
+    else:
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
+            [
+                "Command Center",
+                "Clinical Triage Queue",
+                "MA Assignments",
+                "Daily Huddle",
+                "SOP Playbook",
+                "Preceptor Sign-offs",
+                "Education Liaison",
+                "Autoclave Maintenance",
+                "Documents",
+            ]
+        )
 
     def render_record_attachments(section_key, record_type, record_id, default_title):
         st.markdown("##### Attachments")
@@ -5822,73 +5838,74 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             st.markdown('<div class="empty-state">No SOP entries match that search.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with relationship_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Relationship Health Tracker</h3><span>Maintain strong working loops with PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
+    if show_relationship_tracker:
+        with relationship_tab:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Relationship Health Tracker</h3><span>Maintain strong working loops with PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
 
-        with st.form(f"{panel_key}_relationship_form", clear_on_submit=True):
-            rel_cols = st.columns(3)
-            with rel_cols[0]:
-                person_name = st.text_input("Name")
-                role_label = st.text_input("Role/Title")
-            with rel_cols[1]:
-                relationship_type = st.selectbox("Relationship lane", ["PSR lead", "Manager", "Supervisor", "Clinical staff"])
-                status_label = st.selectbox("Health", ["green", "yellow", "red"], index=0)
-            with rel_cols[2]:
-                last_touch_date = st.date_input("Last touch", value=mountain_today())
-                next_follow_up_date = st.date_input("Next follow-up", value=mountain_today() + timedelta(days=7))
-            open_asks = st.text_area("Open asks", height=80)
-            recent_win = st.text_area("Recent win", height=80)
-            rel_notes = st.text_area("Notes", height=80)
-            submit_relationship = st.form_submit_button("Save touchpoint", type="primary")
+            with st.form(f"{panel_key}_relationship_form", clear_on_submit=True):
+                rel_cols = st.columns(3)
+                with rel_cols[0]:
+                    person_name = st.text_input("Name")
+                    role_label = st.text_input("Role/Title")
+                with rel_cols[1]:
+                    relationship_type = st.selectbox("Relationship lane", ["PSR lead", "Manager", "Supervisor", "Clinical staff"])
+                    status_label = st.selectbox("Health", ["green", "yellow", "red"], index=0)
+                with rel_cols[2]:
+                    last_touch_date = st.date_input("Last touch", value=mountain_today())
+                    next_follow_up_date = st.date_input("Next follow-up", value=mountain_today() + timedelta(days=7))
+                open_asks = st.text_area("Open asks", height=80)
+                recent_win = st.text_area("Recent win", height=80)
+                rel_notes = st.text_area("Notes", height=80)
+                submit_relationship = st.form_submit_button("Save touchpoint", type="primary")
 
-        if submit_relationship:
-            if not person_name.strip():
-                st.warning("Name is required.")
+            if submit_relationship:
+                if not person_name.strip():
+                    st.warning("Name is required.")
+                else:
+                    add_lead_relationship_touchpoint(
+                        person_name=person_name,
+                        role_label=role_label,
+                        relationship_type=relationship_type,
+                        status_label=status_label,
+                        last_touch_date=last_touch_date,
+                        next_follow_up_date=next_follow_up_date,
+                        open_asks=open_asks,
+                        recent_win=recent_win,
+                        notes=rel_notes,
+                    )
+                    st.success("Relationship touchpoint saved.")
+                    st.rerun()
+
+            due_followups = sorted(
+                relationship_touchpoints,
+                key=lambda item: item.get("next_follow_up_date") or date.max,
+            )
+            if due_followups:
+                for item in due_followups[:30]:
+                    item_id = item.get("id")
+                    followup_date = item.get("next_follow_up_date")
+                    due_flag = " (due)" if followup_date and followup_date <= mountain_today() else ""
+                    with st.expander(f"{item.get('person_name')} · {item.get('relationship_type')} · {item.get('status_label')}{due_flag}", expanded=False):
+                        st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
+                        st.markdown(f"**Last touch:** {item.get('last_touch_date') or 'Not set'}")
+                        st.markdown(f"**Next follow-up:** {followup_date or 'Not set'}")
+                        if item.get("open_asks"):
+                            st.markdown(f"**Open asks:** {item.get('open_asks')}")
+                        if item.get("recent_win"):
+                            st.markdown(f"**Recent win:** {item.get('recent_win')}")
+                        if item.get("notes"):
+                            st.markdown(f"**Notes:** {item.get('notes')}")
+                        if st.button("Log touch today + move follow-up 7 days", key=f"{panel_key}_touch_{item_id}"):
+                            update_lead_relationship_touchpoint(
+                                item_id,
+                                last_touch_date=mountain_today(),
+                                next_follow_up_date=mountain_today() + timedelta(days=7),
+                            )
+                            st.rerun()
             else:
-                add_lead_relationship_touchpoint(
-                    person_name=person_name,
-                    role_label=role_label,
-                    relationship_type=relationship_type,
-                    status_label=status_label,
-                    last_touch_date=last_touch_date,
-                    next_follow_up_date=next_follow_up_date,
-                    open_asks=open_asks,
-                    recent_win=recent_win,
-                    notes=rel_notes,
-                )
-                st.success("Relationship touchpoint saved.")
-                st.rerun()
-
-        due_followups = sorted(
-            relationship_touchpoints,
-            key=lambda item: item.get("next_follow_up_date") or date.max,
-        )
-        if due_followups:
-            for item in due_followups[:30]:
-                item_id = item.get("id")
-                followup_date = item.get("next_follow_up_date")
-                due_flag = " (due)" if followup_date and followup_date <= mountain_today() else ""
-                with st.expander(f"{item.get('person_name')} · {item.get('relationship_type')} · {item.get('status_label')}{due_flag}", expanded=False):
-                    st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
-                    st.markdown(f"**Last touch:** {item.get('last_touch_date') or 'Not set'}")
-                    st.markdown(f"**Next follow-up:** {followup_date or 'Not set'}")
-                    if item.get("open_asks"):
-                        st.markdown(f"**Open asks:** {item.get('open_asks')}")
-                    if item.get("recent_win"):
-                        st.markdown(f"**Recent win:** {item.get('recent_win')}")
-                    if item.get("notes"):
-                        st.markdown(f"**Notes:** {item.get('notes')}")
-                    if st.button("Log touch today + move follow-up 7 days", key=f"{panel_key}_touch_{item_id}"):
-                        update_lead_relationship_touchpoint(
-                            item_id,
-                            last_touch_date=mountain_today(),
-                            next_follow_up_date=mountain_today() + timedelta(days=7),
-                        )
-                        st.rerun()
-        else:
-            st.caption("No relationship touchpoints tracked yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.caption("No relationship touchpoints tracked yet.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with preceptor_tab:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
