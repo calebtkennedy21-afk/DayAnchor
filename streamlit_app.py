@@ -161,6 +161,10 @@ DEFAULT_APP_SETTINGS = {
     "or_alternating_days": ["Monday", "Wednesday"],
     "or_alternating_cycle_offset": 0,
     "default_surgeon_label": "Dr. Braden Boyer (BB)",
+    "personal_notes": "",
+    "clinical_notes": "",
+    "personal_notes_updated_at": "",
+    "clinical_notes_updated_at": "",
     "nightly_reflections": {},
     "morning_ritual_checkins": {},
 }
@@ -9116,6 +9120,7 @@ app_bootstrap.run_app(
     {
         "initialize_database": initialize_database,
         "load_app_settings": load_app_settings,
+        "save_app_settings": save_app_settings,
         "inject_styles": inject_styles,
         "render_hero": render_hero,
         "db_health_status": db_health_status,

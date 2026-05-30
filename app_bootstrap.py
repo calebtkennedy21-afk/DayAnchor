@@ -44,6 +44,7 @@ def summarize_schedule_conflicts(scheduled_tasks, fallback_minutes=60, daily_cap
 def run_app(context, st_module=st):
     initialize_database = context["initialize_database"]
     load_app_settings = context["load_app_settings"]
+    save_app_settings = context["save_app_settings"]
     inject_styles = context["inject_styles"]
     render_hero = context["render_hero"]
     db_health_status = context["db_health_status"]
@@ -94,6 +95,43 @@ def run_app(context, st_module=st):
     render_full_news_page = context.get("render_full_news_page")
     add_task = context["add_task"]
     news_manual_refresh_requested = False
+
+    def render_saved_notes_panel(title, subtitle, setting_key, updated_key, panel_key, help_text):
+        nonlocal app_settings
+        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+        st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
+        notes_state_key = f"{panel_key}_notes_input"
+        if notes_state_key not in st_module.session_state:
+            st_module.session_state[notes_state_key] = app_settings.get(setting_key, "")
+
+        st_module.text_area(
+            "",
+            key=notes_state_key,
+            height=220,
+            placeholder=help_text,
+            label_visibility="collapsed",
+        )
+        save_col, reset_col = st_module.columns([1, 1])
+        with save_col:
+            if st_module.button("Save notes", key=f"{panel_key}_save_notes", type="secondary", use_container_width=True):
+                app_settings = save_app_settings(
+                    {
+                        **app_settings,
+                        setting_key: st_module.session_state.get(notes_state_key, "").strip(),
+                        updated_key: datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                )
+                st_module.success("Notes saved.")
+                st_module.rerun()
+        with reset_col:
+            if st_module.button("Reset to saved", key=f"{panel_key}_reset_notes", use_container_width=True):
+                st_module.session_state[notes_state_key] = app_settings.get(setting_key, "")
+                st_module.rerun()
+
+        updated_at = app_settings.get(updated_key)
+        if updated_at:
+            st_module.caption(f"Last saved: {updated_at}")
+        st_module.markdown('</div>', unsafe_allow_html=True)
 
     initialize_database()
     app_settings = load_app_settings()
@@ -512,6 +550,26 @@ def run_app(context, st_module=st):
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             context_tab, calendar_tab, news_tab = st_module.tabs(["Context", "Calendar", "News"])
             with context_tab:
+                overview_notes_cols = st_module.columns(2, gap="large")
+                with overview_notes_cols[0]:
+                    render_saved_notes_panel(
+                        "Personal Notes",
+                        "Quick access from overview.",
+                        "personal_notes",
+                        "personal_notes_updated_at",
+                        "overview_personal_notes",
+                        "Write personal notes, reminders, and planning thoughts here...",
+                    )
+                with overview_notes_cols[1]:
+                    render_saved_notes_panel(
+                        "Clinical Notes",
+                        "Quick access from overview.",
+                        "clinical_notes",
+                        "clinical_notes_updated_at",
+                        "overview_clinical_notes",
+                        "Write clinic notes, operational reminders, and follow-ups (non-PHI) here...",
+                    )
+                st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
                 render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
                 st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
                 render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
@@ -530,6 +588,15 @@ def run_app(context, st_module=st):
         render_personal_one_thing(personal_tasks, "personal_one_thing")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_task_list_panel("Personal Tasks", "Work that belongs outside clinic", personal_tasks, "personal_task", "No personal tasks match the current filters.", max_items=list_preview_limit)
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_saved_notes_panel(
+            "Personal Notes",
+            "Capture reminders, ideas, and follow-ups for your personal lane.",
+            "personal_notes",
+            "personal_notes_updated_at",
+            "personal_page",
+            "Write personal notes, reminders, and planning thoughts here...",
+        )
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_personal_goals_panel(personal_goals, panel_key="personal_goals")
@@ -554,6 +621,15 @@ def run_app(context, st_module=st):
             "clinic_task",
             "No clinic tasks match the current filters.",
             max_items=list_preview_limit,
+        )
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_saved_notes_panel(
+            "Clinical Notes",
+            "Capture clinic workflows, reminders, and non-PHI operational notes.",
+            "clinical_notes",
+            "clinical_notes_updated_at",
+            "clinic_page",
+            "Write clinic notes, operational reminders, and follow-ups (non-PHI) here...",
         )
     elif current_page == "Cases":
         render_page_banner("clinic", "Surgical Cases", "Non-PHI case tracking with protocol support and OR cadence.")
