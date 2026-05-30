@@ -4997,6 +4997,9 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
             st.caption("No nightly improvement note found yet. Use Daily Review tonight to create one.")
 
         morning_trends = weekly_morning_ritual_trends(morning_checkins, end_day=today, window_days=7)
+        recent_checkins = sorted(morning_checkins.items(), reverse=True)[:5]
+        weekly_insight_key = f"{panel_key}_{today.isocalendar().year}_w{today.isocalendar().week}_weekly_ai_insight"
+        weekly_insight_error_key = f"{panel_key}_{today.isocalendar().year}_w{today.isocalendar().week}_weekly_ai_insight_error"
         st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Morning Trend Summary</h3><span>Pattern over the last 7 days</span></div>', unsafe_allow_html=True)
         trend_cols = st.columns(4)
         trend_cols[0].metric("Check-ins", f"{morning_trends['checkin_count']}/7")
@@ -5030,6 +5033,20 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
             unsafe_allow_html=True,
         )
 
+        if st.button("Generate Weekly AI Insight", key=f"{panel_key}_generate_weekly_morning_insight", type="secondary"):
+            insight_text, insight_error = generate_weekly_morning_ritual_insight(
+                morning_trends,
+                recent_checkins,
+                latest_nightly_improvement,
+            )
+            st.session_state[weekly_insight_key] = insight_text
+            st.session_state[weekly_insight_error_key] = insight_error
+
+        if st.session_state.get(weekly_insight_error_key):
+            st.warning(st.session_state[weekly_insight_error_key])
+        if st.session_state.get(weekly_insight_key):
+            st.markdown(st.session_state[weekly_insight_key])
+
         top_urgent = sorted(
             active_tasks,
             key=lambda task: task_attention_sort_key(task, today),
@@ -5043,7 +5060,6 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
         else:
             st.markdown('<div class="empty-state">No active tasks available. Add one from Quick Command Bar.</div>', unsafe_allow_html=True)
 
-        recent_checkins = sorted(morning_checkins.items(), reverse=True)[:5]
         if recent_checkins:
             st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Recent Morning Check-ins</h3><span>Last few starts</span></div>', unsafe_allow_html=True)
             for day_text, entry in recent_checkins:
@@ -9448,6 +9464,7 @@ generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_weekly_morning_ritual_insight = partial(ai_workflows.generate_weekly_morning_ritual_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)

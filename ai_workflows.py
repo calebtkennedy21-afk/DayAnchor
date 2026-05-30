@@ -518,6 +518,93 @@ def generate_weekly_nightly_insight(
         return "", f"AI weekly insight failed: {exc}"
 
 
+def generate_weekly_morning_ritual_insight(
+    weekly_trends,
+    recent_checkins,
+    latest_nightly_improvement,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    trends = weekly_trends or {}
+    sleep_counts = trends.get("sleep_counts") or {}
+    energy_counts = trends.get("energy_counts") or {}
+    mood_counts = trends.get("mood_counts") or {}
+    checkin_count = int(trends.get("checkin_count") or 0)
+    consistency_pct = int(round(float(trends.get("consistency_rate") or 0.0) * 100))
+    planned_rate = (
+        int(round((float(trends.get("planned_yes_count") or 0) / float(checkin_count)) * 100))
+        if checkin_count
+        else 0
+    )
+
+    recent_lines = []
+    for day_text, item in (recent_checkins or [])[:5]:
+        recent_lines.append(
+            f"- {day_text}: sleep={item.get('sleep_quality', 'Good')}, energy={item.get('energy_level', 'Medium')}, mood={item.get('mood', 'Neutral')}, "
+            f"intention={str(item.get('top_intention') or '').strip() or 'none'}"
+        )
+    recent_text = "\n".join(recent_lines) if recent_lines else "- None"
+    carry_over = str(latest_nightly_improvement or "").strip() or "No nightly carry-over note was logged."
+
+    if not ai_enabled_fn():
+        if consistency_pct < 60:
+            focus = "Make the first step smaller: open the morning ritual and record one line before checking messages."
+        elif sleep_counts.get("Poor", 0) + sleep_counts.get("Fair", 0) > sleep_counts.get("Good", 0) + sleep_counts.get("Great", 0):
+            focus = "Keep the ritual, but lead with a calmer first action and protect the first 10 minutes from interruption."
+        elif planned_rate < 50:
+            focus = "Name one concrete morning goal before the day starts so the ritual turns into action faster."
+        else:
+            focus = "Keep the current pattern and add one sentence about what made the best mornings work."
+        return (
+            "### Weekly AI Insight\n"
+            f"Actionable adjustment: {focus}"
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise morning routine coach. Return one practical weekly insight with one specific adjustment."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Weekly morning ritual snapshot:\n"
+                        f"- check-ins: {checkin_count}/7\n"
+                        f"- consistency: {consistency_pct}%\n"
+                        f"- planned morning goals rate: {planned_rate}%\n"
+                        f"- average sleep: {trends.get('average_sleep_label', 'No data')}\n"
+                        f"- average energy: {trends.get('average_energy_label', 'No data')}\n"
+                        f"- average mood: {trends.get('average_mood_label', 'No data')}\n"
+                        f"- sleep spread: poor={sleep_counts.get('Poor', 0)}, fair={sleep_counts.get('Fair', 0)}, good={sleep_counts.get('Good', 0)}, great={sleep_counts.get('Great', 0)}\n"
+                        f"- energy spread: low={energy_counts.get('Low', 0)}, medium={energy_counts.get('Medium', 0)}, high={energy_counts.get('High', 0)}\n"
+                        f"- mood spread: drained={mood_counts.get('Drained', 0)}, neutral={mood_counts.get('Neutral', 0)}, positive={mood_counts.get('Positive', 0)}, focused={mood_counts.get('Focused', 0)}\n"
+                        f"- nightly carry-over note: {carry_over}\n\n"
+                        "Recent morning check-ins:\n"
+                        f"{recent_text}\n\n"
+                        "Return markdown with exactly:\n"
+                        "### Weekly AI Insight\n"
+                        "One short paragraph (1-3 sentences) and exactly one actionable adjustment sentence starting with 'Actionable adjustment:'."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty morning insight response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI morning insight failed: {exc}"
+
+
 def generate_ai_morning_ritual_brief(
     active_tasks,
     latest_nightly_improvement,
