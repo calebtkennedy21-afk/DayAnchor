@@ -1,7 +1,15 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 import calendar
 
 import streamlit as st
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 WEEKDAY_ASSIGNMENT_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -134,7 +142,7 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_ca
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st_module.session_state:
-        st_module.session_state[month_key] = date.today().replace(day=1)
+        st_module.session_state[month_key] = mountain_today().replace(day=1)
 
     controls = st_module.columns([1, 2, 1])
     with controls[0]:

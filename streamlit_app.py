@@ -6,6 +6,7 @@ import calendar
 import textwrap
 from io import BytesIO
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import psycopg
@@ -68,6 +69,13 @@ except ImportError:
 
 
 st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 if "tasks" not in st.session_state:
@@ -273,9 +281,9 @@ def parse_date_value(raw_value):
     if not cleaned:
         return None
     if cleaned in ("today", "now"):
-        return date.today()
+        return mountain_today()
     if cleaned == "tomorrow":
-        return date.today() + timedelta(days=1)
+        return mountain_today() + timedelta(days=1)
     try:
         return date.fromisoformat(cleaned)
     except ValueError:
@@ -338,7 +346,7 @@ def parse_ai_suggestions(text):
         if priority not in ("high", "medium", "low"):
             priority = "medium"
 
-        due_date = parse_date_value(item.get("due_date")) or date.today()
+        due_date = parse_date_value(item.get("due_date")) or mountain_today()
         scheduled_date = parse_date_value(item.get("scheduled_date"))
         scheduled_end_date = parse_date_value(item.get("scheduled_end_date")) or scheduled_date
         scheduled_time = parse_time_value(item.get("scheduled_time"))
@@ -719,7 +727,7 @@ def normalize_morning_ritual_checkins(raw_checkins):
 
 def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
     safe_window_days = max(3, int(window_days or 7))
-    anchor_day = end_day or date.today()
+    anchor_day = end_day or mountain_today()
     window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
     window.reverse()
 
@@ -848,7 +856,7 @@ def render_mini_sparkline(label, values, max_value, day_labels):
 
 def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
     safe_window_days = max(3, int(window_days or 7))
-    anchor_day = end_day or date.today()
+    anchor_day = end_day or mountain_today()
     window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
     window.reverse()
 
@@ -1444,7 +1452,7 @@ def add_surgical_case(
                         notes_value,
                         education_url_value,
                         education_notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
         return
@@ -1462,7 +1470,7 @@ def add_surgical_case(
             "notes": notes_value,
             "education_url": education_url_value,
             "education_notes": education_notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -1567,7 +1575,7 @@ def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime
                         upload_mime,
                         upload_bytes,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -1583,7 +1591,7 @@ def add_protocol_document(surgeon_label, protocol_name, upload_name, upload_mime
             "file_mime": upload_mime,
             "file_bytes": upload_bytes,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -1654,7 +1662,7 @@ def set_protocol_case_links(protocol_id, case_ids):
                         VALUES (%s, %s, %s)
                         ON CONFLICT (case_id, protocol_id) DO NOTHING
                         """,
-                        (case_id, protocol_id, date.today()),
+                        (case_id, protocol_id, mountain_today()),
                     )
         return
 
@@ -1742,7 +1750,7 @@ def add_anatomy_xray_image(body_part, fracture_type, view_label, image_name, ima
                         image_mime,
                         image_bytes,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -1759,7 +1767,7 @@ def add_anatomy_xray_image(body_part, fracture_type, view_label, image_name, ima
             "image_mime": image_mime,
             "image_bytes": image_bytes,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -1850,7 +1858,7 @@ def add_anatomy_quiz_attempt(
                         confidence_value,
                         bool(is_correct),
                         explanation_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
         return
@@ -1866,7 +1874,7 @@ def add_anatomy_quiz_attempt(
             "confidence": confidence_value,
             "is_correct": bool(is_correct),
             "explanation": explanation_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -1903,7 +1911,7 @@ def add_anatomy_quiz_review_item(review_text):
                     INSERT INTO anatomy_quiz_review_queue (review_text, created_date)
                     VALUES (%s, %s)
                     """,
-                    (review_value, date.today()),
+                    (review_value, mountain_today()),
                 )
         return
 
@@ -1912,7 +1920,7 @@ def add_anatomy_quiz_review_item(review_text):
         {
             "id": next_id,
             "review_text": review_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -2144,7 +2152,7 @@ def or_cadence_label_for_day(day, app_settings):
 def predicted_or_days(app_settings, horizon_days=28):
     out = []
     for offset in range(horizon_days):
-        day = date.today() + timedelta(days=offset)
+        day = mountain_today() + timedelta(days=offset)
         label = or_cadence_label_for_day(day, app_settings)
         if label:
             out.append((day, label))
@@ -2299,7 +2307,7 @@ def render_task_calendar_panel(tasks, panel_key, title, subtitle, app_settings=N
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st.session_state:
-        st.session_state[month_key] = date.today().replace(day=1)
+        st.session_state[month_key] = mountain_today().replace(day=1)
 
     controls = st.columns([1, 2, 1])
     with controls[0]:
@@ -2399,8 +2407,8 @@ def seed_sample_tasks():
             "description": "Review patient list and note high-priority follow-ups.",
             "category": "Clinic",
             "priority": "high",
-            "due_date": date.today(),
-            "scheduled_date": date.today(),
+            "due_date": mountain_today(),
+            "scheduled_date": mountain_today(),
             "scheduled_time": time(8, 30),
             "scheduled_minutes": 30,
         },
@@ -2409,8 +2417,8 @@ def seed_sample_tasks():
             "description": "Quick budget review and upcoming bill check.",
             "category": "Personal",
             "priority": "medium",
-            "due_date": date.today(),
-            "scheduled_date": date.today(),
+            "due_date": mountain_today(),
+            "scheduled_date": mountain_today(),
             "scheduled_time": time(19, 0),
             "scheduled_minutes": 45,
         },
@@ -2419,8 +2427,8 @@ def seed_sample_tasks():
             "description": "Process starred messages and archive the rest.",
             "category": "Personal",
             "priority": "low",
-            "due_date": date.today(),
-            "scheduled_date": date.today(),
+            "due_date": mountain_today(),
+            "scheduled_date": mountain_today(),
             "scheduled_time": time(16, 0),
             "scheduled_minutes": 30,
         },
@@ -2952,7 +2960,7 @@ def add_task(
                         description.strip(),
                         category,
                         priority,
-                        date.today(),
+                        mountain_today(),
                         due_date,
                         scheduled_date,
                         scheduled_end_date,
@@ -2974,7 +2982,7 @@ def add_task(
             "category": category,
             "priority": priority,
             "status": "todo",
-            "created_date": date.today(),
+            "created_date": mountain_today(),
             "due_date": due_date,
             "scheduled_date": scheduled_date,
             "scheduled_end_date": scheduled_end_date,
@@ -3037,7 +3045,7 @@ def delete_task(task_id):
 
 
 def personal_goal_week_start(reference_date=None):
-    anchor = reference_date or date.today()
+    anchor = reference_date or mountain_today()
     return anchor - timedelta(days=anchor.weekday())
 
 
@@ -3087,7 +3095,7 @@ def _enrich_personal_goals(goals, checkins):
         week_checkins = [item for item in goal_checkins if item.get("checked_in_date") and item["checked_in_date"] >= week_start]
         last_check_in_date = max([item.get("checked_in_date") for item in goal_checkins if item.get("checked_in_date")], default=None)
         reminder_days = personal_goal_normalize_reminder_days(goal.get("reminder_days"))
-        reminder_today = date.today().strftime("%A") in reminder_days
+        reminder_today = mountain_today().strftime("%A") in reminder_days
         current_streak = 0
         if goal_checkin_dates:
             cursor = goal_checkin_dates[-1]
@@ -3109,7 +3117,7 @@ def _enrich_personal_goals(goals, checkins):
         enriched_goal["total_checkins"] = len(goal_checkins)
         enriched_goal["week_checkins"] = len(week_checkins)
         enriched_goal["last_check_in_date"] = last_check_in_date
-        enriched_goal["today_checked_in"] = any(item.get("checked_in_date") == date.today() for item in goal_checkins)
+        enriched_goal["today_checked_in"] = any(item.get("checked_in_date") == mountain_today() for item in goal_checkins)
         enriched_goal["current_streak"] = current_streak
         enriched_goal["best_streak"] = best_streak
         enriched_goal["reminder_days"] = reminder_days
@@ -3245,7 +3253,7 @@ def add_personal_goal(title, category, target_frequency, notes="", reminder_days
                         target_value,
                         notes_value,
                         json.dumps(reminder_days_value),
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
         return
@@ -3259,7 +3267,7 @@ def add_personal_goal(title, category, target_frequency, notes="", reminder_days
             "notes": notes_value,
             "reminder_days": reminder_days_value,
             "status": "active",
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -3306,7 +3314,7 @@ def delete_personal_goal(goal_id):
 
 
 def log_personal_goal_checkin(goal_id, note=""):
-    checkin_date = date.today()
+    checkin_date = mountain_today()
     note_value = note.strip()
 
     if db_enabled():
@@ -3322,7 +3330,7 @@ def log_personal_goal_checkin(goal_id, note=""):
                     ) VALUES (%s, %s, %s, %s)
                     ON CONFLICT (goal_id, checked_in_date) DO NOTHING
                     """,
-                    (goal_id, checkin_date, note_value, date.today()),
+                    (goal_id, checkin_date, note_value, mountain_today()),
                 )
         return
 
@@ -3334,7 +3342,7 @@ def log_personal_goal_checkin(goal_id, note=""):
             "goal_id": goal_id,
             "checked_in_date": checkin_date,
             "note": note_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -3382,12 +3390,12 @@ def complete_task(task_id):
     if task.get("status") == "completed":
         return
 
-    update_task(task_id, status="completed", completed_date=date.today(), completed_at=datetime.utcnow())
+    update_task(task_id, status="completed", completed_date=mountain_today(), completed_at=datetime.utcnow())
 
     recurrence_rule = task.get("recurrence_rule")
     recurrence_interval = max(1, int(task.get("recurrence_interval") or 1))
     if recurrence_rule in ("daily", "weekly"):
-        next_due = shift_date_by_rule(task.get("due_date") or date.today(), recurrence_rule, recurrence_interval)
+        next_due = shift_date_by_rule(task.get("due_date") or mountain_today(), recurrence_rule, recurrence_interval)
         next_sched_date = shift_date_by_rule(task.get("scheduled_date"), recurrence_rule, recurrence_interval)
         add_task(
             title=task.get("title", ""),
@@ -3468,7 +3476,7 @@ def render_task_card(task, key_prefix="task"):
         )
         edit_due = st.date_input(
             "Due date",
-            value=task.get("due_date") or date.today(),
+            value=task.get("due_date") or mountain_today(),
             key=f"{key_prefix}_edit_due_{task['id']}",
         )
 
@@ -3487,7 +3495,7 @@ def render_task_card(task, key_prefix="task"):
         with sched_cols[0]:
             edit_sched_date = st.date_input(
                 "Scheduled date",
-                value=task.get("scheduled_date") or date.today(),
+                value=task.get("scheduled_date") or mountain_today(),
                 disabled=not edit_has_schedule,
                 key=f"{key_prefix}_edit_sched_date_{task['id']}",
             )
@@ -3510,7 +3518,7 @@ def render_task_card(task, key_prefix="task"):
                 key=f"{key_prefix}_edit_sched_minutes_{task['id']}",
             )
         if edit_multi_day:
-            edit_end_default = task.get("scheduled_end_date") or task.get("scheduled_date") or date.today()
+            edit_end_default = task.get("scheduled_end_date") or task.get("scheduled_date") or mountain_today()
             if edit_end_default < edit_sched_date:
                 edit_end_default = edit_sched_date
             edit_sched_end = st.date_input(
@@ -3578,7 +3586,7 @@ def render_task_list_panel(title, subtitle, tasks_to_render, key_prefix, empty_t
 
 
 def ai_workbench_summary(tasks, active_tasks):
-    today = date.today()
+    today = mountain_today()
     soon = today + timedelta(days=3)
     overdue = [task for task in active_tasks if task.get("due_date") and task["due_date"] < today]
     due_today = [task for task in active_tasks if task.get("due_date") == today]
@@ -3640,9 +3648,9 @@ def apply_clinic_visit_template(form_key, template_key, st_module=st):
     st_module.session_state[f"{form_key}_description"] = template["description"]
     st_module.session_state[f"{form_key}_category"] = "Clinic"
     st_module.session_state[f"{form_key}_priority"] = template["priority"]
-    st_module.session_state[f"{form_key}_due_date"] = date.today()
+    st_module.session_state[f"{form_key}_due_date"] = mountain_today()
     st_module.session_state[f"{form_key}_schedule_enabled"] = template["schedule_enabled"]
-    st_module.session_state[f"{form_key}_scheduled_date"] = date.today()
+    st_module.session_state[f"{form_key}_scheduled_date"] = mountain_today()
     st_module.session_state[f"{form_key}_scheduled_time"] = template["scheduled_time"]
     st_module.session_state[f"{form_key}_scheduled_minutes"] = template["scheduled_minutes"]
     st_module.session_state[f"{form_key}_recurrence_rule"] = "none"
@@ -3656,7 +3664,7 @@ def apply_clinic_visit_template_from_state(form_key, template_state_key, st_modu
 def apply_personal_schedule_template(form_key, template_key, st_module=st):
     templates = personal_schedule_templates()
     template = templates.get(template_key, templates["blank"])
-    start_date = date.today()
+    start_date = mountain_today()
     end_offset_days = int(template.get("scheduled_end_offset_days", 0))
     end_date = start_date + timedelta(days=end_offset_days)
     if end_date < start_date:
@@ -3831,7 +3839,7 @@ def render_personal_quick_capture(form_key, defaults):
                 "",
                 "Personal",
                 priority,
-                date.today(),
+                mountain_today(),
                 scheduled_date=None,
                 scheduled_time=None,
                 scheduled_minutes=None,
@@ -3979,7 +3987,7 @@ def render_personal_goal_history_panel(personal_goals, panel_key="personal_goal_
 
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st.session_state:
-        st.session_state[month_key] = date.today().replace(day=1)
+        st.session_state[month_key] = mountain_today().replace(day=1)
 
     month_anchor = st.session_state[month_key]
     month_start = month_anchor.replace(day=1)
@@ -4071,7 +4079,7 @@ def render_personal_goals_panel(personal_goals, panel_key="personal_goals"):
         goal_title = st.text_input("Goal title", placeholder="Fitness, reading, journaling, etc.")
         goal_category = st.selectbox("Goal category", ["Fitness", "Reading", "Journaling", "Custom"])
         goal_target = st.slider("Target check-ins per week", min_value=1, max_value=14, value=3, step=1)
-        goal_reminder_days = st.multiselect("Reminder days", PERSONAL_GOAL_WEEKDAY_NAMES, default=[date.today().strftime("%A")])
+        goal_reminder_days = st.multiselect("Reminder days", PERSONAL_GOAL_WEEKDAY_NAMES, default=[mountain_today().strftime("%A")])
         goal_notes = st.text_area("Notes", height=80, placeholder="How you want to approach this goal, reminders, and what success looks like.")
         goal_submit = st.form_submit_button("Add goal", type="primary")
 
@@ -4238,7 +4246,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         st.session_state[pin_task_key] = ranked_tasks[0]["id"]
     week_key = f"{panel_key}_week_anchor"
     if week_key not in st.session_state:
-        today = date.today()
+        today = mountain_today()
         st.session_state[week_key] = today - timedelta(days=today.weekday())
 
     week_start = st.session_state[week_key]
@@ -4355,7 +4363,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             st.rerun()
     with jump_cols[4]:
         if st.button("Today", key=f"{panel_key}_jump_today"):
-            today = date.today()
+            today = mountain_today()
             st.session_state[week_key] = today - timedelta(days=today.weekday())
             st.rerun()
 
@@ -4445,7 +4453,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
             selected_task_id = st.session_state.get(pin_task_key, ranked_tasks[0]["id"])
             pin_cols = st.columns([1, 1, 1])
             with pin_cols[0]:
-                pin_date = st.date_input("Pin date", value=date.today(), key=f"{panel_key}_pin_date")
+                pin_date = st.date_input("Pin date", value=mountain_today(), key=f"{panel_key}_pin_date")
             with pin_cols[1]:
                 pin_time = st.time_input("Pin time", value=schedule_time_default, key=f"{panel_key}_pin_time")
             with pin_cols[2]:
@@ -4480,7 +4488,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                     if st.button("Pin tomorrow", key=f"{panel_key}_pin_tomorrow_{task['id']}"):
                         update_task(
                             task["id"],
-                            scheduled_date=date.today() + timedelta(days=1),
+                            scheduled_date=mountain_today() + timedelta(days=1),
                             scheduled_time=schedule_time_default,
                             scheduled_minutes=default_duration,
                         )
@@ -4535,7 +4543,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 ["Personal", "Clinic"],
                 key=f"{panel_key}_personal_capture_category",
             )
-            personal_date = st.date_input("Start date", value=date.today(), key=f"{panel_key}_personal_capture_scheduled_date")
+            personal_date = st.date_input("Start date", value=mountain_today(), key=f"{panel_key}_personal_capture_scheduled_date")
             all_day_key = f"{panel_key}_personal_capture_all_day"
             multi_day_key = f"{panel_key}_personal_capture_multi_day"
             if is_vacation_template:
@@ -4637,7 +4645,7 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
 
 
 def render_review_command_panel(tasks, active_tasks, completed_today, app_settings, panel_key="review"):
-    today = date.today()
+    today = mountain_today()
     clinic_completed = [task for task in completed_today if task.get("category") == "Clinic"]
     personal_completed = [task for task in completed_today if task.get("category") == "Personal"]
     clinic_open = [task for task in active_tasks if task.get("category") == "Clinic"]
@@ -4767,7 +4775,7 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
                 "area_of_improvement": area_of_improvement.strip(),
                 "one_win": one_win.strip(),
                 "journal_prompt": nightly_prompt_text,
-                "saved_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
             }
             save_app_settings({
                 **(app_settings or {}),
@@ -4848,7 +4856,7 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
 
 
 def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="morning_ritual"):
-    today = date.today()
+    today = mountain_today()
     today_key = today.isoformat()
 
     morning_checkins = normalize_morning_ritual_checkins((app_settings or {}).get("morning_ritual_checkins"))
@@ -4953,7 +4961,7 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
                 "planned_morning_goals": st.session_state[planned_key],
                 "optional_grounding_complete": bool(st.session_state[grounding_key]),
                 "morning_brief_text": str(st.session_state.get(brief_key) or "").strip(),
-                "saved_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
             }
             save_app_settings({
                 **(app_settings or {}),
@@ -5031,7 +5039,7 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
 def render_metrics_row():
     tasks = load_tasks()
     active_tasks = [task for task in tasks if task.get("status") != "completed"]
-    due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
+    due_today = [task for task in active_tasks if task.get("due_date") == mountain_today()]
     completed_tasks = [task for task in tasks if task.get("status") == "completed"]
     scheduled_tasks = [
         task
@@ -5073,15 +5081,15 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     overdue_all = sorted(
-        [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()],
-        key=lambda task: task_attention_sort_key(task, date.today()),
+        [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()],
+        key=lambda task: task_attention_sort_key(task, mountain_today()),
     )
     blocked_all = [task for task in active_tasks if task.get("status") == "blocked"]
     unscheduled_high = sorted(
         [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))],
-        key=lambda task: task_attention_sort_key(task, date.today()),
+        key=lambda task: task_attention_sort_key(task, mountain_today()),
     )
-    due_tomorrow = [task for task in active_tasks if task.get("due_date") == (date.today() + timedelta(days=1))]
+    due_tomorrow = [task for task in active_tasks if task.get("due_date") == (mountain_today() + timedelta(days=1))]
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Alerts</h3><span>Actionable items that need attention</span></div>', unsafe_allow_html=True)
@@ -5102,7 +5110,7 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel(
             "Clinic Alerts",
             "Clinic overdue, blocked, and unscheduled items",
-            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"], key=lambda task: task_attention_sort_key(task, date.today())),
+            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"], key=lambda task: task_attention_sort_key(task, mountain_today())),
             "notif_clinic_alerts",
             "No clinic-specific alerts right now.",
         )
@@ -5110,7 +5118,7 @@ def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
         render_task_list_panel(
             "Personal Alerts",
             "Personal overdue, blocked, and unscheduled items",
-            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"], key=lambda task: task_attention_sort_key(task, date.today())),
+            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"], key=lambda task: task_attention_sort_key(task, mountain_today())),
             "notif_personal_alerts",
             "No personal-specific alerts right now.",
         )
@@ -5168,11 +5176,11 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         for item in open_issues
         if item.get("escalation_target") in ("manager", "supervisor")
     ]
-    resolved_today = [item for item in lead_issues if item.get("resolved_date") == date.today()]
+    resolved_today = [item for item in lead_issues if item.get("resolved_date") == mountain_today()]
     clinical_overdue = [
         task
         for task in clinic_tasks_all
-        if task.get("status") != "completed" and task.get("due_date") and task.get("due_date") < date.today()
+        if task.get("status") != "completed" and task.get("due_date") and task.get("due_date") < mountain_today()
     ]
 
     headline = st.columns(5)
@@ -5280,7 +5288,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             due_followups = [
                 person
                 for person in relationship_touchpoints
-                if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= date.today()
+                if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= mountain_today()
             ]
             st.caption(f"Relationship follow-ups due: {len(due_followups)}")
 
@@ -5323,11 +5331,11 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             with create_cols[1]:
                 urgency = st.selectbox("Urgency", ["critical", "high", "medium", "low"], index=2)
                 owner_name = st.text_input("Owner")
-                due_date = st.date_input("Due date", value=date.today())
+                due_date = st.date_input("Due date", value=mountain_today())
             with create_cols[2]:
                 due_time = st.time_input("Due time", value=time(16, 0))
                 escalation_target = st.selectbox("Escalation target", ["none", "psr_lead", "manager", "supervisor"])
-                decision_needed_by = st.date_input("Decision needed by", value=date.today() + timedelta(days=1))
+                decision_needed_by = st.date_input("Decision needed by", value=mountain_today() + timedelta(days=1))
             details = st.text_area("Details", height=100, placeholder="What happened, who is affected, and what outcome is needed?")
             dependency_owner = st.text_input("Dependency owner (optional)")
             escalation_reason = st.text_area("Escalation reason (optional)", height=80)
@@ -5386,7 +5394,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         update_lead_clinical_issue(issue_id, status="escalated")
                         st.rerun()
                     if action_cols[2].button("Resolve", key=f"{panel_key}_issue_resolve_{issue_id}"):
-                        update_lead_clinical_issue(issue_id, status="resolved", resolved_date=date.today())
+                        update_lead_clinical_issue(issue_id, status="resolved", resolved_date=mountain_today())
                         st.rerun()
                     if action_cols[3].button("Reopen", key=f"{panel_key}_issue_reopen_{issue_id}"):
                         update_lead_clinical_issue(issue_id, status="new", resolved_date=None)
@@ -5399,12 +5407,12 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Daily Huddle Builder</h3><span>Auto-generate agenda and send-ready recap notes</span></div>', unsafe_allow_html=True)
 
-        today_open = [item for item in open_issues if item.get("due_date") in (None, date.today())]
+        today_open = [item for item in open_issues if item.get("due_date") in (None, mountain_today())]
         top_escalations = [item for item in escalated_issues if item.get("escalation_target") in ("manager", "supervisor")]
         relationship_followups = [
             person
             for person in relationship_touchpoints
-            if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= date.today()
+            if person.get("next_follow_up_date") and person.get("next_follow_up_date") <= mountain_today()
         ]
 
         generated_agenda = (
@@ -5415,7 +5423,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             f"- Relationship follow-ups due: {len(relationship_followups)}"
         )
 
-        huddle_date = st.date_input("Huddle date", value=date.today(), key=f"{panel_key}_huddle_date")
+        huddle_date = st.date_input("Huddle date", value=mountain_today(), key=f"{panel_key}_huddle_date")
         priority_focus = st.text_area(
             "Priority focus",
             value=generated_agenda,
@@ -5540,8 +5548,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 relationship_type = st.selectbox("Relationship lane", ["PSR lead", "Manager", "Supervisor", "Clinical staff"])
                 status_label = st.selectbox("Health", ["green", "yellow", "red"], index=0)
             with rel_cols[2]:
-                last_touch_date = st.date_input("Last touch", value=date.today())
-                next_follow_up_date = st.date_input("Next follow-up", value=date.today() + timedelta(days=7))
+                last_touch_date = st.date_input("Last touch", value=mountain_today())
+                next_follow_up_date = st.date_input("Next follow-up", value=mountain_today() + timedelta(days=7))
             open_asks = st.text_area("Open asks", height=80)
             recent_win = st.text_area("Recent win", height=80)
             rel_notes = st.text_area("Notes", height=80)
@@ -5573,7 +5581,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             for item in due_followups[:30]:
                 item_id = item.get("id")
                 followup_date = item.get("next_follow_up_date")
-                due_flag = " (due)" if followup_date and followup_date <= date.today() else ""
+                due_flag = " (due)" if followup_date and followup_date <= mountain_today() else ""
                 with st.expander(f"{item.get('person_name')} · {item.get('relationship_type')} · {item.get('status_label')}{due_flag}", expanded=False):
                     st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
                     st.markdown(f"**Last touch:** {item.get('last_touch_date') or 'Not set'}")
@@ -5587,8 +5595,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     if st.button("Log touch today + move follow-up 7 days", key=f"{panel_key}_touch_{item_id}"):
                         update_lead_relationship_touchpoint(
                             item_id,
-                            last_touch_date=date.today(),
-                            next_follow_up_date=date.today() + timedelta(days=7),
+                            last_touch_date=mountain_today(),
+                            next_follow_up_date=mountain_today() + timedelta(days=7),
                         )
                         st.rerun()
         else:
@@ -5606,7 +5614,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 signoff_role = st.selectbox("Role", ["Medical Assistant", "Extern", "Nurse", "Other"])
             with signoff_cols[1]:
                 signoff_skill = st.text_input("Skill")
-                signoff_due_date = st.date_input("Sign-off due date", value=date.today() + timedelta(days=7))
+                signoff_due_date = st.date_input("Sign-off due date", value=mountain_today() + timedelta(days=7))
             with signoff_cols[2]:
                 signoff_status = st.selectbox("Status", ["pending", "in_progress", "signed_off"], index=0)
                 signoff_by = st.text_input("Signed off by", value="")
@@ -5624,7 +5632,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     due_date=signoff_due_date,
                     notes=signoff_notes,
                     status=signoff_status,
-                    signed_off_date=date.today() if signoff_status == "signed_off" else None,
+                    signed_off_date=mountain_today() if signoff_status == "signed_off" else None,
                     signed_off_by=signoff_by,
                 )
                 st.success("Skill sign-off added.")
@@ -5658,7 +5666,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         update_lead_skill_signoff(
                             signoff_id,
                             status="signed_off",
-                            signed_off_date=date.today(),
+                            signed_off_date=mountain_today(),
                             signed_off_by=default_signer,
                         )
                         st.rerun()
@@ -5689,8 +5697,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 edu_topic = st.selectbox("Topic", ["Clinical skills", "Workflow orientation", "Safety", "Sterile processing", "Other"])
                 edu_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
             with edu_cols[2]:
-                edu_needed_by = st.date_input("Needed by", value=date.today() + timedelta(days=5))
-                edu_session_date = st.date_input("Session date", value=date.today() + timedelta(days=7))
+                edu_needed_by = st.date_input("Needed by", value=mountain_today() + timedelta(days=5))
+                edu_session_date = st.date_input("Session date", value=mountain_today() + timedelta(days=7))
             edu_owner = st.text_input("Owner", value="")
             edu_notes = st.text_area("Notes", height=90)
             submit_edu = st.form_submit_button("Add education request", type="primary")
@@ -5736,7 +5744,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         update_lead_education_request(request_id, status="preparing")
                         st.rerun()
                     if action_cols[1].button("Delivered", key=f"{panel_key}_edu_delivered_{request_id}"):
-                        update_lead_education_request(request_id, status="delivered", session_date=date.today())
+                        update_lead_education_request(request_id, status="delivered", session_date=mountain_today())
                         st.rerun()
                     if action_cols[2].button("Close", key=f"{panel_key}_edu_close_{request_id}"):
                         update_lead_education_request(request_id, status="closed")
@@ -5766,9 +5774,9 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 auto_type = st.selectbox("Maintenance type", ["Spore test", "Biological indicator", "Routine cleaning", "Preventive service", "Repair"])
             with auto_cols[1]:
                 auto_frequency = st.selectbox("Frequency", ["Daily", "Weekly", "Monthly", "Quarterly", "As needed"], index=1)
-                auto_next_due = st.date_input("Next due", value=date.today() + timedelta(days=7))
+                auto_next_due = st.date_input("Next due", value=mountain_today() + timedelta(days=7))
             with auto_cols[2]:
-                auto_last_done = st.date_input("Last completed", value=date.today() - timedelta(days=7))
+                auto_last_done = st.date_input("Last completed", value=mountain_today() - timedelta(days=7))
                 auto_status = st.selectbox("Status", ["due_soon", "overdue", "completed", "out_of_service"], index=0)
             auto_owner = st.text_input("Owner")
             auto_vendor = st.text_input("Vendor/contact")
@@ -5814,7 +5822,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
                     action_cols = st.columns(4)
                     if action_cols[0].button("Mark Completed", key=f"{panel_key}_auto_complete_{auto_id}"):
-                        completed_on = date.today()
+                        completed_on = mountain_today()
                         next_due = autoclave_next_due_date(
                             completed_on,
                             item.get("frequency_label"),
@@ -5981,7 +5989,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
     summary_cols = st.columns([1.2, 1.2, 2])
     with summary_cols[0]:
-        summary_anchor_date = st.date_input("Week of", value=date.today(), key=f"{panel_key}_summary_anchor")
+        summary_anchor_date = st.date_input("Week of", value=mountain_today(), key=f"{panel_key}_summary_anchor")
     week_start = summary_anchor_date - timedelta(days=summary_anchor_date.weekday())
     week_end = week_start + timedelta(days=6)
     with summary_cols[1]:
@@ -6367,7 +6375,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
 def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="analytics"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()]
     analytics_cols = st.columns(4)
     analytics_cols[0].metric("Clinic active", len([task for task in active_tasks if task.get("category") == "Clinic"]))
     analytics_cols[1].metric("Personal active", len([task for task in active_tasks if task.get("category") == "Personal"]))
@@ -6397,7 +6405,7 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
         st.subheader("By Category")
         st.bar_chart(category_counts)
 
-    upcoming_3_days = len([task for task in active_tasks if task.get("due_date") and task["due_date"] <= (date.today() + timedelta(days=3))])
+    upcoming_3_days = len([task for task in active_tasks if task.get("due_date") and task["due_date"] <= (mountain_today() + timedelta(days=3))])
     recurring_count = len([task for task in active_tasks if task.get("recurrence_rule") in ("daily", "weekly")])
     insight_cols = st.columns(3)
     insight_cols[0].metric("Overdue", len(overdue_tasks))
@@ -6417,7 +6425,7 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
     except Exception:
         protocol_documents = []
 
-    lookback_start = date.today() - timedelta(days=41)
+    lookback_start = mountain_today() - timedelta(days=41)
     recent_cases = [
         item
         for item in surgical_cases
@@ -6430,7 +6438,7 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
         item
         for item in surgical_cases
         if item.get("case_date")
-        and item.get("case_date") >= (date.today() - timedelta(days=90))
+        and item.get("case_date") >= (mountain_today() - timedelta(days=90))
         and item.get("status") in ("planned", "completed")
     ]
     covered_cases = 0
@@ -6440,7 +6448,7 @@ def render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="anal
     protocol_coverage = round((covered_cases / len(coverage_cases)) * 100, 1) if coverage_cases else 0.0
 
     week_starts = []
-    current_week_start = date.today() - timedelta(days=date.today().weekday())
+    current_week_start = mountain_today() - timedelta(days=mountain_today().weekday())
     for offset in range(5, -1, -1):
         week_starts.append(current_week_start - timedelta(days=7 * offset))
 
@@ -8044,7 +8052,7 @@ def render_msk_anatomy_panel(surgical_cases, protocol_documents, panel_key="anat
 def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases"):
     predicted_days = predicted_or_days(app_settings, horizon_days=120)
     predicted_labels = {day: label for day, label in predicted_days}
-    upcoming_predicted = [item for item in predicted_days if item[0] >= date.today()]
+    upcoming_predicted = [item for item in predicted_days if item[0] >= mountain_today()]
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
@@ -8186,7 +8194,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
     top_left, top_right = st.columns([1.1, 0.9], gap="large")
     with top_left:
         with st.form(f"{panel_key}_new_case_form"):
-            case_date = st.date_input("Case date", value=date.today())
+            case_date = st.date_input("Case date", value=mountain_today())
             case_stream = st.selectbox("Case stream", ["Main OR", "DSC OR", "TenJet"])
             or_facility = st.selectbox("OR facility", ["Mercy OR", "DSC OR"])
             procedure_name = st.text_input("Procedure performed")
@@ -8227,7 +8235,7 @@ def render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings
     st.markdown('<div class="panel-title"><h3>OR Calendar</h3><span>Month view of OR cadence and logged cases</span></div>', unsafe_allow_html=True)
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st.session_state:
-        st.session_state[month_key] = date.today().replace(day=1)
+        st.session_state[month_key] = mountain_today().replace(day=1)
 
     calendar_controls = st.columns([1, 2, 1])
     with calendar_controls[0]:
@@ -8327,7 +8335,7 @@ def overview_lens_options(app_settings):
 
 
 def resolve_overview_lens(active_tasks, personal_tasks, clinic_tasks, app_settings, lens_choice):
-    today = date.today()
+    today = mountain_today()
     friday_profile = clinic_day_profiles(app_settings)["procedure_friday"] if today.weekday() == 4 and today.isocalendar().week % 2 == 0 else clinic_day_profiles(app_settings)["general_clinic"]
     if lens_choice == "Clinic day":
         return clinic_day_profiles(app_settings)["surgeon_clinic"]
@@ -8619,7 +8627,7 @@ def render_full_news_page(articles, summary, takeaways, panel_key="news_page"):
 
 
 def render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview"):
-    today = date.today()
+    today = mountain_today()
     lens_key = f"{panel_key}_lens"
     if lens_key not in st.session_state:
         st.session_state[lens_key] = "Auto"
@@ -8636,13 +8644,13 @@ def render_overview_control_tower(tasks, active_tasks, completed_today_all, pers
     else:
         clinic_mode_key = "general_clinic"
 
-    due_today_tasks = [task for task in active_tasks if task.get("due_date") == date.today()]
-    overdue_tasks_today = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    due_today_tasks = [task for task in active_tasks if task.get("due_date") == mountain_today()]
+    overdue_tasks_today = [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()]
     unscheduled_high = [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]
     clinic_backlog = [task for task in active_tasks if task.get("category") == "Clinic"]
     personal_backlog = [task for task in active_tasks if task.get("category") == "Personal"]
 
-    overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == date.today() else 1 if task.get("due_date") else 2, priority_rank(task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
+    overview_focus = sorted(active_tasks, key=lambda task: (0 if task.get("due_date") == mountain_today() else 1 if task.get("due_date") else 2, priority_rank(task["priority"]), task.get("scheduled_time") or time(23, 59)))[:4]
     next_scheduled = scheduled_tasks[:4]
     clinic_summary = clinic_day_summary(clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = schedule_workload_snapshot(active_tasks)
@@ -8721,7 +8729,7 @@ def render_overview_control_tower(tasks, active_tasks, completed_today_all, pers
             quick_title = st.text_input("Task title")
             quick_category = st.selectbox("Category", ["Personal", "Clinic"], index=0 if lens_choice == "Personal focus" else 1 if lens_choice in ("Clinic day", "Procedure Friday") else 0)
             quick_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
-            quick_due = st.date_input("Due date", value=date.today())
+            quick_due = st.date_input("Due date", value=mountain_today())
             quick_submit = st.form_submit_button("Add quick task")
         if quick_submit:
             if not quick_title.strip():
@@ -8769,11 +8777,11 @@ def render_add_task_panel(form_key, defaults, default_category=None):
         default_priority = defaults.get("default_priority", "medium")
         priority_index = priority_options.index(default_priority) if default_priority in priority_options else 1
         priority = st.selectbox("Priority", priority_options, index=priority_index, key=f"{form_key}_priority")
-        due_date = st.date_input("Due date", value=date.today(), key=f"{form_key}_due_date")
+        due_date = st.date_input("Due date", value=mountain_today(), key=f"{form_key}_due_date")
         schedule_enabled = st.checkbox("Schedule this task", key=f"{form_key}_schedule_enabled")
         schedule_cols = st.columns(3)
         with schedule_cols[0]:
-            scheduled_date = st.date_input("Scheduled date", value=date.today(), disabled=not schedule_enabled, key=f"{form_key}_scheduled_date")
+            scheduled_date = st.date_input("Scheduled date", value=mountain_today(), disabled=not schedule_enabled, key=f"{form_key}_scheduled_date")
         with schedule_cols[1]:
             scheduled_time = st.time_input(
                 "Scheduled time",
@@ -8981,7 +8989,7 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
             key=f"{panel_key}_review_prompt",
         )
         if st.button("Generate Review Summary", key=f"{panel_key}_gen_review", type="primary"):
-            completed_today_tasks = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == date.today()]
+            completed_today_tasks = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == mountain_today()]
             review_text, tomorrow_text, review_error = generate_daily_review(active_tasks, completed_today_tasks, review_input)
             st.session_state.daily_review_text = review_text
             st.session_state.tomorrow_plan_text = tomorrow_text
@@ -9002,7 +9010,7 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
 def render_timeline_panel(scheduled_tasks, timeline_days):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Schedule Timeline</h3><span>Calendar-style view</span></div>', unsafe_allow_html=True)
-    timeline_start = date.today()
+    timeline_start = mountain_today()
     timeline_end = timeline_start + timedelta(days=int(timeline_days) - 1)
     timeline_tasks = [
         task

@@ -1,6 +1,14 @@
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import streamlit as st
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 def summarize_schedule_conflicts(scheduled_tasks, fallback_minutes=60, daily_capacity_minutes=480):
@@ -118,7 +126,7 @@ def run_app(context, st_module=st):
                     {
                         **app_settings,
                         setting_key: st_module.session_state.get(notes_state_key, "").strip(),
-                        updated_key: datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        updated_key: datetime.now(MOUNTAIN_TIMEZONE).strftime("%Y-%m-%d %H:%M MT"),
                     }
                 )
                 st_module.success("Notes saved.")
@@ -216,7 +224,7 @@ def run_app(context, st_module=st):
                 quick_title = st_module.text_input("Task title", placeholder="What needs to get done?")
                 quick_category = st_module.selectbox("Category", ["Personal", "Clinic"])
                 quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
-                quick_due = st_module.date_input("Due date", value=date.today())
+                quick_due = st_module.date_input("Due date", value=mountain_today())
                 quick_submit = st_module.form_submit_button("Add task", type="primary")
             if quick_submit:
                 if not quick_title.strip():
@@ -392,7 +400,7 @@ def run_app(context, st_module=st):
     # Fetch and cache news for the day (auto-refresh each morning + manual refresh option)
     import os
     news_api_key = os.getenv("NEWSAPI_KEY")
-    today_key = date.today().isoformat()
+    today_key = datetime.now(MOUNTAIN_TIMEZONE).date().isoformat()
     force_news_refresh = news_manual_refresh_requested or bool(st_module.session_state.pop("news_force_refresh", False))
     needs_daily_refresh = st_module.session_state.get("news_cache_date") != today_key
     cache_missing = "news_articles_cache" not in st_module.session_state
@@ -403,7 +411,7 @@ def run_app(context, st_module=st):
         else:
             st_module.session_state.news_articles_cache = []
         st_module.session_state.news_cache_date = today_key
-        st_module.session_state.news_last_refreshed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st_module.session_state.news_last_refreshed_at = datetime.now(MOUNTAIN_TIMEZONE).strftime("%Y-%m-%d %H:%M MT")
 
         # Recompute summary/takeaways whenever articles are refreshed.
         if summarize_news_with_ai and st_module.session_state.news_articles_cache and ai_enabled():
@@ -432,7 +440,7 @@ def run_app(context, st_module=st):
     query = (search_query or "").strip().lower()
     all_active_tasks = [task for task in tasks if task.get("status") != "completed"]
     all_completed_tasks = [task for task in tasks if task.get("status") == "completed"]
-    completed_today_all = [task for task in all_completed_tasks if task.get("completed_date") == date.today()]
+    completed_today_all = [task for task in all_completed_tasks if task.get("completed_date") == mountain_today()]
 
     def task_matches_filters(task):
         if category_filter and task.get("category") not in category_filter:
@@ -464,8 +472,8 @@ def run_app(context, st_module=st):
             task.get("completed_date") or date.max,
         ),
     )
-    due_today = [task for task in active_tasks if task.get("due_date") == date.today()]
-    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    due_today = [task for task in active_tasks if task.get("due_date") == mountain_today()]
+    overdue_tasks = [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()]
     scheduled_tasks = sorted(
         [task for task in active_tasks if task.get("scheduled_date") and task.get("scheduled_time")],
         key=lambda task: (task["scheduled_date"], task["scheduled_time"], priority_rank(task["priority"])),
@@ -481,7 +489,7 @@ def run_app(context, st_module=st):
         with command_cols[2]:
             command_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1, label_visibility="collapsed")
         with command_cols[3]:
-            command_due = st_module.date_input("Due", value=date.today(), label_visibility="collapsed")
+            command_due = st_module.date_input("Due", value=mountain_today(), label_visibility="collapsed")
         with command_cols[4]:
             command_submit = st_module.form_submit_button("Add", type="primary")
 
@@ -496,12 +504,36 @@ def run_app(context, st_module=st):
     ritual_started_key = "day_ritual_started_on"
     ritual_closed_key = "day_ritual_closed_on"
     ritual_snapshot_key = "day_ritual_snapshot"
+    ritual_started_at_key = "day_ritual_started_at"
+    ritual_closed_at_key = "day_ritual_closed_at"
+    ritual_submit_date_key = "day_ritual_submit_date"
+    ritual_submit_time_key = "day_ritual_submit_time"
+
+    mountain_now = datetime.now(MOUNTAIN_TIMEZONE)
+
+    if ritual_submit_date_key not in st_module.session_state:
+        st_module.session_state[ritual_submit_date_key] = mountain_now.date()
+    if ritual_submit_time_key not in st_module.session_state:
+        st_module.session_state[ritual_submit_time_key] = mountain_now.replace(second=0, microsecond=0).time()
+
+    submission_cols = st_module.columns([1, 1, 5])
+    with submission_cols[0]:
+        st_module.date_input("Submission date", key=ritual_submit_date_key)
+    with submission_cols[1]:
+        st_module.time_input("Submission time", key=ritual_submit_time_key, step=60)
+    with submission_cols[2]:
+        st_module.caption("Select the date and time you want recorded for Start My Day and Close My Day (Mountain Time).")
 
     ritual_cols = st_module.columns([1.2, 1.2, 5])
     with ritual_cols[0]:
         if st_module.button("Start My Day", key="day_ritual_start", use_container_width=True):
-            st_module.session_state[ritual_started_key] = date.today().isoformat()
+            submitted_date = st_module.session_state.get(ritual_submit_date_key, mountain_now.date())
+            submitted_time = st_module.session_state.get(ritual_submit_time_key) or mountain_now.replace(second=0, microsecond=0).time()
+            submitted_at = datetime.combine(submitted_date, submitted_time)
+            st_module.session_state[ritual_started_key] = submitted_date.isoformat()
+            st_module.session_state[ritual_started_at_key] = submitted_at.isoformat(timespec="minutes")
             st_module.session_state[ritual_closed_key] = None
+            st_module.session_state[ritual_closed_at_key] = None
             st_module.session_state[ritual_snapshot_key] = {
                 "started_active": len(active_tasks),
                 "started_due_today": len(due_today),
@@ -510,7 +542,11 @@ def run_app(context, st_module=st):
             st_module.rerun()
     with ritual_cols[1]:
         if st_module.button("Close My Day", key="day_ritual_close", use_container_width=True):
-            st_module.session_state[ritual_closed_key] = date.today().isoformat()
+            submitted_date = st_module.session_state.get(ritual_submit_date_key, mountain_now.date())
+            submitted_time = st_module.session_state.get(ritual_submit_time_key) or mountain_now.replace(second=0, microsecond=0).time()
+            submitted_at = datetime.combine(submitted_date, submitted_time)
+            st_module.session_state[ritual_closed_key] = submitted_date.isoformat()
+            st_module.session_state[ritual_closed_at_key] = submitted_at.isoformat(timespec="minutes")
             st_module.session_state[ritual_snapshot_key] = {
                 "completed_today": len(completed_today_all),
                 "remaining_active": len(active_tasks),
@@ -520,14 +556,40 @@ def run_app(context, st_module=st):
     with ritual_cols[2]:
         started_on = st_module.session_state.get(ritual_started_key)
         closed_on = st_module.session_state.get(ritual_closed_key)
+        started_at_raw = st_module.session_state.get(ritual_started_at_key)
+        closed_at_raw = st_module.session_state.get(ritual_closed_at_key)
+
+        started_at = None
+        closed_at = None
+        try:
+            if started_at_raw:
+                started_at = datetime.fromisoformat(str(started_at_raw))
+        except ValueError:
+            started_at = None
+        try:
+            if closed_at_raw:
+                closed_at = datetime.fromisoformat(str(closed_at_raw))
+        except ValueError:
+            closed_at = None
+
         ritual_snapshot = st_module.session_state.get(ritual_snapshot_key) or {}
-        if closed_on == date.today().isoformat():
+        if closed_at:
+            closed_label = closed_at.strftime("%Y-%m-%d %I:%M %p").replace(" 0", " ")
             st_module.caption(
-                f"Closed today: {ritual_snapshot.get('completed_today', 0)} completed · {ritual_snapshot.get('remaining_active', 0)} remaining active."
+                f"Closed at {closed_label}: {ritual_snapshot.get('completed_today', 0)} completed · {ritual_snapshot.get('remaining_active', 0)} remaining active."
             )
-        elif started_on == date.today().isoformat():
+        elif started_at:
+            started_label = started_at.strftime("%Y-%m-%d %I:%M %p").replace(" 0", " ")
             st_module.caption(
-                f"Started today: {ritual_snapshot.get('started_active', len(active_tasks))} active · {ritual_snapshot.get('started_due_today', len(due_today))} due today."
+                f"Started at {started_label}: {ritual_snapshot.get('started_active', len(active_tasks))} active · {ritual_snapshot.get('started_due_today', len(due_today))} due that day."
+            )
+        elif closed_on:
+            st_module.caption(
+                f"Closed on {closed_on}: {ritual_snapshot.get('completed_today', 0)} completed · {ritual_snapshot.get('remaining_active', 0)} remaining active."
+            )
+        elif started_on:
+            st_module.caption(
+                f"Started on {started_on}: {ritual_snapshot.get('started_active', len(active_tasks))} active · {ritual_snapshot.get('started_due_today', len(due_today))} due that day."
             )
         else:
             st_module.caption("Use Start My Day and Close My Day for a lightweight daily ritual.")

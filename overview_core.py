@@ -1,6 +1,14 @@
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from scheduling_core import priority_rank, safe_int
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 def clinic_day_profiles(app_settings):
@@ -70,7 +78,7 @@ def build_time_blocks(profile):
 
 
 def clinic_day_summary(clinic_tasks, active_tasks, app_settings, mode_key, reference_date=None):
-    today = reference_date or date.today()
+    today = reference_date or mountain_today()
     profiles = clinic_day_profiles(app_settings)
     profile = profiles.get(mode_key, profiles["general_clinic"])
     block_plan = build_time_blocks(profile)
@@ -138,7 +146,7 @@ def overview_runtime_settings(app_settings):
 
 
 def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks, clinic_tasks, reference_date=None):
-    today = reference_date or date.today()
+    today = reference_date or mountain_today()
     mode = overview_settings.get("day_mode", "Auto")
     weekday_name = today.strftime("%A")
     clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Monday", "Thursday"]

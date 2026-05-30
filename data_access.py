@@ -1,8 +1,16 @@
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
 import streamlit as st
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 def _task_visible_in_app(task, reference_time=None):
@@ -138,7 +146,7 @@ def add_surgical_case(
                         notes_value,
                         education_url_value,
                         education_notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
         return
@@ -156,7 +164,7 @@ def add_surgical_case(
             "notes": notes_value,
             "education_url": education_url_value,
             "education_notes": education_notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -273,7 +281,7 @@ def add_protocol_document(
                         upload_mime,
                         upload_bytes,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -289,7 +297,7 @@ def add_protocol_document(
             "file_mime": upload_mime,
             "file_bytes": upload_bytes,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -327,7 +335,7 @@ def set_protocol_case_links(protocol_id, case_ids, db_enabled_fn=None, get_conne
                         VALUES (%s, %s, %s)
                         ON CONFLICT (case_id, protocol_id) DO NOTHING
                         """,
-                        (case_id, protocol_id, date.today()),
+                        (case_id, protocol_id, mountain_today()),
                     )
         return
 
@@ -498,7 +506,7 @@ def add_lead_clinical_issue(
                         escalation_reason_value,
                         decision_needed_by,
                         dependency_owner_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -523,7 +531,7 @@ def add_lead_clinical_issue(
             "decision_needed_by": decision_needed_by,
             "dependency_owner": dependency_owner_value,
             "resolved_date": None,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -645,8 +653,8 @@ def add_lead_sop_entry(
                         quick_steps_value,
                         link_value,
                         status_value,
-                        date.today(),
-                        date.today(),
+                        mountain_today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -664,8 +672,8 @@ def add_lead_sop_entry(
             "quick_steps": quick_steps_value,
             "link_url": link_value,
             "status": status_value,
-            "updated_date": date.today(),
-            "created_date": date.today(),
+            "updated_date": mountain_today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -753,7 +761,7 @@ def add_lead_relationship_touchpoint(
                         asks_value,
                         win_value,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -773,7 +781,7 @@ def add_lead_relationship_touchpoint(
             "open_asks": asks_value,
             "recent_win": win_value,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -874,7 +882,7 @@ def add_lead_huddle_log(
                         str(escalation_notes or "").strip(),
                         str(recap_sent_to or "").strip(),
                         str(shift_notes or "").strip(),
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
         return
@@ -890,7 +898,7 @@ def add_lead_huddle_log(
             "escalation_notes": str(escalation_notes or "").strip(),
             "recap_sent_to": str(recap_sent_to or "").strip(),
             "shift_notes": str(shift_notes or "").strip(),
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
 
@@ -973,7 +981,7 @@ def add_lead_skill_signoff(
                         signed_off_date,
                         signed_by_value,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -992,7 +1000,7 @@ def add_lead_skill_signoff(
             "signed_off_date": signed_off_date,
             "signed_off_by": signed_by_value,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -1115,7 +1123,7 @@ def add_lead_education_request(
                         session_date,
                         owner_value,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -1135,7 +1143,7 @@ def add_lead_education_request(
             "session_date": session_date,
             "owner_name": owner_value,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -1259,7 +1267,7 @@ def add_autoclave_maintenance_item(
                         owner_value,
                         vendor_value,
                         notes_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -1279,7 +1287,7 @@ def add_autoclave_maintenance_item(
             "owner_name": owner_value,
             "vendor_contact": vendor_value,
             "notes": notes_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id
@@ -1406,7 +1414,7 @@ def add_lead_document(
                         file_bytes,
                         notes_value,
                         uploaded_by_value,
-                        date.today(),
+                        mountain_today(),
                     ),
                 )
                 inserted = cur.fetchone()
@@ -1426,7 +1434,7 @@ def add_lead_document(
             "file_bytes": file_bytes,
             "notes": notes_value,
             "uploaded_by": uploaded_by_value,
-            "created_date": date.today(),
+            "created_date": mountain_today(),
         }
     )
     return next_id

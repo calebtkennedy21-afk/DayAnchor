@@ -1,7 +1,15 @@
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 import calendar
 
 import streamlit as st
+
+
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+def mountain_today():
+    return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
 def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, height=420, start_page=1, max_preview_pages=5):
@@ -67,7 +75,7 @@ def _resolve_default_schedule_time(value):
 
 
 def build_today_plan(active_tasks, scheduled_tasks, attention_sort_key_fn):
-    today = date.today()
+    today = mountain_today()
 
     def sort_key(task):
         return attention_sort_key_fn(task, today)
@@ -136,7 +144,7 @@ def case_matches_library_filters(case_item, stream_filter, date_filter, normaliz
         if not isinstance(case_date_value, date):
             return False
         if today_value is None:
-            today_value = date.today()
+            today_value = mountain_today()
         if date_filter == "Next 30 days":
             if not (today_value <= case_date_value <= today_value + timedelta(days=30)):
                 return False
@@ -200,7 +208,7 @@ def render_overview_control_tower(
     deps,
     st_module=st,
 ):
-    today = date.today()
+    today = mountain_today()
     lens_key = f"{panel_key}_lens"
     if lens_key not in st_module.session_state:
         st_module.session_state[lens_key] = "Auto"
@@ -217,8 +225,8 @@ def render_overview_control_tower(
     else:
         clinic_mode_key = "general_clinic"
 
-    due_today_tasks = [task for task in active_tasks if task.get("due_date") == date.today()]
-    overdue_tasks_today = [task for task in active_tasks if task.get("due_date") and task["due_date"] < date.today()]
+    due_today_tasks = [task for task in active_tasks if task.get("due_date") == mountain_today()]
+    overdue_tasks_today = [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()]
     unscheduled_high = [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))]
     clinic_backlog = [task for task in active_tasks if task.get("category") == "Clinic"]
     personal_backlog = [task for task in active_tasks if task.get("category") == "Personal"]
@@ -232,7 +240,7 @@ def render_overview_control_tower(
     pinned_focus = next((task for task in today_plan["ordered"] if task.get("id") == pinned_focus_id), None)
     focus_task = pinned_focus or today_plan["primary"]
 
-    overview_focus = sorted(active_tasks, key=lambda task: deps["task_attention_sort_key"](task, date.today()))[:4]
+    overview_focus = sorted(active_tasks, key=lambda task: deps["task_attention_sort_key"](task, mountain_today()))[:4]
     next_scheduled = scheduled_tasks[:4]
     clinic_summary = deps["clinic_day_summary"](clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = deps["schedule_workload_snapshot"](active_tasks)
@@ -528,7 +536,7 @@ def render_overview_control_tower(
         if today_plan["ordered"]:
             st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Execution queue</h3><span>Ordered by urgency and priority</span></div>', unsafe_allow_html=True)
             for task in today_plan["ordered"][:4]:
-                attention = deps["task_attention_signal"](task, date.today())
+                attention = deps["task_attention_signal"](task, mountain_today())
                 tag = attention["label"]
                 st_module.markdown(
                     f"- <strong>{task['title']}</strong> · {tag} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
@@ -562,7 +570,7 @@ def render_overview_control_tower(
             if not quick_title.strip():
                 st_module.warning("Add a task title first.")
             else:
-                deps["add_task"](quick_title.strip(), "", default_lane, quick_priority, date.today())
+                deps["add_task"](quick_title.strip(), "", default_lane, quick_priority, mountain_today())
                 st_module.success("Quick task added from overview.")
                 st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
@@ -578,7 +586,7 @@ def render_surgical_cases_panel(
 ):
     predicted_days = deps["predicted_or_days"](app_settings, horizon_days=120)
     predicted_labels = {day: label for day, label in predicted_days}
-    upcoming_predicted = [item for item in predicted_days if item[0] >= date.today()]
+    upcoming_predicted = [item for item in predicted_days if item[0] >= mountain_today()]
 
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown('<div class="panel-title"><h3>Surgical Cases</h3><span>Non-PHI case log for surgery and TenJet procedures</span></div>', unsafe_allow_html=True)
@@ -615,7 +623,7 @@ def render_surgical_cases_panel(
         form_reset_key = f"{panel_key}_new_case_reset"
 
         if date_key not in st_module.session_state:
-            st_module.session_state[date_key] = date.today()
+            st_module.session_state[date_key] = mountain_today()
         if stream_key not in st_module.session_state:
             st_module.session_state[stream_key] = "Main OR"
         if status_key not in st_module.session_state:
@@ -779,7 +787,7 @@ def render_surgical_cases_panel(
     st_module.markdown('<div class="panel-title"><h3>OR Calendar</h3><span>Month view of OR cadence and logged cases</span></div>', unsafe_allow_html=True)
     month_key = f"{panel_key}_month_anchor"
     if month_key not in st_module.session_state:
-        st_module.session_state[month_key] = date.today().replace(day=1)
+        st_module.session_state[month_key] = mountain_today().replace(day=1)
 
     calendar_controls = st_module.columns([1, 2, 1])
     with calendar_controls[0]:
@@ -1756,7 +1764,7 @@ def render_ai_panel(tasks, active_tasks, panel_key, deps, st_module=st):
             key=f"{panel_key}_review_prompt",
         )
         if st_module.button("Generate Review Summary", key=f"{panel_key}_gen_review", type="primary"):
-            completed_today_tasks = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == date.today()]
+            completed_today_tasks = [task for task in tasks if task.get("status") == "completed" and task.get("completed_date") == mountain_today()]
             review_text, tomorrow_text, review_error = deps["generate_daily_review"](active_tasks, completed_today_tasks, review_input)
             st_module.session_state.daily_review_text = review_text
             st_module.session_state.tomorrow_plan_text = tomorrow_text
