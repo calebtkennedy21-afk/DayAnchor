@@ -1,6 +1,10 @@
 from datetime import date
+import sys
+from pathlib import Path
 
-from ai_workflows import generate_family_schedule_insight, generate_family_weekly_briefing
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ai_workflows import generate_family_goal_coaching, generate_family_schedule_insight, generate_family_weekly_briefing, generate_family_weekly_digest
 
 
 def test_generate_family_schedule_insight_fallback_mentions_adjustment():
@@ -59,3 +63,68 @@ def test_generate_family_weekly_briefing_fallback_contains_actions():
     assert error == ""
     assert "Weekly Family Briefing" in text
     assert "## Recommended Actions" in text
+
+
+def test_generate_family_goal_coaching_fallback_contains_moves():
+    summary = {
+        "active_goal_count": 3,
+        "on_track_count": 1,
+        "attention_count": 2,
+        "week_checkins": 4,
+        "best_streak": 3,
+    }
+    goals = [
+        {"title": "Family dinner", "owner": "Family", "status": "active", "week_checkins": 2, "target_frequency": 4},
+        {"title": "Read together", "owner": "Kids", "status": "active", "week_checkins": 1, "target_frequency": 3},
+    ]
+
+    text, error = generate_family_goal_coaching(
+        summary,
+        goals,
+        lambda: False,
+        lambda: "",
+        lambda: "gpt-4o-mini",
+    )
+
+    assert error == ""
+    assert "Weekly Family Goal Coaching" in text
+    assert "## Next 3 Moves" in text
+
+
+def test_generate_family_weekly_digest_fallback_contains_priority_moves():
+    schedule_summary = {
+        "upcoming_count": 6,
+        "appointment_count": 2,
+        "trip_count": 1,
+        "camp_count": 1,
+        "conflict_count": 2,
+    }
+    goal_summary = {
+        "active_goal_count": 3,
+        "on_track_count": 1,
+        "attention_count": 2,
+        "week_checkins": 4,
+        "best_streak": 3,
+    }
+    upcoming_items = [
+        {"start_date": date(2026, 6, 2), "title": "Dentist", "item_type": "Appointment"},
+        {"start_date": date(2026, 6, 4), "title": "Soccer camp", "item_type": "Sports camp"},
+    ]
+    active_goals = [
+        {"title": "Family dinner", "owner": "Family", "week_checkins": 2, "target_frequency": 4},
+        {"title": "Read together", "owner": "Kids", "week_checkins": 1, "target_frequency": 3},
+    ]
+
+    text, error = generate_family_weekly_digest(
+        schedule_summary,
+        goal_summary,
+        upcoming_items,
+        active_goals,
+        lambda: False,
+        lambda: "",
+        lambda: "gpt-4o-mini",
+    )
+
+    assert error == ""
+    assert "Family Weekly Digest" in text
+    assert "## Priority Moves" in text

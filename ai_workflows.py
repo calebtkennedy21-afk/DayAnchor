@@ -690,6 +690,205 @@ def generate_family_weekly_briefing(
         return "", f"AI family briefing failed: {exc}"
 
 
+def generate_family_goal_coaching(
+    goal_summary,
+    goals,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    summary = goal_summary or {}
+    active_goal_count = int(summary.get("active_goal_count") or 0)
+    on_track_count = int(summary.get("on_track_count") or 0)
+    attention_count = int(summary.get("attention_count") or 0)
+    week_checkins = int(summary.get("week_checkins") or 0)
+    best_streak = int(summary.get("best_streak") or 0)
+
+    goal_lines = []
+    for item in (goals or [])[:8]:
+        title = str(item.get("title") or "Untitled goal").strip()
+        owner = str(item.get("owner") or "Family").strip()
+        status = str(item.get("status") or "active").strip()
+        week_progress = int(item.get("week_checkins") or 0)
+        target = int(item.get("target_frequency") or 1)
+        goal_lines.append(f"- {title} ({owner}) status={status}, week={week_progress}/{target}")
+    goals_text = "\n".join(goal_lines) if goal_lines else "- None"
+
+    if not ai_enabled_fn():
+        if attention_count > 1:
+            focus = "Pick one shared 10-minute family check-in block and recover one under-target goal first."
+        elif active_goal_count and on_track_count == active_goal_count:
+            focus = "Protect momentum by scheduling one celebration moment and keep the same check-in rhythm next week."
+        elif week_checkins == 0:
+            focus = "Start small: log one check-in today on the easiest active goal to restart consistency."
+        else:
+            focus = "Anchor check-ins to an existing routine (dinner or bedtime) so progress is easier to sustain."
+
+        return (
+            "### Weekly Family Goal Coaching\n"
+            f"Active goals: {active_goal_count}, on track: {on_track_count}, attention needed: {attention_count}.\n\n"
+            "## Coaching Focus\n"
+            f"Actionable adjustment: {focus}\n\n"
+            "## Next 3 Moves\n"
+            "- Confirm one owner for each active goal.\n"
+            "- Put one check-in block on the calendar for this week.\n"
+            "- Review goal progress in the next family planning check-in."
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise family coaching assistant. Provide practical weekly coaching for family goals with clear next steps."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Family goal snapshot:\n"
+                        f"- active goals: {active_goal_count}\n"
+                        f"- on track goals: {on_track_count}\n"
+                        f"- attention goals: {attention_count}\n"
+                        f"- check-ins this week: {week_checkins}\n"
+                        f"- best streak: {best_streak}\n\n"
+                        "Goal details:\n"
+                        f"{goals_text}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "### Weekly Family Goal Coaching\n"
+                        "## Coaching Focus\n"
+                        "## Next 3 Moves\n"
+                        "Requirements:\n"
+                        "- Keep it concise (6-10 lines total).\n"
+                        "- Include exactly one sentence in Coaching Focus beginning with 'Actionable adjustment:'.\n"
+                        "- In Next 3 Moves, include exactly 3 bullet points."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty family goal coaching response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI family goal coaching failed: {exc}"
+
+
+def generate_family_weekly_digest(
+    schedule_summary,
+    goal_summary,
+    upcoming_items,
+    active_goals,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    schedule = schedule_summary or {}
+    goals = goal_summary or {}
+
+    upcoming_count = int(schedule.get("upcoming_count") or 0)
+    conflict_count = int(schedule.get("conflict_count") or 0)
+    appointment_count = int(schedule.get("appointment_count") or 0)
+    trip_count = int(schedule.get("trip_count") or 0)
+    camp_count = int(schedule.get("camp_count") or 0)
+
+    active_goal_count = int(goals.get("active_goal_count") or 0)
+    on_track_count = int(goals.get("on_track_count") or 0)
+    attention_count = int(goals.get("attention_count") or 0)
+    week_checkins = int(goals.get("week_checkins") or 0)
+
+    item_lines = []
+    for item in (upcoming_items or [])[:6]:
+        item_lines.append(
+            f"- {item.get('start_date') or 'unknown'}: {str(item.get('title') or 'Untitled').strip()} ({str(item.get('item_type') or 'family item').strip()})"
+        )
+    items_text = "\n".join(item_lines) if item_lines else "- None"
+
+    goal_lines = []
+    for goal in (active_goals or [])[:6]:
+        goal_lines.append(
+            f"- {str(goal.get('title') or 'Untitled goal').strip()} ({str(goal.get('owner') or 'Family').strip()}): {int(goal.get('week_checkins') or 0)}/{int(goal.get('target_frequency') or 1)}"
+        )
+    goals_text = "\n".join(goal_lines) if goal_lines else "- None"
+
+    if not ai_enabled_fn():
+        risk_line = "Conflict pressure is elevated this week." if conflict_count else "Conflict pressure is currently manageable."
+        if attention_count > 1:
+            adjustment = "Prioritize one under-target family goal and protect a 15-minute planning block to recover it."
+        elif trip_count or camp_count:
+            adjustment = "Bundle trip/camp prep tasks into one checklist block to reduce day-of friction."
+        else:
+            adjustment = "Run a short Sunday planning reset and lock in one check-in block per active goal."
+
+        return (
+            "### Family Weekly Digest\n"
+            f"Schedule: {upcoming_count} items ({appointment_count} appointments, {trip_count + camp_count} trips/camps).\n"
+            f"Goals: {active_goal_count} active, {on_track_count} on track, {attention_count} need attention.\n\n"
+            "## Combined Snapshot\n"
+            f"{risk_line} You logged {week_checkins} family goal check-ins this week.\n\n"
+            "## This Week's Adjustment\n"
+            f"Actionable adjustment: {adjustment}\n\n"
+            "## Priority Moves\n"
+            "- Confirm owners for the highest-friction upcoming items.\n"
+            "- Add one prep/check-in block on the calendar before midweek.\n"
+            "- Review progress and conflicts in one family reset meeting."
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a concise family operations coach. Produce one integrated weekly digest covering schedule and goals.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Family schedule snapshot:\n"
+                        f"- upcoming items: {upcoming_count}\n"
+                        f"- appointments: {appointment_count}\n"
+                        f"- trips: {trip_count}\n"
+                        f"- camps/sports: {camp_count}\n"
+                        f"- conflict days: {conflict_count}\n\n"
+                        "Family goals snapshot:\n"
+                        f"- active goals: {active_goal_count}\n"
+                        f"- on track goals: {on_track_count}\n"
+                        f"- attention goals: {attention_count}\n"
+                        f"- check-ins this week: {week_checkins}\n\n"
+                        "Upcoming items:\n"
+                        f"{items_text}\n\n"
+                        "Active goals:\n"
+                        f"{goals_text}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "### Family Weekly Digest\n"
+                        "## Combined Snapshot\n"
+                        "## This Week's Adjustment\n"
+                        "## Priority Moves\n"
+                        "Requirements:\n"
+                        "- Keep it concise (7-12 short lines).\n"
+                        "- In This Week's Adjustment, include exactly one sentence beginning with 'Actionable adjustment:'.\n"
+                        "- In Priority Moves, include exactly 3 bullet points."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty family weekly digest response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI family weekly digest failed: {exc}"
+
+
 def generate_weekly_morning_ritual_insight(
     weekly_trends,
     recent_checkins,
