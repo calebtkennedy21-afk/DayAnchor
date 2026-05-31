@@ -185,6 +185,8 @@ DEFAULT_APP_SETTINGS = {
     "family_schedule_items": [],
     "family_goals": [],
     "family_weekly_notes": [],
+    "family_notes": "",
+    "family_notes_updated_at": "",
 }
 
 
@@ -4898,17 +4900,31 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     raw_family_items = list((app_settings or {}).get("family_schedule_items") or [])
     raw_family_goals = list((app_settings or {}).get("family_goals") or [])
     raw_family_weekly_notes = list((app_settings or {}).get("family_weekly_notes") or [])
+    raw_family_notes = str((app_settings or {}).get("family_notes") or "")
+    raw_family_notes_updated_at = str((app_settings or {}).get("family_notes_updated_at") or "")
     family_items = normalize_family_schedule_items(raw_family_items)
     family_goals = normalize_family_goals(raw_family_goals, reference_date=mountain_today())
     family_weekly_notes = normalize_family_weekly_notes(raw_family_weekly_notes)
 
-    def _save_family_state(updated_raw_items=None, updated_raw_goals=None, updated_raw_weekly_notes=None):
+    def _save_family_state(
+        updated_raw_items=None,
+        updated_raw_goals=None,
+        updated_raw_weekly_notes=None,
+        updated_family_notes=None,
+        updated_family_notes_updated_at=None,
+    ):
         save_app_settings(
             {
                 **(app_settings or {}),
                 "family_schedule_items": updated_raw_items if updated_raw_items is not None else raw_family_items,
                 "family_goals": updated_raw_goals if updated_raw_goals is not None else raw_family_goals,
                 "family_weekly_notes": updated_raw_weekly_notes if updated_raw_weekly_notes is not None else raw_family_weekly_notes,
+                "family_notes": updated_family_notes if updated_family_notes is not None else raw_family_notes,
+                "family_notes_updated_at": (
+                    updated_family_notes_updated_at
+                    if updated_family_notes_updated_at is not None
+                    else raw_family_notes_updated_at
+                ),
             }
         )
 
@@ -4920,6 +4936,12 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
 
     def _save_family_weekly_notes(updated_raw_weekly_notes):
         _save_family_state(updated_raw_weekly_notes=updated_raw_weekly_notes)
+
+    def _save_family_notes(notes_text):
+        _save_family_state(
+            updated_family_notes=notes_text,
+            updated_family_notes_updated_at=datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+        )
 
     def _apply_update(item, updates):
         source_index = item.get("source_index")
@@ -4982,6 +5004,26 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
         f"Items with checklists: {family_summary['items_with_checklists']} · "
         f"Weekend items: {family_summary['weekend_count']}"
     )
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Family Notes</h3><span>Shared notes, reminders, and planning context</span></div>', unsafe_allow_html=True)
+    family_notes_key = f"{panel_key}_family_notes_text"
+    if family_notes_key not in st.session_state:
+        st.session_state[family_notes_key] = raw_family_notes
+    st.text_area(
+        "Notes",
+        key=family_notes_key,
+        height=140,
+        placeholder="Capture family logistics notes, ideas, and follow-ups...",
+    )
+    notes_cols = st.columns(2)
+    with notes_cols[0]:
+        if st.button("Save family notes", key=f"{panel_key}_save_family_notes", type="secondary"):
+            _save_family_notes(str(st.session_state.get(family_notes_key) or "").strip())
+            st.success("Family notes saved.")
+            st.rerun()
+    with notes_cols[1]:
+        if raw_family_notes_updated_at:
+            st.caption(f"Last saved: {raw_family_notes_updated_at}")
 
     family_goal_summary = family_goal_dashboard_summary(family_goals)
     today_value = mountain_today()
