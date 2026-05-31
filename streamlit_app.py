@@ -188,6 +188,14 @@ DEFAULT_APP_SETTINGS = {
     "family_notes": "",
     "family_notes_updated_at": "",
     "quick_reminders": [],
+    "clinic_day_closeout_template": [
+        "Confirm all charting is complete",
+        "Review and send pending patient messages",
+        "Confirm orders, labs, and imaging follow-through",
+        "Verify post-op and follow-up scheduling",
+        "Restock key room and procedure supplies",
+    ],
+    "clinic_day_closeout_log": {},
 }
 
 
@@ -197,6 +205,13 @@ MORNING_SLEEP_OPTIONS = ["Poor", "Fair", "Good", "Great"]
 MORNING_ENERGY_OPTIONS = ["Low", "Medium", "High"]
 MORNING_MOOD_OPTIONS = ["Drained", "Neutral", "Positive", "Focused"]
 MORNING_PLANNED_OPTIONS = ["Yes", "No"]
+CLINIC_DAY_CLOSEOUT_TEMPLATE_DEFAULTS = [
+    "Confirm all charting is complete",
+    "Review and send pending patient messages",
+    "Confirm orders, labs, and imaging follow-through",
+    "Verify post-op and follow-up scheduling",
+    "Restock key room and procedure supplies",
+]
 
 
 def normalize_database_url(raw_url):
@@ -1005,6 +1020,75 @@ def normalize_quick_reminders(raw_reminders):
             item.get("text") or "",
         ),
     )
+
+
+def normalize_clinic_day_closeout_template(raw_template):
+    if isinstance(raw_template, str):
+        raw_items = raw_template.splitlines()
+    elif isinstance(raw_template, list):
+        raw_items = raw_template
+    else:
+        raw_items = []
+
+    cleaned = []
+    seen = set()
+    for raw_item in raw_items:
+        item = str(raw_item or "").strip().strip("- ").strip()
+        if not item:
+            continue
+        item_key = item.lower()
+        if item_key in seen:
+            continue
+        cleaned.append(item)
+        seen.add(item_key)
+
+    if cleaned:
+        return cleaned
+    return list(CLINIC_DAY_CLOSEOUT_TEMPLATE_DEFAULTS)
+
+
+def normalize_clinic_day_closeout_log(raw_log, allowed_items=None):
+    if not isinstance(raw_log, dict):
+        return {}
+
+    allowed_lookup = None
+    if isinstance(allowed_items, list):
+        allowed_lookup = {str(item).strip().lower() for item in allowed_items if str(item).strip()}
+
+    normalized = {}
+    for raw_day, raw_entry in raw_log.items():
+        try:
+            day_value = date.fromisoformat(str(raw_day))
+        except ValueError:
+            continue
+
+        if isinstance(raw_entry, dict):
+            raw_completed = raw_entry.get("completed_items")
+            notes_value = str(raw_entry.get("notes") or "").strip()
+            saved_at_value = str(raw_entry.get("saved_at") or "").strip()
+        else:
+            raw_completed = raw_entry
+            notes_value = ""
+            saved_at_value = ""
+
+        completed_items = []
+        if isinstance(raw_completed, list):
+            for item in raw_completed:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                if allowed_lookup is not None and text.lower() not in allowed_lookup:
+                    continue
+                if text not in completed_items:
+                    completed_items.append(text)
+
+        normalized[day_value.isoformat()] = {
+            "completed_items": completed_items,
+            "notes": notes_value,
+            "saved_at": saved_at_value,
+        }
+
+    return dict(sorted(normalized.items()))
 
 
 def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
@@ -6120,6 +6204,92 @@ def render_daily_review_panel(tasks, active_tasks, completed_today_all, app_sett
     render_review_command_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key=panel_key)
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Clinic Day Closeout Checklist</h3><span>Generic end-of-day checklist not tied to tasks</span></div>', unsafe_allow_html=True)
+
+    checklist_template = normalize_clinic_day_closeout_template((app_settings or {}).get("clinic_day_closeout_template"))
+    checklist_log = normalize_clinic_day_closeout_log(
+        (app_settings or {}).get("clinic_day_closeout_log"),
+        allowed_items=checklist_template,
+    )
+
+    selected_day = st.date_input(
+        "Clinic day",
+        value=mountain_today(),
+        key=f"{panel_key}_clinic_closeout_day",
+    )
+    selected_day_key = selected_day.isoformat()
+    day_entry = checklist_log.get(selected_day_key, {"completed_items": [], "notes": "", "saved_at": ""})
+    completed_items = list(day_entry.get("completed_items") or [])
+
+    completion_cols = st.columns([1, 1, 2])
+    completion_cols[0].metric("Completed", len(completed_items))
+    completion_cols[1].metric("Remaining", max(0, len(checklist_template) - len(completed_items)))
+    completion_cols[2].caption(f"Last saved: {day_entry.get('saved_at') or 'Not saved yet'}")
+
+    quick_action_cols = st.columns([1, 1, 3])
+    if quick_action_cols[0].button("Mark all complete", key=f"{panel_key}_clinic_closeout_mark_all", use_container_width=True):
+        checklist_log[selected_day_key] = {
+            "completed_items": list(checklist_template),
+            "notes": day_entry.get("notes") or "",
+            "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+        }
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "clinic_day_closeout_template": checklist_template,
+                "clinic_day_closeout_log": checklist_log,
+            }
+        )
+        st.success("Marked all closeout items complete.")
+        st.rerun()
+    if quick_action_cols[1].button("Reset day", key=f"{panel_key}_clinic_closeout_reset_day", use_container_width=True):
+        checklist_log.pop(selected_day_key, None)
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "clinic_day_closeout_template": checklist_template,
+                "clinic_day_closeout_log": checklist_log,
+            }
+        )
+        st.success("Closeout checklist reset for the selected day.")
+        st.rerun()
+    quick_action_cols[2].caption("Quick actions apply to the selected clinic day.")
+
+    with st.form(f"{panel_key}_clinic_closeout_form"):
+        selected_items = st.multiselect(
+            "Mark completed items",
+            checklist_template,
+            default=[item for item in completed_items if item in checklist_template],
+            help="This checklist is independent from clinic task completion.",
+        )
+        closeout_notes = st.text_area(
+            "Closeout notes (optional)",
+            value=day_entry.get("notes") or "",
+            height=90,
+            placeholder="Anything to carry forward or double-check tomorrow",
+        )
+        save_closeout = st.form_submit_button("Save closeout checklist", type="primary")
+
+    if save_closeout:
+        checklist_log[selected_day_key] = {
+            "completed_items": list(selected_items),
+            "notes": closeout_notes.strip(),
+            "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+        }
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "clinic_day_closeout_template": checklist_template,
+                "clinic_day_closeout_log": checklist_log,
+            }
+        )
+        st.success("Clinic closeout checklist saved.")
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     render_task_list_panel(
         "Completed Today",
         "What you finished",
@@ -7873,7 +8043,21 @@ def render_settings_panel(app_settings, panel_key="settings"):
         format_func=lambda value: settings_or_alternating_days[0] if value == 0 else settings_or_alternating_days[1],
     )
 
+    st.markdown("### Clinic Day Closeout Checklist")
+    closeout_template_items = normalize_clinic_day_closeout_template(app_settings.get("clinic_day_closeout_template"))
+    settings_closeout_template_text = st.text_area(
+        "Checklist items (one per line)",
+        value="\n".join(closeout_template_items),
+        height=140,
+        help="This list powers the generic end-of-clinic-day checklist on the Daily Review page.",
+    )
+
     if st.button("Save Settings", type="primary"):
+        parsed_closeout_template = normalize_clinic_day_closeout_template(settings_closeout_template_text)
+        normalized_closeout_log = normalize_clinic_day_closeout_log(
+            app_settings.get("clinic_day_closeout_log"),
+            allowed_items=parsed_closeout_template,
+        )
         app_settings = save_app_settings(
             {
                 "default_category": settings_category,
@@ -7894,6 +8078,8 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "or_fixed_weekday": settings_or_fixed_weekday,
                 "or_alternating_days": settings_or_alternating_days,
                 "or_alternating_cycle_offset": int(settings_or_cycle_offset),
+                "clinic_day_closeout_template": parsed_closeout_template,
+                "clinic_day_closeout_log": normalized_closeout_log,
             }
         )
         st.success("Settings saved.")

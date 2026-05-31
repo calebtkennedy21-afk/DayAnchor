@@ -23,6 +23,7 @@ Current capabilities include:
 - AI `Auto-Schedule Tasks` flow with one-click apply for schedule updates.
 - Notifications page with alert-focused task triage (overdue, blocked, unscheduled high priority, due tomorrow).
 - Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
+- Daily Review page now includes a generic Clinic Day Closeout Checklist with per-day completion tracking (independent from task status).
 - Settings page with persistent defaults (category, priority, duration, schedule time, timeline window).
 
 ## Run
