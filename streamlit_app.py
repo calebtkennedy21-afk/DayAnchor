@@ -6,6 +6,7 @@ import calendar
 import textwrap
 from io import BytesIO
 from datetime import date, datetime, time, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -735,7 +736,7 @@ def normalize_family_schedule_items(raw_items):
         return []
 
     normalized = []
-    for raw_item in raw_items:
+    for source_index, raw_item in enumerate(raw_items):
         if not isinstance(raw_item, dict):
             continue
 
@@ -769,6 +770,8 @@ def normalize_family_schedule_items(raw_items):
 
         normalized.append(
             {
+                "item_id": str(raw_item.get("item_id") or f"family_{source_index}_{start_date.isoformat()}_{title.lower().replace(' ', '_')}").strip(),
+                "source_index": source_index,
                 "title": title,
                 "item_type": item_type,
                 "family_member": str(raw_item.get("family_member") or "").strip(),
@@ -4863,7 +4866,27 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
 
 
 def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_schedule"):
-    family_items = normalize_family_schedule_items((app_settings or {}).get("family_schedule_items"))
+    raw_family_items = list((app_settings or {}).get("family_schedule_items") or [])
+    family_items = normalize_family_schedule_items(raw_family_items)
+
+    def _save_family_items(updated_raw_items):
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "family_schedule_items": updated_raw_items,
+            }
+        )
+
+    def _apply_update(item, updates):
+        source_index = item.get("source_index")
+        if source_index is None or source_index >= len(raw_family_items):
+            return False
+        if not isinstance(raw_family_items[source_index], dict):
+            return False
+        raw_family_items[source_index].update(updates)
+        _save_family_items(raw_family_items)
+        return True
+
     week_key = f"{panel_key}_week_anchor"
     if week_key not in st.session_state:
         today = mountain_today()
@@ -4905,6 +4928,126 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
         f"Items with checklists: {family_summary['items_with_checklists']} · "
         f"Weekend items: {family_summary['weekend_count']}"
     )
+
+    today_value = mountain_today()
+    timeline_days = [today_value + timedelta(days=offset) for offset in range(4)]
+    timeline_by_day = {
+        day: [item for item in family_summary["upcoming_items"] if item.get("start_date") == day]
+        for day in timeline_days
+    }
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Daily Timeline</h3><span>Today + next 3 days</span></div>', unsafe_allow_html=True)
+    timeline_cols = st.columns(4)
+    for idx, day_value in enumerate(timeline_days):
+        with timeline_cols[idx]:
+            day_items = sorted(
+                timeline_by_day.get(day_value, []),
+                key=lambda item: (item.get("start_time") or time(23, 59), priority_rank(item.get("priority"))),
+            )
+            st.markdown(f"**{day_value.strftime('%a %b %d')}**")
+            if len(day_items) > 1:
+                st.caption("Conflict risk day")
+            if not day_items:
+                st.caption("No family events")
+            for item in day_items[:4]:
+                tlabel = item.get("start_time").strftime("%I:%M %p").lstrip("0") if item.get("start_time") else "All day"
+                member = item.get("family_member") or "Family"
+                st.markdown(f"- {tlabel} · {item.get('title')} ({member})")
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Who Is Where</h3><span>Next 7 days by family member</span></div>', unsafe_allow_html=True)
+    board_window_end = today_value + timedelta(days=6)
+    board_items = [
+        item
+        for item in family_summary["upcoming_items"]
+        if item.get("start_date") and today_value <= item["start_date"] <= board_window_end
+    ]
+    by_member = {}
+    for item in board_items:
+        member = item.get("family_member") or "Family"
+        by_member.setdefault(member, []).append(item)
+    if by_member:
+        member_cols = st.columns(min(3, len(by_member)))
+        for idx, member in enumerate(sorted(by_member.keys())):
+            with member_cols[idx % len(member_cols)]:
+                st.markdown(f"**{member}**")
+                for item in sorted(by_member[member], key=lambda value: (value["start_date"], value.get("start_time") or time(23, 59)))[:6]:
+                    st.markdown(f"- {item['start_date'].strftime('%a %b %d')}: {item.get('title')}")
+    else:
+        st.caption("No family items in the next 7 days.")
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Reminder Engine</h3><span>What needs attention now</span></div>', unsafe_allow_html=True)
+    reminder_rows = []
+    for item in family_summary["upcoming_items"]:
+        start_day = item.get("start_date")
+        if not start_day:
+            continue
+        item_type = str(item.get("item_type") or "").lower()
+        reminder_offsets = [1]
+        if any(keyword in item_type for keyword in ("trip", "travel", "camp", "camping")):
+            reminder_offsets = [2, 1]
+        elif "appointment" in item_type:
+            reminder_offsets = [1, 0]
+        for offset in reminder_offsets:
+            remind_on = start_day - timedelta(days=offset)
+            if remind_on <= today_value:
+                reminder_rows.append(
+                    {
+                        "item": item,
+                        "remind_on": remind_on,
+                        "offset": offset,
+                    }
+                )
+
+    reminder_rows.sort(key=lambda row: (row["remind_on"], row["item"].get("start_date"), row["item"].get("title")))
+    if reminder_rows:
+        for row in reminder_rows[:8]:
+            item = row["item"]
+            due_label = "today" if row["remind_on"] == today_value else f"{abs((today_value - row['remind_on']).days)}d overdue"
+            lead_label = "same-day" if row["offset"] == 0 else f"T-{row['offset']}"
+            st.markdown(
+                f"- **{item.get('title')}** · {item.get('item_type')} · starts {item.get('start_date')} · {lead_label} reminder ({due_label})"
+            )
+    else:
+        st.caption("No reminder actions due right now.")
+
+    family_conflict_days = {}
+    for item in family_summary["upcoming_items"]:
+        family_conflict_days.setdefault(item["start_date"], []).append(item)
+    family_conflict_days = {day: items for day, items in family_conflict_days.items() if len(items) > 1}
+
+    if family_conflict_days:
+        st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Conflict Solver</h3><span>Fast actions for overlap days</span></div>', unsafe_allow_html=True)
+        for day_value, day_items in list(sorted(family_conflict_days.items()))[:3]:
+            st.markdown(f"**{day_value.strftime('%a %b %d')}** · {len(day_items)} family items")
+            candidate = sorted(
+                day_items,
+                key=lambda item: (
+                    0 if not item.get("is_recurring_occurrence") else 1,
+                    -priority_rank(item.get("priority")),
+                    item.get("start_time") or time(23, 59),
+                ),
+            )[0]
+            st.caption(f"Suggested move: {candidate.get('title')} to next day")
+            action_cols = st.columns(2)
+            with action_cols[0]:
+                if st.button("Move suggested +1 day", key=f"{panel_key}_conflict_move_{day_value.isoformat()}_{candidate.get('item_id')}"):
+                    new_start = candidate.get("start_date") + timedelta(days=1)
+                    span_days = max(0, (candidate.get("end_date") - candidate.get("start_date")).days)
+                    new_end = new_start + timedelta(days=span_days)
+                    if _apply_update(candidate, {"start_date": new_start, "end_date": new_end}):
+                        st.success("Suggested event moved to next day.")
+                        st.rerun()
+            with action_cols[1]:
+                if st.button("Create prep task", key=f"{panel_key}_conflict_prep_{day_value.isoformat()}_{candidate.get('item_id')}"):
+                    prep_due = max(today_value, candidate.get("start_date") - timedelta(days=1))
+                    add_task(
+                        f"Prep: {candidate.get('title')}",
+                        candidate.get("notes") or "Family prep action",
+                        "Personal",
+                        "medium",
+                        prep_due,
+                    )
+                    st.success("Prep task added to Personal tasks.")
+                    st.rerun()
 
     with st.form(f"{panel_key}_item_form", clear_on_submit=True):
         family_title = st.text_input("Event title")
@@ -4990,9 +5133,10 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                 seen_items.add(normalized)
                 deduped_checklist.append(item)
 
-            updated_family_items = list(family_items)
+            updated_family_items = list(raw_family_items)
             updated_family_items.append(
                 {
+                    "item_id": uuid4().hex,
                     "title": family_title.strip(),
                     "item_type": family_type,
                     "family_member": family_member.strip(),
@@ -5016,12 +5160,7 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                     "recurrence_end_date": recurrence_end_date if recurrence_end_enabled else None,
                 }
             )
-            save_app_settings(
-                {
-                    **(app_settings or {}),
-                    "family_schedule_items": updated_family_items,
-                }
-            )
+            _save_family_items(updated_family_items)
             st.success("Family schedule item saved.")
             st.rerun()
 
@@ -5040,6 +5179,23 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
         st.warning(st.session_state[family_insight_error_key])
     if st.session_state.get(family_insight_key):
         st.markdown(st.session_state[family_insight_key])
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Weekly Planning Mode</h3><span>Prep priorities for the upcoming week</span></div>', unsafe_allow_html=True)
+    planning_actions = []
+    for item in family_summary["upcoming_items"][:12]:
+        if item.get("checklist_items"):
+            planning_actions.append(
+                f"{item.get('start_date').strftime('%a %b %d')}: Prep {item.get('title')} ({len(item.get('checklist_items'))} checklist items)"
+            )
+        elif any(keyword in str(item.get("item_type") or "").lower() for keyword in ("trip", "travel", "camp", "appointment")):
+            planning_actions.append(
+                f"{item.get('start_date').strftime('%a %b %d')}: Add prep checklist for {item.get('title')}"
+            )
+    if planning_actions:
+        for line in planning_actions[:6]:
+            st.markdown(f"- {line}")
+    else:
+        st.caption("No prep-heavy items identified for the next two weeks.")
 
     if family_summary["upcoming_items"]:
         st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming family items</h3><span>Next 14 days</span></div>', unsafe_allow_html=True)
@@ -5065,6 +5221,109 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                 st.caption(f"Checklist: {checklist_preview}")
     else:
         st.markdown('<div class="empty-state">No family items yet. Add appointments, trips, camps, or camping plans here.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Manage Family Items</h3><span>Edit, complete, cancel, or delete</span></div>', unsafe_allow_html=True)
+    if family_items:
+        for item in family_items[:18]:
+            label_date = item.get("start_date").strftime("%b %d") if item.get("start_date") else "No date"
+            with st.expander(f"{item.get('title')} · {label_date} · {item.get('status')}", expanded=False):
+                edit_title = st.text_input("Title", value=item.get("title") or "", key=f"{panel_key}_edit_title_{item.get('item_id')}")
+                edit_member = st.text_input("Family member", value=item.get("family_member") or "", key=f"{panel_key}_edit_member_{item.get('item_id')}")
+                edit_type = st.selectbox(
+                    "Type",
+                    ["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"],
+                    index=["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"].index(item.get("item_type")) if item.get("item_type") in ["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"] else 0,
+                    key=f"{panel_key}_edit_type_{item.get('item_id')}",
+                )
+                edit_cols = st.columns(3)
+                with edit_cols[0]:
+                    edit_start = st.date_input("Start", value=item.get("start_date") or today_value, key=f"{panel_key}_edit_start_{item.get('item_id')}")
+                with edit_cols[1]:
+                    edit_end = st.date_input("End", value=item.get("end_date") or edit_start, min_value=edit_start, key=f"{panel_key}_edit_end_{item.get('item_id')}")
+                with edit_cols[2]:
+                    timed_default = bool(item.get("start_time")) and not bool(item.get("all_day"))
+                    edit_timed = st.checkbox("Timed", value=timed_default, key=f"{panel_key}_edit_timed_{item.get('item_id')}")
+                    edit_time = st.time_input("Time", value=item.get("start_time") or time(9, 0), disabled=not edit_timed, key=f"{panel_key}_edit_time_{item.get('item_id')}")
+
+                edit_priority = st.selectbox("Priority", ["high", "medium", "low"], index=["high", "medium", "low"].index(item.get("priority")) if item.get("priority") in ["high", "medium", "low"] else 1, key=f"{panel_key}_edit_priority_{item.get('item_id')}")
+                edit_location = st.text_input("Location", value=item.get("location") or "", key=f"{panel_key}_edit_location_{item.get('item_id')}")
+                edit_notes = st.text_area("Notes", value=item.get("notes") or "", key=f"{panel_key}_edit_notes_{item.get('item_id')}", height=80)
+                edit_checklist_text = st.text_area(
+                    "Checklist items (one per line)",
+                    value="\n".join(item.get("checklist_items") or []),
+                    key=f"{panel_key}_edit_checklist_{item.get('item_id')}",
+                    height=80,
+                )
+                recurrence_options = ["none", "daily", "weekly", "monthly", "yearly"]
+                edit_recurrence_rule = st.selectbox(
+                    "Recurrence",
+                    recurrence_options,
+                    index=recurrence_options.index(item.get("recurrence_rule")) if item.get("recurrence_rule") in recurrence_options else 0,
+                    key=f"{panel_key}_edit_recurrence_rule_{item.get('item_id')}",
+                )
+                edit_recurrence_interval = st.number_input(
+                    "Recurrence interval",
+                    min_value=1,
+                    max_value=24,
+                    value=max(1, safe_int(item.get("recurrence_interval"), 1)),
+                    key=f"{panel_key}_edit_recurrence_interval_{item.get('item_id')}",
+                    disabled=edit_recurrence_rule == "none",
+                )
+                edit_recurrence_end_enabled = st.checkbox(
+                    "Set recurrence end",
+                    value=bool(item.get("recurrence_end_date")),
+                    key=f"{panel_key}_edit_recurrence_end_enabled_{item.get('item_id')}",
+                    disabled=edit_recurrence_rule == "none",
+                )
+                edit_recurrence_end = st.date_input(
+                    "Recurrence end date",
+                    value=item.get("recurrence_end_date") or edit_start,
+                    min_value=edit_start,
+                    key=f"{panel_key}_edit_recurrence_end_{item.get('item_id')}",
+                    disabled=(edit_recurrence_rule == "none") or (not edit_recurrence_end_enabled),
+                )
+
+                status_cols = st.columns(4)
+                if status_cols[0].button("Save changes", key=f"{panel_key}_save_{item.get('item_id')}"):
+                    updated_checklist = [line.strip() for line in edit_checklist_text.splitlines() if line.strip()]
+                    if _apply_update(
+                        item,
+                        {
+                            "title": edit_title.strip(),
+                            "family_member": edit_member.strip(),
+                            "item_type": edit_type,
+                            "start_date": edit_start,
+                            "end_date": edit_end,
+                            "start_time": edit_time if edit_timed else None,
+                            "all_day": not edit_timed,
+                            "priority": edit_priority,
+                            "location": edit_location.strip(),
+                            "notes": edit_notes.strip(),
+                            "checklist_items": updated_checklist,
+                            "recurrence_rule": edit_recurrence_rule,
+                            "recurrence_interval": int(edit_recurrence_interval),
+                            "recurrence_end_date": edit_recurrence_end if edit_recurrence_end_enabled and edit_recurrence_rule != "none" else None,
+                        },
+                    ):
+                        st.success("Family item updated.")
+                        st.rerun()
+                if status_cols[1].button("Mark completed", key=f"{panel_key}_complete_{item.get('item_id')}"):
+                    if _apply_update(item, {"status": "completed"}):
+                        st.success("Marked as completed.")
+                        st.rerun()
+                if status_cols[2].button("Cancel", key=f"{panel_key}_cancel_{item.get('item_id')}"):
+                    if _apply_update(item, {"status": "canceled"}):
+                        st.success("Marked as canceled.")
+                        st.rerun()
+                if status_cols[3].button("Delete", key=f"{panel_key}_delete_{item.get('item_id')}"):
+                    source_index = item.get("source_index")
+                    if source_index is not None and source_index < len(raw_family_items):
+                        updated_raw = [entry for idx, entry in enumerate(raw_family_items) if idx != source_index]
+                        _save_family_items(updated_raw)
+                        st.success("Family item deleted.")
+                        st.rerun()
+    else:
+        st.caption("No saved family items to manage yet.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
