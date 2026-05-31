@@ -187,6 +187,7 @@ DEFAULT_APP_SETTINGS = {
     "family_weekly_notes": [],
     "family_notes": "",
     "family_notes_updated_at": "",
+    "quick_reminders": [],
 }
 
 
@@ -960,6 +961,50 @@ def normalize_family_weekly_notes(raw_notes):
         )
 
     return sorted(normalized, key=lambda item: item["week_start"], reverse=True)
+
+
+def normalize_quick_reminders(raw_reminders):
+    if not isinstance(raw_reminders, list):
+        return []
+
+    normalized = []
+    for source_index, raw_item in enumerate(raw_reminders):
+        if not isinstance(raw_item, dict):
+            continue
+        text = str(raw_item.get("text") or raw_item.get("title") or "").strip()
+        if not text:
+            continue
+
+        reminder_date = parse_date_value(raw_item.get("remind_date") or raw_item.get("due_date"))
+        reminder_time = parse_time_value(raw_item.get("remind_time") or raw_item.get("due_time"))
+        status = str(raw_item.get("status") or "active").strip().lower()
+        if status not in ("active", "dismissed"):
+            status = "active"
+
+        normalized.append(
+            {
+                "reminder_id": str(raw_item.get("reminder_id") or f"quick_reminder_{source_index}_{text.lower().replace(' ', '_')}").strip(),
+                "source_index": source_index,
+                "text": text,
+                "category": str(raw_item.get("category") or "General").strip() or "General",
+                "notes": str(raw_item.get("notes") or "").strip(),
+                "remind_date": reminder_date,
+                "remind_time": reminder_time,
+                "status": status,
+                "created_at": str(raw_item.get("created_at") or "").strip(),
+                "updated_at": str(raw_item.get("updated_at") or "").strip(),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda item: (
+            0 if item.get("status") == "active" else 1,
+            item.get("remind_date") or date.max,
+            item.get("remind_time") or time(23, 59),
+            item.get("text") or "",
+        ),
+    )
 
 
 def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
@@ -6052,8 +6097,129 @@ def render_page_footer():
     )
 
 
-def render_notifications_panel(tasks, active_tasks, panel_key="notifications"):
+def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key="notifications"):
     render_metrics_row()
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
+    raw_quick_reminders = list((app_settings or {}).get("quick_reminders") or [])
+    quick_reminders = normalize_quick_reminders(raw_quick_reminders)
+    active_reminders = [item for item in quick_reminders if item.get("status") == "active"]
+    today_value = mountain_today()
+    due_today_reminders = [
+        item
+        for item in active_reminders
+        if item.get("remind_date") and item.get("remind_date") <= today_value
+    ]
+
+    def _save_quick_reminders(updated_raw_reminders):
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "quick_reminders": updated_raw_reminders,
+            }
+        )
+
+    def _update_quick_reminder(item, updates):
+        source_index = item.get("source_index")
+        if source_index is None or source_index >= len(raw_quick_reminders):
+            return False
+        if not isinstance(raw_quick_reminders[source_index], dict):
+            return False
+        raw_quick_reminders[source_index].update(updates)
+        _save_quick_reminders(raw_quick_reminders)
+        return True
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Quick Reminders</h3><span>Capture things to remember without creating a task</span></div>', unsafe_allow_html=True)
+    reminder_metrics = st.columns(3)
+    reminder_metrics[0].metric("Active reminders", len(active_reminders))
+    reminder_metrics[1].metric("Due now", len(due_today_reminders))
+    reminder_metrics[2].metric("Total saved", len(quick_reminders))
+
+    with st.form(f"{panel_key}_quick_reminder_form", clear_on_submit=True):
+        reminder_text = st.text_input("Reminder", placeholder="What do you want to remember?")
+        reminder_cols = st.columns(3)
+        with reminder_cols[0]:
+            reminder_category = st.selectbox("Category", ["General", "Personal", "Family", "Clinic"], index=0)
+        with reminder_cols[1]:
+            has_date = st.checkbox("Set date", value=False)
+            reminder_date = st.date_input("Remind on", value=today_value, disabled=not has_date, key=f"{panel_key}_quick_reminder_date")
+        with reminder_cols[2]:
+            has_time = st.checkbox("Set time", value=False, disabled=not has_date)
+            reminder_time = st.time_input("At", value=time(9, 0), disabled=(not has_date) or (not has_time), key=f"{panel_key}_quick_reminder_time")
+        reminder_note = st.text_area("Details (optional)", height=70, placeholder="Context, names, or follow-up notes")
+        reminder_submit = st.form_submit_button("Save reminder", type="primary")
+
+    if reminder_submit:
+        if not reminder_text.strip():
+            st.warning("Add reminder text before saving.")
+        else:
+            updated_reminders = list(raw_quick_reminders)
+            updated_reminders.append(
+                {
+                    "reminder_id": uuid4().hex,
+                    "text": reminder_text.strip(),
+                    "category": reminder_category,
+                    "notes": reminder_note.strip(),
+                    "remind_date": reminder_date if has_date else None,
+                    "remind_time": reminder_time if has_date and has_time else None,
+                    "status": "active",
+                    "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                    "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                }
+            )
+            _save_quick_reminders(updated_reminders)
+            st.success("Reminder saved.")
+            st.rerun()
+
+    if active_reminders:
+        for item in active_reminders[:12]:
+            remind_date = item.get("remind_date")
+            remind_time = item.get("remind_time")
+            when_label = "Anytime"
+            if remind_date and remind_time:
+                when_label = f"{remind_date.strftime('%b %d')} at {remind_time.strftime('%I:%M %p').lstrip('0')}"
+            elif remind_date:
+                when_label = remind_date.strftime("%b %d")
+
+            due_tag = " · due" if remind_date and remind_date <= today_value else ""
+            with st.expander(f"{item.get('text')} ({item.get('category')}) · {when_label}{due_tag}", expanded=False):
+                if item.get("notes"):
+                    st.caption(item.get("notes"))
+                action_cols = st.columns(3)
+                if action_cols[0].button("Dismiss", key=f"{panel_key}_dismiss_reminder_{item.get('reminder_id')}"):
+                    if _update_quick_reminder(
+                        item,
+                        {
+                            "status": "dismissed",
+                            "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                        },
+                    ):
+                        st.success("Reminder dismissed.")
+                        st.rerun()
+                if action_cols[1].button("Snooze +1 day", key=f"{panel_key}_snooze_reminder_{item.get('reminder_id')}"):
+                    next_date = (item.get("remind_date") or today_value) + timedelta(days=1)
+                    if _update_quick_reminder(
+                        item,
+                        {
+                            "remind_date": next_date,
+                            "status": "active",
+                            "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                        },
+                    ):
+                        st.success("Reminder snoozed to tomorrow.")
+                        st.rerun()
+                if action_cols[2].button("Delete", key=f"{panel_key}_delete_reminder_{item.get('reminder_id')}"):
+                    source_index = item.get("source_index")
+                    if source_index is not None and source_index < len(raw_quick_reminders):
+                        updated_reminders = [entry for idx, entry in enumerate(raw_quick_reminders) if idx != source_index]
+                        _save_quick_reminders(updated_reminders)
+                        st.success("Reminder deleted.")
+                        st.rerun()
+    else:
+        st.caption("No active reminders. Capture one above when something pops into your head.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     overdue_all = sorted(

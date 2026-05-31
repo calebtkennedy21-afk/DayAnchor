@@ -142,6 +142,59 @@ def run_app(context, st_module=st):
             st_module.caption(f"Last saved: {updated_at}")
         st_module.markdown('</div>', unsafe_allow_html=True)
 
+    def render_quick_reminder_capture(panel_key="overview_quick_reminder"):
+        nonlocal app_settings
+        reminders = list(app_settings.get("quick_reminders") or [])
+        active_count = len([item for item in reminders if isinstance(item, dict) and str(item.get("status") or "active").lower() == "active"])
+
+        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Quick Reminder</h3><span>Capture it now without creating a task</span></div>', unsafe_allow_html=True)
+        st_module.caption(f"Active reminders: {active_count}")
+
+        with st_module.form(f"{panel_key}_form", clear_on_submit=True):
+            reminder_text = st_module.text_input("Reminder", placeholder="What do you want to remember?")
+            reminder_cols = st_module.columns(3)
+            with reminder_cols[0]:
+                reminder_category = st_module.selectbox("Category", ["General", "Personal", "Family", "Clinic"], index=0)
+            with reminder_cols[1]:
+                has_date = st_module.checkbox("Set date", value=False)
+                reminder_date = st_module.date_input("Remind on", value=mountain_today(), disabled=not has_date, key=f"{panel_key}_date")
+            with reminder_cols[2]:
+                has_time = st_module.checkbox("Set time", value=False, disabled=not has_date)
+                reminder_time = st_module.time_input("At", disabled=(not has_date) or (not has_time), key=f"{panel_key}_time")
+
+            reminder_notes = st_module.text_area("Details (optional)", height=70, placeholder="Optional context")
+            submitted = st_module.form_submit_button("Save reminder", type="primary")
+
+        if submitted:
+            if not reminder_text.strip():
+                st_module.warning("Add reminder text before saving.")
+            else:
+                now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                reminders.append(
+                    {
+                        "reminder_id": f"quick_{datetime.now(MOUNTAIN_TIMEZONE).strftime('%Y%m%d%H%M%S%f')}",
+                        "text": reminder_text.strip(),
+                        "category": reminder_category,
+                        "notes": reminder_notes.strip(),
+                        "remind_date": reminder_date if has_date else None,
+                        "remind_time": reminder_time if has_date and has_time else None,
+                        "status": "active",
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                    }
+                )
+                app_settings = save_app_settings(
+                    {
+                        **app_settings,
+                        "quick_reminders": reminders,
+                    }
+                )
+                st_module.success("Reminder saved.")
+                st_module.rerun()
+
+        st_module.markdown('</div>', unsafe_allow_html=True)
+
     initialize_database()
     app_settings = load_app_settings()
 
@@ -638,6 +691,8 @@ def run_app(context, st_module=st):
                         "Write clinic notes, operational reminders, and follow-ups (non-PHI) here...",
                     )
                 st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+                render_quick_reminder_capture("overview_quick_reminder")
+                st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
                 render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
                 st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
                 render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
@@ -763,7 +818,7 @@ def run_app(context, st_module=st):
         render_analytics_panel(tasks, active_tasks, scheduled_tasks, panel_key="analytics_page")
     elif current_page == "Notifications":
         render_page_banner("overview", "Notifications", "A focused inbox for reminders and follow-ups.")
-        render_notifications_panel(tasks, active_tasks, panel_key="notifications_page")
+        render_notifications_panel(tasks, active_tasks, app_settings, panel_key="notifications_page")
     elif current_page == "MA Lead":
         render_page_banner("clinic", "MA Lead", "Lead queue, huddles, playbooks, and relationship follow-through.")
         render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead_page")
