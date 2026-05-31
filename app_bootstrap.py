@@ -82,6 +82,7 @@ def run_app(context, st_module=st):
     render_physical_therapy_protocols_panel = context["render_physical_therapy_protocols_panel"]
     render_task_calendar_panel = context["render_task_calendar_panel"]
     render_schedule_builder_panel = context["render_schedule_builder_panel"]
+    render_family_schedule_panel = context["render_family_schedule_panel"]
     render_task_list_panel = context["render_task_list_panel"]
     render_ai_panel = context["render_ai_panel"]
     render_review_command_panel = context["render_review_command_panel"]
@@ -187,9 +188,10 @@ def run_app(context, st_module=st):
         st_module.markdown("---")
         st_module.markdown("### Navigation")
         personal_pages = ["Morning Ritual", "Personal", "Schedule", "Daily Review", "Notifications"]
+        family_pages = ["Family Schedule"]
         clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols", "MA Lead"]
         additional_pages = ["News", "AI", "Analytics", "Settings"]
-        all_pages = ["Overview"] + personal_pages + clinical_pages + additional_pages
+        all_pages = ["Overview"] + personal_pages + family_pages + clinical_pages + additional_pages
 
         current_page = st_module.session_state.get("current_page", "Overview")
         if current_page not in all_pages:
@@ -206,6 +208,10 @@ def run_app(context, st_module=st):
 
         with st_module.expander("Personal", expanded=current_page in personal_pages):
             for page in personal_pages:
+                render_nav_button(page, page, page.lower().replace(" ", "_"))
+
+        with st_module.expander("Family", expanded=current_page in family_pages):
+            for page in family_pages:
                 render_nav_button(page, page, page.lower().replace(" ", "_"))
 
         with st_module.expander("Clinical", expanded=current_page in clinical_pages):
@@ -707,6 +713,11 @@ def run_app(context, st_module=st):
         render_surgical_cases_panel(surgical_cases, protocol_documents, app_settings, panel_key="cases_page")
     elif current_page == "Schedule":
         render_page_banner("schedule", "Schedule Builder", "Plan work and personal blocks, then pin them into real time.")
+        schedule_header_cols = st_module.columns([1.4, 1])
+        with schedule_header_cols[1]:
+            if st_module.button("Open Family Schedule", key="schedule_open_family", use_container_width=True):
+                st_module.session_state["current_page"] = "Family Schedule"
+                st_module.rerun()
         schedule_conflicts, over_capacity_days = summarize_schedule_conflicts(
             scheduled_tasks,
             fallback_minutes=int(app_settings.get("default_duration", 60)),
@@ -729,6 +740,9 @@ def run_app(context, st_module=st):
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
+    elif current_page == "Family Schedule":
+        render_page_banner("personal", "Family Schedule", "Dedicated planning space for family events, travel, camps, and appointments.")
+        render_family_schedule_panel(active_tasks, app_settings, panel_key="family_schedule_page")
     elif current_page == "Anatomy":
         render_page_banner("clinic", "MSK Anatomy", "Foot and ankle emphasis with extension to the knee.")
         context["render_msk_anatomy_panel"](surgical_cases, protocol_documents, panel_key="anatomy_page")

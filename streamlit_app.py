@@ -4353,8 +4353,6 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
 
     week_start = st.session_state[week_key]
     week_days = [week_start + timedelta(days=offset) for offset in range(7)]
-    family_schedule_items = normalize_family_schedule_items((app_settings or {}).get("family_schedule_items"))
-    family_week_window_end = week_start + timedelta(days=13)
     daily_capacity_minutes = max(60, safe_int(app_settings.get("schedule_daily_capacity_minutes", 480), 480))
     capacity_days_per_week = max(1, min(7, safe_int(app_settings.get("schedule_capacity_days_per_week", 5), 5)))
     weekly_capacity_minutes = daily_capacity_minutes * capacity_days_per_week
@@ -4623,114 +4621,6 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         if snapshot["unscheduled_high"]:
             st.caption(f"Top unscheduled high-priority task: {snapshot['unscheduled_high'][0]['title']}")
 
-        family_summary = weekly_family_schedule_summary(family_schedule_items, end_day=week_start, window_days=14)
-        family_conflict_count = sum(1 for item in family_summary["upcoming_items"] if scheduled_by_day.get(item["start_date"]))
-
-        st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Family Schedule</h3><span>Appointments, trips, camps, and other family plans</span></div>', unsafe_allow_html=True)
-        family_metrics = st.columns(4)
-        family_metrics[0].metric("Upcoming", family_summary["upcoming_count"])
-        family_metrics[1].metric("Appointments", family_summary["appointment_count"])
-        family_metrics[2].metric("Trips/Camps", family_summary["trip_count"] + family_summary["camp_count"])
-        family_metrics[3].metric("Conflict days", family_conflict_count)
-
-        with st.form(f"{panel_key}_family_item_form", clear_on_submit=True):
-            family_title = st.text_input("Event title")
-            family_type = st.selectbox(
-                "Type",
-                ["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"],
-                index=0,
-            )
-            family_member = st.text_input("Family member / group", placeholder="Sam, kids, whole family")
-            family_date = st.date_input("Start date", value=week_start, key=f"{panel_key}_family_start_date")
-            family_multi_day = st.checkbox("Multi-day item", key=f"{panel_key}_family_multi_day")
-            if family_multi_day:
-                family_end_min = family_date + timedelta(days=1)
-                family_end_default = st.session_state.get(f"{panel_key}_family_end_date", family_end_min)
-                if family_end_default < family_end_min:
-                    family_end_default = family_end_min
-                family_end_date = st.date_input(
-                    "End date",
-                    value=family_end_default,
-                    min_value=family_end_min,
-                    key=f"{panel_key}_family_end_date",
-                )
-            else:
-                family_end_date = family_date
-            family_timed = st.checkbox(
-                "Timed event",
-                value=family_type == "Appointment",
-                key=f"{panel_key}_family_timed",
-            )
-            if family_timed and not family_multi_day:
-                family_time = st.time_input("Start time", value=time(9, 0), key=f"{panel_key}_family_time")
-            else:
-                family_time = None
-            family_location = st.text_input("Location", placeholder="Clinic, airport, campground, field")
-            family_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
-            family_notes = st.text_area("Notes", height=80, placeholder="Packing list, who is attending, confirmation details...")
-            family_submit = st.form_submit_button("Add family item", type="primary")
-
-        if family_submit:
-            if not family_title.strip():
-                st.warning("Add an event title before saving.")
-            else:
-                updated_family_items = list(family_schedule_items)
-                updated_family_items.append(
-                    {
-                        "title": family_title.strip(),
-                        "item_type": family_type,
-                        "family_member": family_member.strip(),
-                        "start_date": family_date,
-                        "end_date": family_end_date if family_multi_day else family_date,
-                        "start_time": family_time if family_timed and not family_multi_day else None,
-                        "priority": family_priority,
-                        "location": family_location.strip(),
-                        "notes": family_notes.strip(),
-                        "status": "planned",
-                        "all_day": (not family_timed) or family_multi_day,
-                    }
-                )
-                save_app_settings({
-                    **(app_settings or {}),
-                    "family_schedule_items": updated_family_items,
-                })
-                st.success("Family schedule item saved.")
-                st.rerun()
-
-        family_insight_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight"
-        family_insight_error_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight_error"
-        if st.button("Generate Family AI Insight", key=f"{panel_key}_generate_family_ai", type="secondary"):
-            family_ai_summary = dict(family_summary)
-            family_ai_summary["conflict_count"] = family_conflict_count
-            insight_text, insight_error = generate_family_schedule_insight(
-                family_ai_summary,
-                family_summary["upcoming_items"],
-            )
-            st.session_state[family_insight_key] = insight_text
-            st.session_state[family_insight_error_key] = insight_error
-        if st.session_state.get(family_insight_error_key):
-            st.warning(st.session_state[family_insight_error_key])
-        if st.session_state.get(family_insight_key):
-            st.markdown(st.session_state[family_insight_key])
-
-        if family_summary["upcoming_items"]:
-            st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming family items</h3><span>Next 14 days</span></div>', unsafe_allow_html=True)
-            for item in family_summary["upcoming_items"][:8]:
-                date_range = item["start_date"].strftime("%b %d")
-                if item.get("end_date") and item["end_date"] != item["start_date"]:
-                    date_range = f"{date_range} - {item['end_date'].strftime('%b %d')}"
-                time_label = item["start_time"].strftime("%I:%M %p").lstrip("0") if item.get("start_time") else "All day"
-                family_member_label = item.get("family_member") or "Family"
-                st.markdown(
-                    f"- <strong>{item['title']}</strong> · {item.get('item_type')} · {date_range} · {time_label} · {family_member_label}",
-                    unsafe_allow_html=True,
-                )
-                if item.get("notes"):
-                    st.caption(item.get("notes"))
-        else:
-            st.markdown('<div class="empty-state">No family items yet. Add appointments, trips, camps, or camping plans here.</div>', unsafe_allow_html=True)
-
         st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Schedule Template</h3><span>Add events, dinners, travel, vacation, and clinic blocks to the calendar</span></div>', unsafe_allow_html=True)
         personal_template_key = f"{panel_key}_personal_template"
@@ -4853,6 +4743,149 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
                 )
         else:
             st.markdown('<div class="empty-state">No scheduled blocks yet. Use the template above to add events, trips, appointments, or clinic blocks.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_schedule"):
+    family_items = normalize_family_schedule_items((app_settings or {}).get("family_schedule_items"))
+    week_key = f"{panel_key}_week_anchor"
+    if week_key not in st.session_state:
+        today = mountain_today()
+        st.session_state[week_key] = today - timedelta(days=today.weekday())
+
+    week_start = st.session_state[week_key]
+    scheduled_by_day = {}
+    for task in active_tasks:
+        for task_day in scheduled_date_range(task):
+            scheduled_by_day.setdefault(task_day, []).append(task)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Family Schedule</h3><span>Dedicated space for appointments, trips, camps, and family logistics</span></div>', unsafe_allow_html=True)
+
+    week_controls = st.columns([1, 2, 1])
+    with week_controls[0]:
+        if st.button("Prev week", key=f"{panel_key}_prev_week"):
+            st.session_state[week_key] = week_start - timedelta(days=7)
+            st.rerun()
+    with week_controls[1]:
+        st.markdown(
+            f"<div style='text-align:center; font-weight:700; margin-top:0.4rem;'>{week_start.strftime('%b %d')} - {(week_start + timedelta(days=13)).strftime('%b %d, %Y')}</div>",
+            unsafe_allow_html=True,
+        )
+    with week_controls[2]:
+        if st.button("Next week", key=f"{panel_key}_next_week"):
+            st.session_state[week_key] = week_start + timedelta(days=7)
+            st.rerun()
+
+    family_summary = weekly_family_schedule_summary(family_items, end_day=week_start, window_days=14)
+    family_conflict_count = sum(1 for item in family_summary["upcoming_items"] if scheduled_by_day.get(item["start_date"]))
+    family_metrics = st.columns(4)
+    family_metrics[0].metric("Upcoming", family_summary["upcoming_count"])
+    family_metrics[1].metric("Appointments", family_summary["appointment_count"])
+    family_metrics[2].metric("Trips/Camps", family_summary["trip_count"] + family_summary["camp_count"])
+    family_metrics[3].metric("Conflict days", family_conflict_count)
+
+    with st.form(f"{panel_key}_item_form", clear_on_submit=True):
+        family_title = st.text_input("Event title")
+        family_type = st.selectbox(
+            "Type",
+            ["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"],
+            index=0,
+        )
+        family_member = st.text_input("Family member / group", placeholder="Sam, kids, whole family")
+        family_date = st.date_input("Start date", value=week_start, key=f"{panel_key}_start_date")
+        family_multi_day = st.checkbox("Multi-day item", key=f"{panel_key}_multi_day")
+        if family_multi_day:
+            family_end_min = family_date + timedelta(days=1)
+            family_end_default = st.session_state.get(f"{panel_key}_end_date", family_end_min)
+            if family_end_default < family_end_min:
+                family_end_default = family_end_min
+            family_end_date = st.date_input(
+                "End date",
+                value=family_end_default,
+                min_value=family_end_min,
+                key=f"{panel_key}_end_date",
+            )
+        else:
+            family_end_date = family_date
+        family_timed = st.checkbox(
+            "Timed event",
+            value=family_type == "Appointment",
+            key=f"{panel_key}_timed",
+        )
+        if family_timed and not family_multi_day:
+            family_time = st.time_input("Start time", value=time(9, 0), key=f"{panel_key}_time")
+        else:
+            family_time = None
+        family_location = st.text_input("Location", placeholder="Clinic, airport, campground, field")
+        family_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+        family_notes = st.text_area("Notes", height=80, placeholder="Packing list, who is attending, confirmation details...")
+        family_submit = st.form_submit_button("Add family item", type="primary")
+
+    if family_submit:
+        if not family_title.strip():
+            st.warning("Add an event title before saving.")
+        else:
+            updated_family_items = list(family_items)
+            updated_family_items.append(
+                {
+                    "title": family_title.strip(),
+                    "item_type": family_type,
+                    "family_member": family_member.strip(),
+                    "start_date": family_date,
+                    "end_date": family_end_date if family_multi_day else family_date,
+                    "start_time": family_time if family_timed and not family_multi_day else None,
+                    "priority": family_priority,
+                    "location": family_location.strip(),
+                    "notes": family_notes.strip(),
+                    "status": "planned",
+                    "all_day": (not family_timed) or family_multi_day,
+                }
+            )
+            save_app_settings(
+                {
+                    **(app_settings or {}),
+                    "family_schedule_items": updated_family_items,
+                }
+            )
+            st.success("Family schedule item saved.")
+            st.rerun()
+
+    family_insight_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight"
+    family_insight_error_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight_error"
+    if st.button("Generate Family AI Insight", key=f"{panel_key}_generate_family_ai", type="secondary"):
+        family_ai_summary = dict(family_summary)
+        family_ai_summary["conflict_count"] = family_conflict_count
+        insight_text, insight_error = generate_family_schedule_insight(
+            family_ai_summary,
+            family_summary["upcoming_items"],
+        )
+        st.session_state[family_insight_key] = insight_text
+        st.session_state[family_insight_error_key] = insight_error
+    if st.session_state.get(family_insight_error_key):
+        st.warning(st.session_state[family_insight_error_key])
+    if st.session_state.get(family_insight_key):
+        st.markdown(st.session_state[family_insight_key])
+
+    if family_summary["upcoming_items"]:
+        st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming family items</h3><span>Next 14 days</span></div>', unsafe_allow_html=True)
+        for item in family_summary["upcoming_items"][:10]:
+            date_range = item["start_date"].strftime("%b %d")
+            if item.get("end_date") and item["end_date"] != item["start_date"]:
+                date_range = f"{date_range} - {item['end_date'].strftime('%b %d')}"
+            time_label = item["start_time"].strftime("%I:%M %p").lstrip("0") if item.get("start_time") else "All day"
+            family_member_label = item.get("family_member") or "Family"
+            st.markdown(
+                f"- <strong>{item['title']}</strong> · {item.get('item_type')} · {date_range} · {time_label} · {family_member_label}",
+                unsafe_allow_html=True,
+            )
+            if item.get("location"):
+                st.caption(f"Location: {item.get('location')}")
+            if item.get("notes"):
+                st.caption(item.get("notes"))
+    else:
+        st.markdown('<div class="empty-state">No family items yet. Add appointments, trips, camps, or camping plans here.</div>', unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -9744,6 +9777,7 @@ app_bootstrap.run_app(
         "render_physical_therapy_protocols_panel": render_physical_therapy_protocols_panel,
         "render_task_calendar_panel": render_task_calendar_panel,
         "render_schedule_builder_panel": render_schedule_builder_panel,
+        "render_family_schedule_panel": render_family_schedule_panel,
         "render_task_list_panel": render_task_list_panel,
         "render_ai_panel": render_ai_panel,
         "render_review_command_panel": render_review_command_panel,
