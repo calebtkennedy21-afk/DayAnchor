@@ -5881,7 +5881,7 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
             height=85,
         )
         st.radio(
-            "Morning personal goals planned?",
+            "Morning personal goals completed?",
             MORNING_PLANNED_OPTIONS,
             key=planned_key,
             horizontal=True,
@@ -5962,7 +5962,7 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
         st.caption(
             "Mood trend: "
             f"{morning_trends['average_mood_label']} · "
-            f"Planned goals: {morning_trends['planned_yes_count']}/{morning_trends['checkin_count']} · "
+            f"Completed goals: {morning_trends['planned_yes_count']}/{morning_trends['checkin_count']} · "
             f"Grounding complete: {morning_trends['grounding_complete_count']}/{morning_trends['checkin_count']}"
         )
         st.markdown(
