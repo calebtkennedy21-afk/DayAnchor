@@ -49,6 +49,7 @@ from overview_core import (
 )
 import page_renderers
 import page_sections
+from settings_serialization import dumps_json_safe
 from scheduling_core import (
     build_week_rebalance_moves,
     clinic_visit_templates,
@@ -2602,7 +2603,7 @@ def save_app_settings(settings):
 
     if db_enabled():
         try:
-            payload_text = json.dumps(merged)
+            payload_text = dumps_json_safe(merged)
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
