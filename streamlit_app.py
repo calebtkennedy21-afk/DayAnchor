@@ -1393,6 +1393,10 @@ def initialize_database():
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS education_notes TEXT NOT NULL DEFAULT ''")
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS cpt_codes TEXT NOT NULL DEFAULT ''")
                     cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS or_facility TEXT NOT NULL DEFAULT 'Mercy OR'")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS pt_destination TEXT NOT NULL DEFAULT ''")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS pt_protocol TEXT NOT NULL DEFAULT ''")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS dme_dispensed TEXT NOT NULL DEFAULT ''")
+                    cur.execute("ALTER TABLE surgical_cases ADD COLUMN IF NOT EXISTS post_op_plan TEXT NOT NULL DEFAULT ''")
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS protocol_documents (
@@ -1686,10 +1690,15 @@ def load_surgical_cases():
                         case_stream,
                         procedure_name,
                         anatomical_location,
+                        cpt_codes,
                         status,
                         notes,
                         education_url,
                         education_notes,
+                        pt_destination,
+                        pt_protocol,
+                        dme_dispensed,
+                        post_op_plan,
                         created_date
                     FROM surgical_cases
                     ORDER BY case_date DESC, id DESC
@@ -1706,18 +1715,28 @@ def add_surgical_case(
     procedure_name,
     anatomical_location,
     or_facility="Mercy OR",
+    cpt_codes="",
     status="planned",
     notes="",
     education_url="",
     education_notes="",
+    pt_destination="",
+    pt_protocol="",
+    dme_dispensed="",
+    post_op_plan="",
 ):
     stream_value = case_stream.strip()
     procedure_value = procedure_name.strip()
     location_value = anatomical_location.strip()
     facility_value = (or_facility or "Mercy OR").strip()
+    cpt_codes_value = cpt_codes.strip()
     notes_value = notes.strip()
     education_url_value = education_url.strip()
     education_notes_value = education_notes.strip()
+    pt_destination_value = pt_destination.strip()
+    pt_protocol_value = pt_protocol.strip()
+    dme_dispensed_value = dme_dispensed.strip()
+    post_op_plan_value = post_op_plan.strip()
     if not stream_value or not procedure_value:
         return
 
@@ -1732,12 +1751,17 @@ def add_surgical_case(
                         procedure_name,
                         anatomical_location,
                         or_facility,
+                        cpt_codes,
                         status,
                         notes,
                         education_url,
                         education_notes,
+                        pt_destination,
+                        pt_protocol,
+                        dme_dispensed,
+                        post_op_plan,
                         created_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         case_date,
@@ -1745,10 +1769,15 @@ def add_surgical_case(
                         procedure_value,
                         location_value,
                         facility_value,
+                        cpt_codes_value,
                         status,
                         notes_value,
                         education_url_value,
                         education_notes_value,
+                        pt_destination_value,
+                        pt_protocol_value,
+                        dme_dispensed_value,
+                        post_op_plan_value,
                         mountain_today(),
                     ),
                 )
@@ -1763,10 +1792,15 @@ def add_surgical_case(
             "procedure_name": procedure_value,
             "anatomical_location": location_value,
             "or_facility": facility_value,
+            "cpt_codes": cpt_codes_value,
             "status": status,
             "notes": notes_value,
             "education_url": education_url_value,
             "education_notes": education_notes_value,
+            "pt_destination": pt_destination_value,
+            "pt_protocol": pt_protocol_value,
+            "dme_dispensed": dme_dispensed_value,
+            "post_op_plan": post_op_plan_value,
             "created_date": mountain_today(),
         }
     )
@@ -1779,10 +1813,15 @@ def update_surgical_case(case_id, **fields):
         "procedure_name",
         "anatomical_location",
         "or_facility",
+        "cpt_codes",
         "status",
         "notes",
         "education_url",
         "education_notes",
+        "pt_destination",
+        "pt_protocol",
+        "dme_dispensed",
+        "post_op_plan",
     }
     sanitized = {key: value for key, value in fields.items() if key in allowed_fields}
     if not sanitized:

@@ -7,9 +7,43 @@ import streamlit as st
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
+SURGICAL_CASE_CHECKLIST_FIELDS = (
+    ("pt_destination", "PT destination", "Where the patient wants to go for physical therapy."),
+    ("pt_protocol", "PT protocol", "Appropriate rehabilitation protocol selected or linked."),
+    ("dme_dispensed", "DME dispensed", "Correct durable medical equipment confirmed and dispensed."),
+    ("post_op_plan", "Post-op follow-up", "Post-op visits scheduled appropriately."),
+)
+
 
 def mountain_today():
     return datetime.now(MOUNTAIN_TIMEZONE).date()
+
+
+def surgical_case_checklist_items(case_item):
+    checklist_items = []
+    for field_name, label, prompt_text in SURGICAL_CASE_CHECKLIST_FIELDS:
+        detail = str(case_item.get(field_name) or "").strip()
+        checklist_items.append(
+            {
+                "field": field_name,
+                "label": label,
+                "prompt_text": prompt_text,
+                "detail": detail,
+                "is_complete": bool(detail),
+            }
+        )
+    return checklist_items
+
+
+def surgical_case_checklist_summary(case_item):
+    checklist_items = surgical_case_checklist_items(case_item)
+    completed_count = sum(1 for item in checklist_items if item["is_complete"])
+    return {
+        "items": checklist_items,
+        "completed_count": completed_count,
+        "total_count": len(checklist_items),
+        "missing_labels": [item["label"] for item in checklist_items if not item["is_complete"]],
+    }
 
 
 def _render_protocol_pdf_preview(st_module, file_bytes, file_mime, file_name, height=420, start_page=1, max_preview_pages=5):
@@ -163,6 +197,10 @@ def case_matches_library_filters(case_item, stream_filter, date_filter, normaliz
                 str(case_item.get("cpt_codes") or ""),
                 str(case_item.get("notes") or ""),
                 str(case_item.get("education_notes") or ""),
+                str(case_item.get("pt_destination") or ""),
+                str(case_item.get("pt_protocol") or ""),
+                str(case_item.get("dme_dispensed") or ""),
+                str(case_item.get("post_op_plan") or ""),
             ]
         ).lower()
         if normalized_query not in searchable_text:
@@ -617,6 +655,10 @@ def render_surgical_cases_panel(
         notes_key = f"{panel_key}_new_case_notes"
         education_url_key = f"{panel_key}_new_case_education_url"
         education_notes_key = f"{panel_key}_new_case_education_notes"
+        pt_destination_key = f"{panel_key}_new_case_pt_destination"
+        pt_protocol_key = f"{panel_key}_new_case_pt_protocol"
+        dme_dispensed_key = f"{panel_key}_new_case_dme_dispensed"
+        post_op_plan_key = f"{panel_key}_new_case_post_op_plan"
         cpt_reference_category_key = f"{panel_key}_cpt_reference_category"
         cpt_reference_select_key = f"{panel_key}_cpt_reference_select"
         cpt_prefill_key = f"{panel_key}_new_case_cpt_prefill"
@@ -639,6 +681,10 @@ def render_surgical_cases_panel(
             st_module.session_state[notes_key] = ""
             st_module.session_state[education_url_key] = ""
             st_module.session_state[education_notes_key] = ""
+            st_module.session_state[pt_destination_key] = ""
+            st_module.session_state[pt_protocol_key] = ""
+            st_module.session_state[dme_dispensed_key] = ""
+            st_module.session_state[post_op_plan_key] = ""
         if cpt_prefill_key in st_module.session_state:
             st_module.session_state[cpt_key] = st_module.session_state.pop(cpt_prefill_key)
 
@@ -732,6 +778,28 @@ def render_surgical_cases_panel(
             key=education_notes_key,
             placeholder="What the case is, key anatomy, technical pearls, postop points...",
         )
+        st_module.markdown("**Care checklist**")
+        pt_destination = st_module.text_input(
+            "PT destination preference",
+            key=pt_destination_key,
+            placeholder="Preferred PT clinic or therapist",
+        )
+        pt_protocol = st_module.text_input(
+            "PT protocol",
+            key=pt_protocol_key,
+            placeholder="Protocol title, linked document, or rehab plan",
+        )
+        dme_dispensed = st_module.text_input(
+            "DME dispensed",
+            key=dme_dispensed_key,
+            placeholder="Boot, crutches, scooter, brace, etc.",
+        )
+        post_op_plan = st_module.text_area(
+            "Post-op follow-up schedule",
+            height=80,
+            key=post_op_plan_key,
+            placeholder="Example: 2-week wound check, 6-week XR, 12-week return visit",
+        )
         submit_case = st_module.button("Add surgical case", key=f"{panel_key}_new_case_submit", type="primary")
 
         if submit_case:
@@ -770,6 +838,10 @@ def render_surgical_cases_panel(
                     notes=notes,
                     education_url=education_url,
                     education_notes=education_notes,
+                    pt_destination=pt_destination,
+                    pt_protocol=pt_protocol,
+                    dme_dispensed=dme_dispensed,
+                    post_op_plan=post_op_plan,
                 )
                 st_module.session_state[form_reset_key] = True
                 st_module.success("Surgical case saved.")
@@ -1070,6 +1142,50 @@ def render_surgical_cases_panel(
                 if item.get("education_notes"):
                     with st_module_ref.expander("Educational Description", expanded=False):
                         st_module_ref.write(item.get("education_notes"))
+
+                checklist_summary = surgical_case_checklist_summary(item)
+                checklist_label = f"Care checklist ({checklist_summary['completed_count']}/{checklist_summary['total_count']} complete)"
+                with st_module_ref.expander(checklist_label, expanded=bool(checklist_summary["missing_labels"]) and status == "planned"):
+                    for checklist_item in checklist_summary["items"]:
+                        state_label = "Complete" if checklist_item["is_complete"] else "Pending"
+                        detail_text = checklist_item["detail"] or checklist_item["prompt_text"]
+                        st_module_ref.markdown(f"- **{checklist_item['label']}**: {state_label}  ")
+                        st_module_ref.caption(detail_text)
+
+                    with st_module_ref.form(f"{panel_key_ref}_care_checklist_form_{case_id}"):
+                        edit_pt_destination = st_module_ref.text_input(
+                            "PT destination preference",
+                            value=item.get("pt_destination") or "",
+                            key=f"{panel_key_ref}_pt_destination_{case_id}",
+                        )
+                        edit_pt_protocol = st_module_ref.text_input(
+                            "PT protocol",
+                            value=item.get("pt_protocol") or "",
+                            key=f"{panel_key_ref}_pt_protocol_{case_id}",
+                        )
+                        edit_dme_dispensed = st_module_ref.text_input(
+                            "DME dispensed",
+                            value=item.get("dme_dispensed") or "",
+                            key=f"{panel_key_ref}_dme_dispensed_{case_id}",
+                        )
+                        edit_post_op_plan = st_module_ref.text_area(
+                            "Post-op follow-up schedule",
+                            value=item.get("post_op_plan") or "",
+                            height=80,
+                            key=f"{panel_key_ref}_post_op_plan_{case_id}",
+                        )
+                        save_checklist = st_module_ref.form_submit_button("Save checklist", type="secondary")
+
+                    if save_checklist:
+                        deps_ref["update_surgical_case"](
+                            case_id,
+                            pt_destination=edit_pt_destination,
+                            pt_protocol=edit_pt_protocol,
+                            dme_dispensed=edit_dme_dispensed,
+                            post_op_plan=edit_post_op_plan,
+                        )
+                        st_module_ref.success("Care checklist updated.")
+                        st_module_ref.rerun()
 
                 linked_protocol_ids = sorted(links_by_case.get(case_id, set()))
                 linked_pt_docs = [

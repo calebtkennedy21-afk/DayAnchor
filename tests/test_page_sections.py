@@ -5,6 +5,7 @@ from page_sections import (
     case_library_filter_preset_values,
     case_matches_library_filters,
     case_stream_options,
+    surgical_case_checklist_summary,
     split_cases_by_status,
 )
 
@@ -99,6 +100,53 @@ def test_case_stream_options_includes_only_present_streams():
     options = case_stream_options(cases)
 
     assert options == ["All streams", "Main OR", "TenJet"]
+
+
+def test_case_matches_library_filters_searches_checklist_fields():
+    item = {
+        "procedure_name": "Achilles repair",
+        "anatomical_location": "Ankle",
+        "cpt_codes": "27650",
+        "notes": "",
+        "education_notes": "",
+        "pt_destination": "Summit PT",
+        "pt_protocol": "Achilles repair rehab",
+        "dme_dispensed": "CAM boot",
+        "post_op_plan": "2 week and 6 week follow-up scheduled",
+        "case_stream": "Main OR",
+        "case_date": date(2026, 5, 25),
+    }
+
+    assert case_matches_library_filters(
+        item,
+        stream_filter="Main OR",
+        date_filter="Next 30 days",
+        normalized_query="summit pt",
+        today_value=date(2026, 5, 22),
+    )
+
+    assert case_matches_library_filters(
+        item,
+        stream_filter="Main OR",
+        date_filter="Next 30 days",
+        normalized_query="cam boot",
+        today_value=date(2026, 5, 22),
+    )
+
+
+def test_surgical_case_checklist_summary_counts_completed_items():
+    summary = surgical_case_checklist_summary(
+        {
+            "pt_destination": "Summit PT",
+            "pt_protocol": "Flatfoot reconstruction protocol",
+            "dme_dispensed": "",
+            "post_op_plan": "2-week and 6-week visits booked",
+        }
+    )
+
+    assert summary["completed_count"] == 3
+    assert summary["total_count"] == 4
+    assert summary["missing_labels"] == ["DME dispensed"]
 
 
 def test_split_cases_by_status_groups_expected_cases():
