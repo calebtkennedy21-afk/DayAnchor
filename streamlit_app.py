@@ -179,6 +179,7 @@ DEFAULT_APP_SETTINGS = {
     "clinical_notes_updated_at": "",
     "nightly_reflections": {},
     "morning_ritual_checkins": {},
+    "family_schedule_items": [],
 }
 
 
@@ -727,6 +728,88 @@ def normalize_morning_ritual_checkins(raw_checkins):
         }
 
     return dict(sorted(normalized.items()))
+
+
+def normalize_family_schedule_items(raw_items):
+    if not isinstance(raw_items, list):
+        return []
+
+    normalized = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+
+        title = str(raw_item.get("title") or "").strip()
+        start_date = parse_date_value(raw_item.get("start_date") or raw_item.get("date"))
+        if not title or not start_date:
+            continue
+
+        end_date = parse_date_value(raw_item.get("end_date")) or start_date
+        if end_date < start_date:
+            end_date = start_date
+
+        item_type = str(raw_item.get("item_type") or raw_item.get("category") or "Appointment").strip() or "Appointment"
+        priority = str(raw_item.get("priority") or "medium").strip().lower()
+        if priority not in ("high", "medium", "low"):
+            priority = "medium"
+
+        normalized.append(
+            {
+                "title": title,
+                "item_type": item_type,
+                "family_member": str(raw_item.get("family_member") or "").strip(),
+                "start_date": start_date,
+                "end_date": end_date,
+                "start_time": parse_time_value(raw_item.get("start_time")),
+                "priority": priority,
+                "notes": str(raw_item.get("notes") or "").strip(),
+                "location": str(raw_item.get("location") or "").strip(),
+                "status": str(raw_item.get("status") or "planned").strip() or "planned",
+                "all_day": bool(raw_item.get("all_day")),
+            }
+        )
+
+    return sorted(normalized, key=lambda item: (item["start_date"], item["start_time"] or time(23, 59), item["title"]))
+
+
+def weekly_family_schedule_summary(family_items, end_day=None, window_days=14):
+    safe_window_days = max(7, int(window_days or 14))
+    anchor_day = end_day or mountain_today()
+    window_end = anchor_day + timedelta(days=safe_window_days - 1)
+
+    upcoming = [item for item in family_items if item.get("start_date") and anchor_day <= item["start_date"] <= window_end]
+    by_type = {}
+    priority_counts = {"high": 0, "medium": 0, "low": 0}
+    weekend_count = 0
+    multi_day_count = 0
+
+    for item in upcoming:
+        normalized_type = str(item.get("item_type") or "Appointment").strip() or "Appointment"
+        by_type[normalized_type] = by_type.get(normalized_type, 0) + 1
+        priority = str(item.get("priority") or "medium").lower()
+        if priority in priority_counts:
+            priority_counts[priority] += 1
+        if item.get("start_date") and item["start_date"].weekday() >= 5:
+            weekend_count += 1
+        if item.get("end_date") and item.get("end_date") > item.get("start_date"):
+            multi_day_count += 1
+
+    appointment_count = sum(1 for item in upcoming if "appointment" in str(item.get("item_type") or "").lower())
+    trip_count = sum(1 for item in upcoming if any(keyword in str(item.get("item_type") or "").lower() for keyword in ("trip", "travel")))
+    camp_count = sum(1 for item in upcoming if any(keyword in str(item.get("item_type") or "").lower() for keyword in ("camp", "sports", "game")))
+
+    return {
+        "window_days": safe_window_days,
+        "upcoming_count": len(upcoming),
+        "appointment_count": appointment_count,
+        "trip_count": trip_count,
+        "camp_count": camp_count,
+        "multi_day_count": multi_day_count,
+        "weekend_count": weekend_count,
+        "priority_counts": priority_counts,
+        "by_type": by_type,
+        "upcoming_items": upcoming,
+    }
 
 
 def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
@@ -4270,6 +4353,8 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
 
     week_start = st.session_state[week_key]
     week_days = [week_start + timedelta(days=offset) for offset in range(7)]
+    family_schedule_items = normalize_family_schedule_items((app_settings or {}).get("family_schedule_items"))
+    family_week_window_end = week_start + timedelta(days=13)
     daily_capacity_minutes = max(60, safe_int(app_settings.get("schedule_daily_capacity_minutes", 480), 480))
     capacity_days_per_week = max(1, min(7, safe_int(app_settings.get("schedule_capacity_days_per_week", 5), 5)))
     weekly_capacity_minutes = daily_capacity_minutes * capacity_days_per_week
@@ -4537,6 +4622,114 @@ def render_schedule_builder_panel(active_tasks, app_settings, panel_key="schedul
         )
         if snapshot["unscheduled_high"]:
             st.caption(f"Top unscheduled high-priority task: {snapshot['unscheduled_high'][0]['title']}")
+
+        family_summary = weekly_family_schedule_summary(family_schedule_items, end_day=week_start, window_days=14)
+        family_conflict_count = sum(1 for item in family_summary["upcoming_items"] if scheduled_by_day.get(item["start_date"]))
+
+        st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Family Schedule</h3><span>Appointments, trips, camps, and other family plans</span></div>', unsafe_allow_html=True)
+        family_metrics = st.columns(4)
+        family_metrics[0].metric("Upcoming", family_summary["upcoming_count"])
+        family_metrics[1].metric("Appointments", family_summary["appointment_count"])
+        family_metrics[2].metric("Trips/Camps", family_summary["trip_count"] + family_summary["camp_count"])
+        family_metrics[3].metric("Conflict days", family_conflict_count)
+
+        with st.form(f"{panel_key}_family_item_form", clear_on_submit=True):
+            family_title = st.text_input("Event title")
+            family_type = st.selectbox(
+                "Type",
+                ["Appointment", "Trip", "Sports camp", "Camping", "Tournament", "Travel", "Other"],
+                index=0,
+            )
+            family_member = st.text_input("Family member / group", placeholder="Sam, kids, whole family")
+            family_date = st.date_input("Start date", value=week_start, key=f"{panel_key}_family_start_date")
+            family_multi_day = st.checkbox("Multi-day item", key=f"{panel_key}_family_multi_day")
+            if family_multi_day:
+                family_end_min = family_date + timedelta(days=1)
+                family_end_default = st.session_state.get(f"{panel_key}_family_end_date", family_end_min)
+                if family_end_default < family_end_min:
+                    family_end_default = family_end_min
+                family_end_date = st.date_input(
+                    "End date",
+                    value=family_end_default,
+                    min_value=family_end_min,
+                    key=f"{panel_key}_family_end_date",
+                )
+            else:
+                family_end_date = family_date
+            family_timed = st.checkbox(
+                "Timed event",
+                value=family_type == "Appointment",
+                key=f"{panel_key}_family_timed",
+            )
+            if family_timed and not family_multi_day:
+                family_time = st.time_input("Start time", value=time(9, 0), key=f"{panel_key}_family_time")
+            else:
+                family_time = None
+            family_location = st.text_input("Location", placeholder="Clinic, airport, campground, field")
+            family_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+            family_notes = st.text_area("Notes", height=80, placeholder="Packing list, who is attending, confirmation details...")
+            family_submit = st.form_submit_button("Add family item", type="primary")
+
+        if family_submit:
+            if not family_title.strip():
+                st.warning("Add an event title before saving.")
+            else:
+                updated_family_items = list(family_schedule_items)
+                updated_family_items.append(
+                    {
+                        "title": family_title.strip(),
+                        "item_type": family_type,
+                        "family_member": family_member.strip(),
+                        "start_date": family_date,
+                        "end_date": family_end_date if family_multi_day else family_date,
+                        "start_time": family_time if family_timed and not family_multi_day else None,
+                        "priority": family_priority,
+                        "location": family_location.strip(),
+                        "notes": family_notes.strip(),
+                        "status": "planned",
+                        "all_day": (not family_timed) or family_multi_day,
+                    }
+                )
+                save_app_settings({
+                    **(app_settings or {}),
+                    "family_schedule_items": updated_family_items,
+                })
+                st.success("Family schedule item saved.")
+                st.rerun()
+
+        family_insight_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight"
+        family_insight_error_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight_error"
+        if st.button("Generate Family AI Insight", key=f"{panel_key}_generate_family_ai", type="secondary"):
+            family_ai_summary = dict(family_summary)
+            family_ai_summary["conflict_count"] = family_conflict_count
+            insight_text, insight_error = generate_family_schedule_insight(
+                family_ai_summary,
+                family_summary["upcoming_items"],
+            )
+            st.session_state[family_insight_key] = insight_text
+            st.session_state[family_insight_error_key] = insight_error
+        if st.session_state.get(family_insight_error_key):
+            st.warning(st.session_state[family_insight_error_key])
+        if st.session_state.get(family_insight_key):
+            st.markdown(st.session_state[family_insight_key])
+
+        if family_summary["upcoming_items"]:
+            st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Upcoming family items</h3><span>Next 14 days</span></div>', unsafe_allow_html=True)
+            for item in family_summary["upcoming_items"][:8]:
+                date_range = item["start_date"].strftime("%b %d")
+                if item.get("end_date") and item["end_date"] != item["start_date"]:
+                    date_range = f"{date_range} - {item['end_date'].strftime('%b %d')}"
+                time_label = item["start_time"].strftime("%I:%M %p").lstrip("0") if item.get("start_time") else "All day"
+                family_member_label = item.get("family_member") or "Family"
+                st.markdown(
+                    f"- <strong>{item['title']}</strong> · {item.get('item_type')} · {date_range} · {time_label} · {family_member_label}",
+                    unsafe_allow_html=True,
+                )
+                if item.get("notes"):
+                    st.caption(item.get("notes"))
+        else:
+            st.markdown('<div class="empty-state">No family items yet. Add appointments, trips, camps, or camping plans here.</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="height: 0.9rem;"></div>', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Schedule Template</h3><span>Add events, dinners, travel, vacation, and clinic blocks to the calendar</span></div>', unsafe_allow_html=True)
@@ -9465,6 +9658,7 @@ generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_f
 generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_morning_ritual_insight = partial(ai_workflows.generate_weekly_morning_ritual_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_family_schedule_insight = partial(ai_workflows.generate_family_schedule_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)

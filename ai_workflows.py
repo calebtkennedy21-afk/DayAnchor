@@ -518,6 +518,85 @@ def generate_weekly_nightly_insight(
         return "", f"AI weekly insight failed: {exc}"
 
 
+def generate_family_schedule_insight(
+    family_summary,
+    recent_items,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    summary = family_summary or {}
+    upcoming_count = int(summary.get("upcoming_count") or 0)
+    appointment_count = int(summary.get("appointment_count") or 0)
+    trip_count = int(summary.get("trip_count") or 0)
+    camp_count = int(summary.get("camp_count") or 0)
+    multi_day_count = int(summary.get("multi_day_count") or 0)
+    conflict_count = int(summary.get("conflict_count") or 0)
+    weekend_count = int(summary.get("weekend_count") or 0)
+
+    recent_lines = []
+    for item in (recent_items or [])[:6]:
+        item_date = item.get("start_date") or item.get("date") or "unknown date"
+        title = str(item.get("title") or "Untitled").strip()
+        item_type = str(item.get("item_type") or "family item").strip()
+        recent_lines.append(f"- {item_date}: {title} ({item_type})")
+    recent_text = "\n".join(recent_lines) if recent_lines else "- None"
+
+    if not ai_enabled_fn():
+        if conflict_count:
+            focus = "Move one family item off the busiest day and protect a buffer before the next work block."
+        elif trip_count or camp_count:
+            focus = "Group trip or camp prep into one checklist block so the calendar does not get fragmented."
+        elif multi_day_count:
+            focus = "Mark the multi-day block early and add a reminder for the day before it starts."
+        else:
+            focus = "Add one shared family planning check-in each week so appointments do not land by surprise."
+        return (
+            "### Weekly Family Insight\n"
+            f"Actionable adjustment: {focus}"
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise family logistics coach. Return one weekly insight and one concrete adjustment for the family calendar."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Family schedule snapshot:\n"
+                        f"- upcoming items: {upcoming_count}\n"
+                        f"- appointments: {appointment_count}\n"
+                        f"- trips: {trip_count}\n"
+                        f"- camps/sports: {camp_count}\n"
+                        f"- multi-day items: {multi_day_count}\n"
+                        f"- conflict days: {conflict_count}\n"
+                        f"- weekend items: {weekend_count}\n\n"
+                        "Recent family items:\n"
+                        f"{recent_text}\n\n"
+                        "Return markdown with exactly:\n"
+                        "### Weekly Family Insight\n"
+                        "One short paragraph (1-3 sentences) and exactly one actionable adjustment sentence starting with 'Actionable adjustment:'."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty family insight response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI family insight failed: {exc}"
+
+
 def generate_weekly_morning_ritual_insight(
     weekly_trends,
     recent_checkins,
