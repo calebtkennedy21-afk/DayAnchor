@@ -4984,184 +4984,7 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     )
 
     family_goal_summary = family_goal_dashboard_summary(family_goals)
-    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Family Goals</h3><span>Set shared targets and track weekly progress</span></div>', unsafe_allow_html=True)
-    goal_metrics = st.columns(4)
-    goal_metrics[0].metric("Active goals", len(family_goal_summary["active_goals"]))
-    goal_metrics[1].metric("On track", len(family_goal_summary["on_track_goals"]))
-    goal_metrics[2].metric("This week logs", family_goal_summary["week_checkins"])
-    goal_metrics[3].metric("Best streak", family_goal_summary["best_streak"])
-
-    family_digest_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest"
-    family_digest_error_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest_error"
-    if st.button("Generate Family Weekly Digest", key=f"{panel_key}_generate_family_digest", type="secondary"):
-        digest_schedule_summary = dict(family_summary)
-        digest_schedule_summary["conflict_count"] = family_conflict_count
-        digest_goal_summary = {
-            "active_goal_count": len(family_goal_summary["active_goals"]),
-            "on_track_count": len(family_goal_summary["on_track_goals"]),
-            "attention_count": len(family_goal_summary["attention_goals"]),
-            "week_checkins": family_goal_summary["week_checkins"],
-            "best_streak": family_goal_summary["best_streak"],
-        }
-        digest_text, digest_error = generate_family_weekly_digest(
-            digest_schedule_summary,
-            digest_goal_summary,
-            family_summary["upcoming_items"],
-            family_goal_summary["active_goals"],
-        )
-        st.session_state[family_digest_key] = digest_text
-        st.session_state[family_digest_error_key] = digest_error
-    if st.session_state.get(family_digest_error_key):
-        st.warning(st.session_state[family_digest_error_key])
-    if st.session_state.get(family_digest_key):
-        st.markdown(st.session_state[family_digest_key])
-        digest_action_cols = st.columns(2)
-        with digest_action_cols[0]:
-            if st.button("Save digest to weekly notes", key=f"{panel_key}_save_family_digest"):
-                digest_text_to_save = str(st.session_state.get(family_digest_key) or "").strip()
-                if not digest_text_to_save:
-                    st.warning("Generate a digest before saving.")
-                else:
-                    updated_notes = []
-                    for entry in raw_family_weekly_notes:
-                        if not isinstance(entry, dict):
-                            continue
-                        if parse_date_value(entry.get("week_start")) == week_start:
-                            continue
-                        updated_notes.append(entry)
-
-                    updated_notes.append(
-                        {
-                            "note_id": uuid4().hex,
-                            "week_start": week_start,
-                            "digest_text": digest_text_to_save,
-                            "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
-                        }
-                    )
-                    _save_family_weekly_notes(updated_notes)
-                    st.success("Digest saved to weekly notes.")
-                    st.rerun()
-        with digest_action_cols[1]:
-            st.caption("Saving a digest for this week replaces any previously saved digest for the same week.")
-
-    if family_weekly_notes:
-        st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Saved Weekly Digests</h3><span>Historical family planning notes</span></div>', unsafe_allow_html=True)
-        for note in family_weekly_notes[:8]:
-            week_label = note.get("week_start").strftime("%b %d, %Y") if note.get("week_start") else "Unknown week"
-            saved_at_label = note.get("saved_at") or ""
-            with st.expander(f"Week of {week_label}", expanded=False):
-                if saved_at_label:
-                    st.caption(f"Saved: {saved_at_label}")
-                st.markdown(note.get("digest_text") or "")
-                if st.button("Delete saved digest", key=f"{panel_key}_delete_saved_digest_{note.get('note_id')}"):
-                    source_index = note.get("source_index")
-                    if source_index is not None and source_index < len(raw_family_weekly_notes):
-                        updated_notes = [entry for idx, entry in enumerate(raw_family_weekly_notes) if idx != source_index]
-                        _save_family_weekly_notes(updated_notes)
-                        st.success("Saved digest deleted.")
-                        st.rerun()
-
-    family_goal_coaching_key = f"{panel_key}_{week_start.isoformat()}_family_goal_coaching"
-    family_goal_coaching_error_key = f"{panel_key}_{week_start.isoformat()}_family_goal_coaching_error"
-    if st.button("Generate Weekly Goal Coaching", key=f"{panel_key}_generate_goal_coaching", type="secondary"):
-        coaching_summary = {
-            "active_goal_count": len(family_goal_summary["active_goals"]),
-            "on_track_count": len(family_goal_summary["on_track_goals"]),
-            "attention_count": len(family_goal_summary["attention_goals"]),
-            "week_checkins": family_goal_summary["week_checkins"],
-            "best_streak": family_goal_summary["best_streak"],
-        }
-        coaching_text, coaching_error = generate_family_goal_coaching(
-            coaching_summary,
-            family_goal_summary["active_goals"],
-        )
-        st.session_state[family_goal_coaching_key] = coaching_text
-        st.session_state[family_goal_coaching_error_key] = coaching_error
-    if st.session_state.get(family_goal_coaching_error_key):
-        st.warning(st.session_state[family_goal_coaching_error_key])
-    if st.session_state.get(family_goal_coaching_key):
-        st.markdown(st.session_state[family_goal_coaching_key])
-
-    with st.form(f"{panel_key}_goal_form", clear_on_submit=True):
-        goal_cols = st.columns(3)
-        with goal_cols[0]:
-            family_goal_title = st.text_input("Goal title", placeholder="Example: Family dinner together")
-        with goal_cols[1]:
-            family_goal_owner = st.text_input("Owner", placeholder="Family / parent / child")
-        with goal_cols[2]:
-            family_goal_target = st.number_input("Weekly target", min_value=1, max_value=14, value=3, step=1)
-        family_goal_notes = st.text_area("Goal notes", placeholder="What success looks like and any constraints", height=80)
-        family_goal_submit = st.form_submit_button("Add family goal", type="primary")
-
     today_value = mountain_today()
-    if family_goal_submit:
-        if not family_goal_title.strip():
-            st.warning("Add a goal title before saving.")
-        else:
-            updated_family_goals = list(raw_family_goals)
-            updated_family_goals.append(
-                {
-                    "goal_id": uuid4().hex,
-                    "title": family_goal_title.strip(),
-                    "owner": family_goal_owner.strip() or "Family",
-                    "target_frequency": int(family_goal_target),
-                    "notes": family_goal_notes.strip(),
-                    "status": "active",
-                    "created_date": today_value,
-                    "checkin_dates": [],
-                }
-            )
-            _save_family_goals(updated_family_goals)
-            st.success("Family goal added.")
-            st.rerun()
-
-    if family_goals:
-        for goal in family_goals[:14]:
-            goal_status = goal.get("status") or "active"
-            target = int(goal.get("target_frequency") or 1)
-            progress = int(goal.get("week_checkins") or 0)
-            with st.expander(f"{goal.get('title')} · {goal.get('owner')} · {goal_status}", expanded=False):
-                st.caption(f"Weekly progress: {progress}/{target} · Total check-ins: {goal.get('total_checkins') or 0}")
-                st.progress(min(1.0, float(progress) / float(max(1, target))))
-                if goal.get("notes"):
-                    st.markdown(goal.get("notes"))
-                if goal.get("checkin_dates"):
-                    recent_dates = ", ".join([day.strftime("%b %d") for day in goal.get("checkin_dates")[-5:]])
-                    st.caption(f"Recent check-ins: {recent_dates}")
-
-                goal_action_cols = st.columns(4)
-                if goal_action_cols[0].button("Log check-in today", key=f"{panel_key}_goal_checkin_{goal.get('goal_id')}"):
-                    if goal.get("today_checked_in"):
-                        st.info("This goal is already checked in today.")
-                    else:
-                        updated_dates = [day.isoformat() for day in goal.get("checkin_dates")]
-                        updated_dates.append(today_value.isoformat())
-                        if _apply_goal_update(goal, {"checkin_dates": sorted(set(updated_dates))}):
-                            st.success("Check-in logged for today.")
-                            st.rerun()
-
-                if goal_action_cols[1].button("Pause/Activate", key=f"{panel_key}_goal_toggle_{goal.get('goal_id')}"):
-                    new_status = "active" if goal_status == "paused" else "paused"
-                    if goal_status == "completed":
-                        new_status = "active"
-                    if _apply_goal_update(goal, {"status": new_status}):
-                        st.success(f"Goal status updated to {new_status}.")
-                        st.rerun()
-
-                if goal_action_cols[2].button("Mark completed", key=f"{panel_key}_goal_done_{goal.get('goal_id')}"):
-                    if _apply_goal_update(goal, {"status": "completed"}):
-                        st.success("Goal marked as completed.")
-                        st.rerun()
-
-                if goal_action_cols[3].button("Delete", key=f"{panel_key}_goal_delete_{goal.get('goal_id')}"):
-                    source_index = goal.get("source_index")
-                    if source_index is not None and source_index < len(raw_family_goals):
-                        updated_goals = [entry for idx, entry in enumerate(raw_family_goals) if idx != source_index]
-                        _save_family_goals(updated_goals)
-                        st.success("Family goal deleted.")
-                        st.rerun()
-    else:
-        st.caption("No family goals yet. Add one and start checking in daily.")
 
     timeline_days = [today_value + timedelta(days=offset) for offset in range(4)]
     timeline_by_day = {
@@ -5557,6 +5380,184 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                         st.rerun()
     else:
         st.caption("No saved family items to manage yet.")
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Family Goals</h3><span>Set shared targets and track weekly progress</span></div>', unsafe_allow_html=True)
+    goal_metrics = st.columns(4)
+    goal_metrics[0].metric("Active goals", len(family_goal_summary["active_goals"]))
+    goal_metrics[1].metric("On track", len(family_goal_summary["on_track_goals"]))
+    goal_metrics[2].metric("This week logs", family_goal_summary["week_checkins"])
+    goal_metrics[3].metric("Best streak", family_goal_summary["best_streak"])
+
+    family_digest_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest"
+    family_digest_error_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest_error"
+    if st.button("Generate Family Weekly Digest", key=f"{panel_key}_generate_family_digest", type="secondary"):
+        digest_schedule_summary = dict(family_summary)
+        digest_schedule_summary["conflict_count"] = family_conflict_count
+        digest_goal_summary = {
+            "active_goal_count": len(family_goal_summary["active_goals"]),
+            "on_track_count": len(family_goal_summary["on_track_goals"]),
+            "attention_count": len(family_goal_summary["attention_goals"]),
+            "week_checkins": family_goal_summary["week_checkins"],
+            "best_streak": family_goal_summary["best_streak"],
+        }
+        digest_text, digest_error = generate_family_weekly_digest(
+            digest_schedule_summary,
+            digest_goal_summary,
+            family_summary["upcoming_items"],
+            family_goal_summary["active_goals"],
+        )
+        st.session_state[family_digest_key] = digest_text
+        st.session_state[family_digest_error_key] = digest_error
+    if st.session_state.get(family_digest_error_key):
+        st.warning(st.session_state[family_digest_error_key])
+    if st.session_state.get(family_digest_key):
+        st.markdown(st.session_state[family_digest_key])
+        digest_action_cols = st.columns(2)
+        with digest_action_cols[0]:
+            if st.button("Save digest to weekly notes", key=f"{panel_key}_save_family_digest"):
+                digest_text_to_save = str(st.session_state.get(family_digest_key) or "").strip()
+                if not digest_text_to_save:
+                    st.warning("Generate a digest before saving.")
+                else:
+                    updated_notes = []
+                    for entry in raw_family_weekly_notes:
+                        if not isinstance(entry, dict):
+                            continue
+                        if parse_date_value(entry.get("week_start")) == week_start:
+                            continue
+                        updated_notes.append(entry)
+
+                    updated_notes.append(
+                        {
+                            "note_id": uuid4().hex,
+                            "week_start": week_start,
+                            "digest_text": digest_text_to_save,
+                            "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                        }
+                    )
+                    _save_family_weekly_notes(updated_notes)
+                    st.success("Digest saved to weekly notes.")
+                    st.rerun()
+        with digest_action_cols[1]:
+            st.caption("Saving a digest for this week replaces any previously saved digest for the same week.")
+
+    if family_weekly_notes:
+        st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Saved Weekly Digests</h3><span>Historical family planning notes</span></div>', unsafe_allow_html=True)
+        for note in family_weekly_notes[:8]:
+            week_label = note.get("week_start").strftime("%b %d, %Y") if note.get("week_start") else "Unknown week"
+            saved_at_label = note.get("saved_at") or ""
+            with st.expander(f"Week of {week_label}", expanded=False):
+                if saved_at_label:
+                    st.caption(f"Saved: {saved_at_label}")
+                st.markdown(note.get("digest_text") or "")
+                if st.button("Delete saved digest", key=f"{panel_key}_delete_saved_digest_{note.get('note_id')}"):
+                    source_index = note.get("source_index")
+                    if source_index is not None and source_index < len(raw_family_weekly_notes):
+                        updated_notes = [entry for idx, entry in enumerate(raw_family_weekly_notes) if idx != source_index]
+                        _save_family_weekly_notes(updated_notes)
+                        st.success("Saved digest deleted.")
+                        st.rerun()
+
+    family_goal_coaching_key = f"{panel_key}_{week_start.isoformat()}_family_goal_coaching"
+    family_goal_coaching_error_key = f"{panel_key}_{week_start.isoformat()}_family_goal_coaching_error"
+    if st.button("Generate Weekly Goal Coaching", key=f"{panel_key}_generate_goal_coaching", type="secondary"):
+        coaching_summary = {
+            "active_goal_count": len(family_goal_summary["active_goals"]),
+            "on_track_count": len(family_goal_summary["on_track_goals"]),
+            "attention_count": len(family_goal_summary["attention_goals"]),
+            "week_checkins": family_goal_summary["week_checkins"],
+            "best_streak": family_goal_summary["best_streak"],
+        }
+        coaching_text, coaching_error = generate_family_goal_coaching(
+            coaching_summary,
+            family_goal_summary["active_goals"],
+        )
+        st.session_state[family_goal_coaching_key] = coaching_text
+        st.session_state[family_goal_coaching_error_key] = coaching_error
+    if st.session_state.get(family_goal_coaching_error_key):
+        st.warning(st.session_state[family_goal_coaching_error_key])
+    if st.session_state.get(family_goal_coaching_key):
+        st.markdown(st.session_state[family_goal_coaching_key])
+
+    with st.form(f"{panel_key}_goal_form", clear_on_submit=True):
+        goal_cols = st.columns(3)
+        with goal_cols[0]:
+            family_goal_title = st.text_input("Goal title", placeholder="Example: Family dinner together")
+        with goal_cols[1]:
+            family_goal_owner = st.text_input("Owner", placeholder="Family / parent / child")
+        with goal_cols[2]:
+            family_goal_target = st.number_input("Weekly target", min_value=1, max_value=14, value=3, step=1)
+        family_goal_notes = st.text_area("Goal notes", placeholder="What success looks like and any constraints", height=80)
+        family_goal_submit = st.form_submit_button("Add family goal", type="primary")
+
+    if family_goal_submit:
+        if not family_goal_title.strip():
+            st.warning("Add a goal title before saving.")
+        else:
+            updated_family_goals = list(raw_family_goals)
+            updated_family_goals.append(
+                {
+                    "goal_id": uuid4().hex,
+                    "title": family_goal_title.strip(),
+                    "owner": family_goal_owner.strip() or "Family",
+                    "target_frequency": int(family_goal_target),
+                    "notes": family_goal_notes.strip(),
+                    "status": "active",
+                    "created_date": today_value,
+                    "checkin_dates": [],
+                }
+            )
+            _save_family_goals(updated_family_goals)
+            st.success("Family goal added.")
+            st.rerun()
+
+    if family_goals:
+        for goal in family_goals[:14]:
+            goal_status = goal.get("status") or "active"
+            target = int(goal.get("target_frequency") or 1)
+            progress = int(goal.get("week_checkins") or 0)
+            with st.expander(f"{goal.get('title')} · {goal.get('owner')} · {goal_status}", expanded=False):
+                st.caption(f"Weekly progress: {progress}/{target} · Total check-ins: {goal.get('total_checkins') or 0}")
+                st.progress(min(1.0, float(progress) / float(max(1, target))))
+                if goal.get("notes"):
+                    st.markdown(goal.get("notes"))
+                if goal.get("checkin_dates"):
+                    recent_dates = ", ".join([day.strftime("%b %d") for day in goal.get("checkin_dates")[-5:]])
+                    st.caption(f"Recent check-ins: {recent_dates}")
+
+                goal_action_cols = st.columns(4)
+                if goal_action_cols[0].button("Log check-in today", key=f"{panel_key}_goal_checkin_{goal.get('goal_id')}"):
+                    if goal.get("today_checked_in"):
+                        st.info("This goal is already checked in today.")
+                    else:
+                        updated_dates = [day.isoformat() for day in goal.get("checkin_dates")]
+                        updated_dates.append(today_value.isoformat())
+                        if _apply_goal_update(goal, {"checkin_dates": sorted(set(updated_dates))}):
+                            st.success("Check-in logged for today.")
+                            st.rerun()
+
+                if goal_action_cols[1].button("Pause/Activate", key=f"{panel_key}_goal_toggle_{goal.get('goal_id')}"):
+                    new_status = "active" if goal_status == "paused" else "paused"
+                    if goal_status == "completed":
+                        new_status = "active"
+                    if _apply_goal_update(goal, {"status": new_status}):
+                        st.success(f"Goal status updated to {new_status}.")
+                        st.rerun()
+
+                if goal_action_cols[2].button("Mark completed", key=f"{panel_key}_goal_done_{goal.get('goal_id')}"):
+                    if _apply_goal_update(goal, {"status": "completed"}):
+                        st.success("Goal marked as completed.")
+                        st.rerun()
+
+                if goal_action_cols[3].button("Delete", key=f"{panel_key}_goal_delete_{goal.get('goal_id')}"):
+                    source_index = goal.get("source_index")
+                    if source_index is not None and source_index < len(raw_family_goals):
+                        updated_goals = [entry for idx, entry in enumerate(raw_family_goals) if idx != source_index]
+                        _save_family_goals(updated_goals)
+                        st.success("Family goal deleted.")
+                        st.rerun()
+    else:
+        st.caption("No family goals yet. Add one and start checking in daily.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
