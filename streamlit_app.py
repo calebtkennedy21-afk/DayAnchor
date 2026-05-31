@@ -753,6 +753,20 @@ def normalize_family_schedule_items(raw_items):
         if priority not in ("high", "medium", "low"):
             priority = "medium"
 
+        recurrence_rule = str(raw_item.get("recurrence_rule") or "none").strip().lower()
+        if recurrence_rule not in ("none", "daily", "weekly", "monthly", "yearly"):
+            recurrence_rule = "none"
+        recurrence_interval = safe_int(raw_item.get("recurrence_interval"), 1)
+        recurrence_interval = max(1, recurrence_interval)
+        recurrence_end_date = parse_date_value(raw_item.get("recurrence_end_date"))
+
+        raw_checklist = raw_item.get("checklist_items")
+        checklist_items = []
+        if isinstance(raw_checklist, list):
+            checklist_items = [str(item).strip() for item in raw_checklist if str(item).strip()]
+        elif isinstance(raw_checklist, str):
+            checklist_items = [line.strip("- ").strip() for line in raw_checklist.splitlines() if line.strip()]
+
         normalized.append(
             {
                 "title": title,
@@ -766,22 +780,118 @@ def normalize_family_schedule_items(raw_items):
                 "location": str(raw_item.get("location") or "").strip(),
                 "status": str(raw_item.get("status") or "planned").strip() or "planned",
                 "all_day": bool(raw_item.get("all_day")),
+                "checklist_items": checklist_items,
+                "recurrence_rule": recurrence_rule,
+                "recurrence_interval": recurrence_interval,
+                "recurrence_end_date": recurrence_end_date,
             }
         )
 
     return sorted(normalized, key=lambda item: (item["start_date"], item["start_time"] or time(23, 59), item["title"]))
 
 
-def weekly_family_schedule_summary(family_items, end_day=None, window_days=14):
+def family_checklist_template(item_type):
+    normalized_type = str(item_type or "").strip().lower()
+    if "appointment" in normalized_type:
+        return ["Insurance card", "Intake paperwork", "Medication list", "Arrival 15 minutes early"]
+    if "camp" in normalized_type or "sports" in normalized_type or "tournament" in normalized_type:
+        return ["Registration confirmation", "Uniform/gear", "Water/snacks", "Drop-off and pickup plan"]
+    if "camping" in normalized_type:
+        return ["Tent and sleeping bags", "Camp meals and cooler", "Weather check", "Departure checklist"]
+    if "trip" in normalized_type or "travel" in normalized_type:
+        return ["Travel confirmations", "Packing list", "Transportation plan", "Return-day reset items"]
+    return ["Confirm who is attending", "Confirm timing", "Add a reminder 24h before"]
+
+
+def _family_shift_months(value, months):
+    if not value:
+        return value
+    total_months = (value.year * 12 + (value.month - 1)) + months
+    year_value = total_months // 12
+    month_value = (total_months % 12) + 1
+    max_day = calendar.monthrange(year_value, month_value)[1]
+    return date(year_value, month_value, min(value.day, max_day))
+
+
+def _family_shift_recurrence(value, recurrence_rule, recurrence_interval):
+    safe_interval = max(1, int(recurrence_interval or 1))
+    if recurrence_rule == "daily":
+        return value + timedelta(days=safe_interval)
+    if recurrence_rule == "weekly":
+        return value + timedelta(days=7 * safe_interval)
+    if recurrence_rule == "monthly":
+        return _family_shift_months(value, safe_interval)
+    if recurrence_rule == "yearly":
+        return _family_shift_months(value, 12 * safe_interval)
+    return value
+
+
+def expand_family_schedule_items(family_items, end_day=None, window_days=14):
     safe_window_days = max(7, int(window_days or 14))
     anchor_day = end_day or mountain_today()
     window_end = anchor_day + timedelta(days=safe_window_days - 1)
+    expanded = []
 
-    upcoming = [item for item in family_items if item.get("start_date") and anchor_day <= item["start_date"] <= window_end]
+    for source_item in family_items:
+        start_date = source_item.get("start_date")
+        end_date = source_item.get("end_date") or start_date
+        if not start_date:
+            continue
+
+        recurrence_rule = str(source_item.get("recurrence_rule") or "none").strip().lower()
+        recurrence_interval = max(1, safe_int(source_item.get("recurrence_interval"), 1))
+        recurrence_end_date = source_item.get("recurrence_end_date")
+        span_days = max(0, (end_date - start_date).days)
+
+        occurrence_start = start_date
+        occurrence_end = end_date
+
+        if recurrence_rule in ("daily", "weekly") and occurrence_start < anchor_day:
+            step_days = recurrence_interval if recurrence_rule == "daily" else recurrence_interval * 7
+            diff_days = (anchor_day - occurrence_start).days
+            if step_days > 0 and diff_days > 0:
+                jump_steps = max(0, diff_days // step_days)
+                occurrence_start = occurrence_start + timedelta(days=jump_steps * step_days)
+                occurrence_end = occurrence_start + timedelta(days=span_days)
+
+        occurrence_index = 0
+        safety_limit = 180
+        while occurrence_start <= window_end and occurrence_index < safety_limit:
+            if recurrence_end_date and occurrence_start > recurrence_end_date:
+                break
+
+            if occurrence_end >= anchor_day and occurrence_start <= window_end:
+                expanded_item = dict(source_item)
+                expanded_item["start_date"] = occurrence_start
+                expanded_item["end_date"] = occurrence_end
+                expanded_item["source_start_date"] = start_date
+                expanded_item["occurrence_index"] = occurrence_index
+                expanded_item["is_recurring_occurrence"] = recurrence_rule != "none"
+                expanded.append(expanded_item)
+
+            if recurrence_rule == "none":
+                break
+
+            next_start = _family_shift_recurrence(occurrence_start, recurrence_rule, recurrence_interval)
+            if next_start == occurrence_start:
+                break
+            occurrence_start = next_start
+            occurrence_end = occurrence_start + timedelta(days=span_days)
+            occurrence_index += 1
+
+    return sorted(expanded, key=lambda item: (item["start_date"], item.get("start_time") or time(23, 59), item["title"]))
+
+
+def weekly_family_schedule_summary(family_items, end_day=None, window_days=14):
+    safe_window_days = max(7, int(window_days or 14))
+    anchor_day = end_day or mountain_today()
+    upcoming = expand_family_schedule_items(family_items, end_day=anchor_day, window_days=safe_window_days)
     by_type = {}
     priority_counts = {"high": 0, "medium": 0, "low": 0}
     weekend_count = 0
     multi_day_count = 0
+    recurring_count = 0
+    checklist_count = 0
 
     for item in upcoming:
         normalized_type = str(item.get("item_type") or "Appointment").strip() or "Appointment"
@@ -793,6 +903,10 @@ def weekly_family_schedule_summary(family_items, end_day=None, window_days=14):
             weekend_count += 1
         if item.get("end_date") and item.get("end_date") > item.get("start_date"):
             multi_day_count += 1
+        if item.get("is_recurring_occurrence"):
+            recurring_count += 1
+        if item.get("checklist_items"):
+            checklist_count += 1
 
     appointment_count = sum(1 for item in upcoming if "appointment" in str(item.get("item_type") or "").lower())
     trip_count = sum(1 for item in upcoming if any(keyword in str(item.get("item_type") or "").lower() for keyword in ("trip", "travel")))
@@ -805,7 +919,9 @@ def weekly_family_schedule_summary(family_items, end_day=None, window_days=14):
         "trip_count": trip_count,
         "camp_count": camp_count,
         "multi_day_count": multi_day_count,
+        "recurring_count": recurring_count,
         "weekend_count": weekend_count,
+        "items_with_checklists": checklist_count,
         "priority_counts": priority_counts,
         "by_type": by_type,
         "upcoming_items": upcoming,
@@ -4784,6 +4900,11 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     family_metrics[1].metric("Appointments", family_summary["appointment_count"])
     family_metrics[2].metric("Trips/Camps", family_summary["trip_count"] + family_summary["camp_count"])
     family_metrics[3].metric("Conflict days", family_conflict_count)
+    st.caption(
+        f"Recurring occurrences: {family_summary['recurring_count']} · "
+        f"Items with checklists: {family_summary['items_with_checklists']} · "
+        f"Weekend items: {family_summary['weekend_count']}"
+    )
 
     with st.form(f"{panel_key}_item_form", clear_on_submit=True):
         family_title = st.text_input("Event title")
@@ -4819,6 +4940,35 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
             family_time = None
         family_location = st.text_input("Location", placeholder="Clinic, airport, campground, field")
         family_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+        recurrence_mode = st.selectbox(
+            "Repeats",
+            ["Does not repeat", "Daily", "Weekly", "Monthly", "Yearly"],
+            index=0,
+        )
+        if recurrence_mode != "Does not repeat":
+            recurrence_interval = st.number_input("Repeat every", min_value=1, max_value=24, value=1, step=1)
+            recurrence_end_enabled = st.checkbox("Set recurrence end date", value=False)
+            recurrence_end_date = st.date_input(
+                "Repeat until",
+                value=family_date + timedelta(days=90),
+                min_value=family_date,
+                disabled=not recurrence_end_enabled,
+                key=f"{panel_key}_recurrence_end_date",
+            )
+        else:
+            recurrence_interval = 1
+            recurrence_end_enabled = False
+            recurrence_end_date = None
+
+        template_items = family_checklist_template(family_type)
+        apply_template_checklist = st.checkbox("Apply checklist template", value=True)
+        if template_items:
+            st.caption("Template checklist: " + " | ".join(template_items))
+        checklist_extra = st.text_area(
+            "Additional checklist items",
+            height=70,
+            placeholder="One item per line",
+        )
         family_notes = st.text_area("Notes", height=80, placeholder="Packing list, who is attending, confirmation details...")
         family_submit = st.form_submit_button("Add family item", type="primary")
 
@@ -4826,6 +4976,20 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
         if not family_title.strip():
             st.warning("Add an event title before saving.")
         else:
+            extra_checklist_items = [line.strip() for line in checklist_extra.splitlines() if line.strip()]
+            combined_checklist = []
+            if apply_template_checklist:
+                combined_checklist.extend(template_items)
+            combined_checklist.extend(extra_checklist_items)
+            deduped_checklist = []
+            seen_items = set()
+            for item in combined_checklist:
+                normalized = item.lower()
+                if normalized in seen_items:
+                    continue
+                seen_items.add(normalized)
+                deduped_checklist.append(item)
+
             updated_family_items = list(family_items)
             updated_family_items.append(
                 {
@@ -4840,6 +5004,16 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                     "notes": family_notes.strip(),
                     "status": "planned",
                     "all_day": (not family_timed) or family_multi_day,
+                    "checklist_items": deduped_checklist,
+                    "recurrence_rule": {
+                        "Does not repeat": "none",
+                        "Daily": "daily",
+                        "Weekly": "weekly",
+                        "Monthly": "monthly",
+                        "Yearly": "yearly",
+                    }[recurrence_mode],
+                    "recurrence_interval": int(recurrence_interval),
+                    "recurrence_end_date": recurrence_end_date if recurrence_end_enabled else None,
                 }
             )
             save_app_settings(
@@ -4851,12 +5025,12 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
             st.success("Family schedule item saved.")
             st.rerun()
 
-    family_insight_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight"
-    family_insight_error_key = f"{panel_key}_{week_start.isoformat()}_family_ai_insight_error"
-    if st.button("Generate Family AI Insight", key=f"{panel_key}_generate_family_ai", type="secondary"):
+    family_insight_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_briefing"
+    family_insight_error_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_briefing_error"
+    if st.button("Generate Weekly Family Briefing", key=f"{panel_key}_generate_family_briefing", type="secondary"):
         family_ai_summary = dict(family_summary)
         family_ai_summary["conflict_count"] = family_conflict_count
-        insight_text, insight_error = generate_family_schedule_insight(
+        insight_text, insight_error = generate_family_weekly_briefing(
             family_ai_summary,
             family_summary["upcoming_items"],
         )
@@ -4875,14 +5049,20 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                 date_range = f"{date_range} - {item['end_date'].strftime('%b %d')}"
             time_label = item["start_time"].strftime("%I:%M %p").lstrip("0") if item.get("start_time") else "All day"
             family_member_label = item.get("family_member") or "Family"
+            recurrence_label = ""
+            if item.get("is_recurring_occurrence"):
+                recurrence_label = " · recurring"
             st.markdown(
-                f"- <strong>{item['title']}</strong> · {item.get('item_type')} · {date_range} · {time_label} · {family_member_label}",
+                f"- <strong>{item['title']}</strong> · {item.get('item_type')} · {date_range} · {time_label} · {family_member_label}{recurrence_label}",
                 unsafe_allow_html=True,
             )
             if item.get("location"):
                 st.caption(f"Location: {item.get('location')}")
             if item.get("notes"):
                 st.caption(item.get("notes"))
+            if item.get("checklist_items"):
+                checklist_preview = ", ".join(item.get("checklist_items")[:4])
+                st.caption(f"Checklist: {checklist_preview}")
     else:
         st.markdown('<div class="empty-state">No family items yet. Add appointments, trips, camps, or camping plans here.</div>', unsafe_allow_html=True)
 
@@ -9692,6 +9872,7 @@ generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_e
 generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_morning_ritual_insight = partial(ai_workflows.generate_weekly_morning_ritual_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_family_schedule_insight = partial(ai_workflows.generate_family_schedule_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_family_weekly_briefing = partial(ai_workflows.generate_family_weekly_briefing, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)

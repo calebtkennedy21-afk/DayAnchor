@@ -597,6 +597,99 @@ def generate_family_schedule_insight(
         return "", f"AI family insight failed: {exc}"
 
 
+def generate_family_weekly_briefing(
+    family_summary,
+    recent_items,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    summary = family_summary or {}
+    upcoming_count = int(summary.get("upcoming_count") or 0)
+    appointment_count = int(summary.get("appointment_count") or 0)
+    trip_count = int(summary.get("trip_count") or 0)
+    camp_count = int(summary.get("camp_count") or 0)
+    recurring_count = int(summary.get("recurring_count") or 0)
+    conflict_count = int(summary.get("conflict_count") or 0)
+    weekend_count = int(summary.get("weekend_count") or 0)
+    checklist_count = int(summary.get("items_with_checklists") or 0)
+
+    recent_lines = []
+    for item in (recent_items or [])[:8]:
+        item_date = item.get("start_date") or item.get("date") or "unknown date"
+        title = str(item.get("title") or "Untitled").strip()
+        item_type = str(item.get("item_type") or "family item").strip()
+        recent_lines.append(f"- {item_date}: {title} ({item_type})")
+    recent_text = "\n".join(recent_lines) if recent_lines else "- None"
+
+    if not ai_enabled_fn():
+        focus_lines = []
+        if conflict_count:
+            focus_lines.append("- Resolve one overlap early by shifting timing or assigning coverage.")
+        if trip_count or camp_count:
+            focus_lines.append("- Schedule one prep block for packing, forms, and logistics.")
+        if checklist_count < max(1, upcoming_count // 2):
+            focus_lines.append("- Add checklist notes to high-friction items to reduce last-minute misses.")
+        if recurring_count:
+            focus_lines.append("- Review recurring events for exceptions this week.")
+        if not focus_lines:
+            focus_lines.append("- Keep the current plan and add one short Sunday planning check-in.")
+
+        return (
+            "### Weekly Family Briefing\n"
+            f"This week has {upcoming_count} family items with {conflict_count} potential conflict day(s).\n\n"
+            "## Recommended Actions\n"
+            + "\n".join(focus_lines[:3])
+        ), ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise family logistics coach producing a weekly planning briefing. Keep it practical and short."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Family schedule snapshot:\n"
+                        f"- upcoming items: {upcoming_count}\n"
+                        f"- appointments: {appointment_count}\n"
+                        f"- trips: {trip_count}\n"
+                        f"- camps/sports: {camp_count}\n"
+                        f"- recurring occurrences: {recurring_count}\n"
+                        f"- conflict days: {conflict_count}\n"
+                        f"- weekend items: {weekend_count}\n"
+                        f"- items with checklists: {checklist_count}\n\n"
+                        "Recent upcoming items:\n"
+                        f"{recent_text}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "### Weekly Family Briefing\n"
+                        "## This Week\n"
+                        "## Friction Risks\n"
+                        "## Recommended Actions\n"
+                        "Requirements:\n"
+                        "- Keep it to 6-10 short lines total.\n"
+                        "- In Recommended Actions, include exactly 3 bullet points.\n"
+                        "- Actions must be concrete and calendar-oriented."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty family briefing response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI family briefing failed: {exc}"
+
+
 def generate_weekly_morning_ritual_insight(
     weekly_trends,
     recent_checkins,
