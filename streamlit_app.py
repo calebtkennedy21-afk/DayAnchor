@@ -1091,11 +1091,34 @@ def normalize_clinic_day_closeout_log(raw_log, allowed_items=None):
     return dict(sorted(normalized.items()))
 
 
+def monday_week_bounds(day_value):
+    week_start = day_value - timedelta(days=day_value.weekday())
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
+
+
+def monday_week_days(day_value):
+    week_start, _ = monday_week_bounds(day_value)
+    return [week_start + timedelta(days=offset) for offset in range(7)]
+
+
+def _day_feel_label_from_score(score):
+    if score is None:
+        return "No data"
+    if score >= 4.5:
+        return "Great"
+    if score >= 3.5:
+        return "Good"
+    if score >= 2.5:
+        return "Steady"
+    if score >= 1.5:
+        return "Heavy"
+    return "Rough"
+
+
 def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
-    safe_window_days = max(3, int(window_days or 7))
     anchor_day = end_day or mountain_today()
-    window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
-    window.reverse()
+    window = monday_week_days(anchor_day)
 
     sleep_score_map = {"Poor": 1, "Fair": 2, "Good": 3, "Great": 4}
     energy_score_map = {"Low": 1, "Medium": 2, "High": 3}
@@ -1121,7 +1144,7 @@ def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
             mood_series.append(None)
 
     checkin_count = len(entries)
-    consistency_rate = (checkin_count / float(safe_window_days)) if safe_window_days else 0.0
+    consistency_rate = checkin_count / 7.0
 
     sleep_counts = {label: 0 for label in MORNING_SLEEP_OPTIONS}
     energy_counts = {label: 0 for label in MORNING_ENERGY_OPTIONS}
@@ -1171,7 +1194,9 @@ def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
         return best_label or "No data"
 
     return {
-        "window_days": safe_window_days,
+        "window_days": 7,
+        "week_start": window[0],
+        "week_end": window[-1],
         "checkin_count": checkin_count,
         "consistency_rate": consistency_rate,
         "sleep_counts": sleep_counts,
@@ -1187,6 +1212,71 @@ def weekly_morning_ritual_trends(checkins, end_day=None, window_days=7):
         "mood_series": mood_series,
         "day_labels": day_labels,
     }
+
+
+def morning_ritual_weekly_history(checkins, max_weeks=12):
+    week_starts = set()
+    for day_key in checkins.keys():
+        try:
+            day_value = date.fromisoformat(str(day_key))
+        except ValueError:
+            continue
+        week_starts.add(monday_week_bounds(day_value)[0])
+
+    history = []
+    for week_start in sorted(week_starts, reverse=True)[: max(1, int(max_weeks or 12))]:
+        trend = weekly_morning_ritual_trends(checkins, end_day=week_start)
+        history.append(
+            {
+                "week_start": trend["week_start"],
+                "week_end": trend["week_end"],
+                "checkin_count": trend["checkin_count"],
+                "consistency_rate": trend["consistency_rate"],
+                "average_sleep_label": trend["average_sleep_label"],
+                "average_energy_label": trend["average_energy_label"],
+                "planned_yes_count": trend["planned_yes_count"],
+                "grounding_complete_count": trend["grounding_complete_count"],
+            }
+        )
+    return history
+
+
+def morning_ritual_monthly_history(weekly_history, max_months=6):
+    monthly = {}
+    for row in weekly_history:
+        week_start = row.get("week_start")
+        if not week_start:
+            continue
+        month_key = week_start.strftime("%Y-%m")
+        month_bucket = monthly.setdefault(
+            month_key,
+            {
+                "month_key": month_key,
+                "week_count": 0,
+                "checkin_count": 0,
+                "planned_yes_count": 0,
+                "grounding_complete_count": 0,
+            },
+        )
+        month_bucket["week_count"] += 1
+        month_bucket["checkin_count"] += int(row.get("checkin_count") or 0)
+        month_bucket["planned_yes_count"] += int(row.get("planned_yes_count") or 0)
+        month_bucket["grounding_complete_count"] += int(row.get("grounding_complete_count") or 0)
+
+    rows = []
+    for month_key in sorted(monthly.keys(), reverse=True)[: max(1, int(max_months or 6))]:
+        bucket = monthly[month_key]
+        weeks = max(1, int(bucket["week_count"]))
+        checkins = int(bucket["checkin_count"])
+        rows.append(
+            {
+                **bucket,
+                "consistency_rate": checkins / float(weeks * 7),
+                "planned_yes_rate": (bucket["planned_yes_count"] / float(checkins)) if checkins else None,
+                "grounding_rate": (bucket["grounding_complete_count"] / float(checkins)) if checkins else None,
+            }
+        )
+    return rows
 
 
 def render_mini_sparkline(label, values, max_value, day_labels):
@@ -1221,10 +1311,8 @@ def render_mini_sparkline(label, values, max_value, day_labels):
 
 
 def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
-    safe_window_days = max(3, int(window_days or 7))
     anchor_day = end_day or mountain_today()
-    window = [anchor_day - timedelta(days=offset) for offset in range(safe_window_days)]
-    window.reverse()
+    window = monday_week_days(anchor_day)
 
     feel_score_map = {
         "Rough": 1,
@@ -1257,7 +1345,7 @@ def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
             morning_series.append(None)
 
     checkin_count = len(entries)
-    consistency_rate = (checkin_count / float(safe_window_days)) if safe_window_days else 0.0
+    consistency_rate = checkin_count / 7.0
 
     morning_yes_count = 0
     morning_applicable_count = 0
@@ -1285,25 +1373,16 @@ def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
     scored_entries = [feel_score_map[entry.get("day_feel")] for _, entry in entries if entry.get("day_feel") in feel_score_map]
     average_feel_score = (sum(scored_entries) / len(scored_entries)) if scored_entries else None
 
-    if average_feel_score is None:
-        average_feel_label = "No data"
-    elif average_feel_score >= 4.5:
-        average_feel_label = "Great"
-    elif average_feel_score >= 3.5:
-        average_feel_label = "Good"
-    elif average_feel_score >= 2.5:
-        average_feel_label = "Steady"
-    elif average_feel_score >= 1.5:
-        average_feel_label = "Heavy"
-    else:
-        average_feel_label = "Rough"
+    average_feel_label = _day_feel_label_from_score(average_feel_score)
 
     morning_completion_rate = None
     if morning_applicable_count > 0:
         morning_completion_rate = morning_yes_count / float(morning_applicable_count)
 
     return {
-        "window_days": safe_window_days,
+        "window_days": 7,
+        "week_start": window[0],
+        "week_end": window[-1],
         "checkin_count": checkin_count,
         "consistency_rate": consistency_rate,
         "morning_yes_count": morning_yes_count,
@@ -1318,6 +1397,95 @@ def weekly_nightly_reflection_trends(reflections, end_day=None, window_days=7):
         "morning_series": morning_series,
         "day_labels": day_labels,
     }
+
+
+def nightly_reflection_weekly_history(reflections, max_weeks=12):
+    week_starts = set()
+    for day_key in reflections.keys():
+        try:
+            day_value = date.fromisoformat(str(day_key))
+        except ValueError:
+            continue
+        week_starts.add(monday_week_bounds(day_value)[0])
+
+    history = []
+    for week_start in sorted(week_starts, reverse=True)[: max(1, int(max_weeks or 12))]:
+        trend = weekly_nightly_reflection_trends(reflections, end_day=week_start)
+        history.append(
+            {
+                "week_start": trend["week_start"],
+                "week_end": trend["week_end"],
+                "checkin_count": trend["checkin_count"],
+                "consistency_rate": trend["consistency_rate"],
+                "average_feel_score": trend["average_feel_score"],
+                "average_feel_label": trend["average_feel_label"],
+                "morning_yes_count": trend["morning_yes_count"],
+                "morning_applicable_count": trend["morning_applicable_count"],
+                "wins_logged": trend["wins_logged"],
+                "improvements_logged": trend["improvements_logged"],
+            }
+        )
+    return history
+
+
+def nightly_reflection_monthly_history(weekly_history, max_months=6):
+    monthly = {}
+    for row in weekly_history:
+        week_start = row.get("week_start")
+        if not week_start:
+            continue
+        month_key = week_start.strftime("%Y-%m")
+        month_bucket = monthly.setdefault(
+            month_key,
+            {
+                "month_key": month_key,
+                "week_count": 0,
+                "checkin_count": 0,
+                "morning_yes_count": 0,
+                "morning_applicable_count": 0,
+                "wins_logged": 0,
+                "improvements_logged": 0,
+                "feel_score_weighted_sum": 0.0,
+                "feel_score_weighted_count": 0,
+            },
+        )
+        checkins = int(row.get("checkin_count") or 0)
+        month_bucket["week_count"] += 1
+        month_bucket["checkin_count"] += checkins
+        month_bucket["morning_yes_count"] += int(row.get("morning_yes_count") or 0)
+        month_bucket["morning_applicable_count"] += int(row.get("morning_applicable_count") or 0)
+        month_bucket["wins_logged"] += int(row.get("wins_logged") or 0)
+        month_bucket["improvements_logged"] += int(row.get("improvements_logged") or 0)
+        feel_score = row.get("average_feel_score")
+        if feel_score is not None and checkins > 0:
+            month_bucket["feel_score_weighted_sum"] += float(feel_score) * float(checkins)
+            month_bucket["feel_score_weighted_count"] += checkins
+
+    rows = []
+    for month_key in sorted(monthly.keys(), reverse=True)[: max(1, int(max_months or 6))]:
+        bucket = monthly[month_key]
+        weeks = max(1, int(bucket["week_count"]))
+        checkins = int(bucket["checkin_count"])
+        weighted_count = int(bucket["feel_score_weighted_count"])
+        avg_feel_score = (
+            bucket["feel_score_weighted_sum"] / float(weighted_count)
+            if weighted_count > 0
+            else None
+        )
+        rows.append(
+            {
+                **bucket,
+                "consistency_rate": checkins / float(weeks * 7),
+                "morning_completion_rate": (
+                    bucket["morning_yes_count"] / float(bucket["morning_applicable_count"])
+                    if bucket["morning_applicable_count"]
+                    else None
+                ),
+                "average_feel_score": avg_feel_score,
+                "average_feel_label": _day_feel_label_from_score(avg_feel_score),
+            }
+        )
+    return rows
 
 
 def generate_nightly_journal_prompt(
@@ -5926,8 +6094,13 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
         st.caption("Tonight's prompt")
         st.info(nightly_prompt_text)
 
-        weekly_trends = weekly_nightly_reflection_trends(nightly_reflections, end_day=today, window_days=7)
-        st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Weekly Trend Summary</h3><span>Reflection pattern over the last 7 days</span></div>', unsafe_allow_html=True)
+        weekly_trends = weekly_nightly_reflection_trends(nightly_reflections, end_day=today)
+        week_start = weekly_trends["week_start"]
+        week_end = weekly_trends["week_end"]
+        st.markdown(
+            f"<div class=\"panel-title\" style=\"margin-top:0.9rem;\"><h3>Weekly Trend Summary</h3><span>Current week: {week_start.strftime('%b %d')} - {week_end.strftime('%b %d')} (Mon-Sun)</span></div>",
+            unsafe_allow_html=True,
+        )
         trend_cols = st.columns(4)
         trend_cols[0].metric("Check-ins", f"{weekly_trends['checkin_count']}/7")
         trend_cols[1].metric("Consistency", f"{int(round(weekly_trends['consistency_rate'] * 100))}%")
@@ -5956,6 +6129,33 @@ def render_review_command_panel(tasks, active_tasks, completed_today, app_settin
         )
 
         recent_reflections = sorted(nightly_reflections.items(), reverse=True)[:5]
+        weekly_history = nightly_reflection_weekly_history(nightly_reflections, max_weeks=12)
+        monthly_history = nightly_reflection_monthly_history(weekly_history, max_months=6)
+
+        if weekly_history:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Weekly Productivity Comparison</h3><span>Saved week-over-week reflection trends</span></div>', unsafe_allow_html=True)
+            for row in weekly_history[:8]:
+                st.markdown(
+                    f"- **{row['week_start'].strftime('%b %d')} - {row['week_end'].strftime('%b %d')}**"
+                    f" · check-ins {row['checkin_count']}/7"
+                    f" · consistency {int(round(row['consistency_rate'] * 100))}%"
+                    f" · avg feel {row['average_feel_label']}"
+                )
+
+        if monthly_history:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Monthly Productivity Comparison</h3><span>Week-level reflection rollup by month</span></div>', unsafe_allow_html=True)
+            for row in monthly_history[:6]:
+                morning_completion_text = "N/A"
+                if row.get("morning_completion_rate") is not None:
+                    morning_completion_text = f"{int(round(float(row['morning_completion_rate']) * 100))}%"
+                st.markdown(
+                    f"- **{row['month_key']}**"
+                    f" · weeks tracked {row['week_count']}"
+                    f" · consistency {int(round(row['consistency_rate'] * 100))}%"
+                    f" · avg feel {row['average_feel_label']}"
+                    f" · morning goal hit {morning_completion_text}"
+                )
+
         if st.button("Generate Weekly AI Insight", key=f"{panel_key}_generate_weekly_ai_insight", type="secondary"):
             insight_text, insight_error = generate_weekly_nightly_insight(weekly_trends, recent_reflections)
             st.session_state[weekly_insight_key] = insight_text
@@ -6105,26 +6305,31 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
         else:
             st.caption("No nightly improvement note found yet. Use Daily Review tonight to create one.")
 
-        morning_trends = weekly_morning_ritual_trends(morning_checkins, end_day=today, window_days=7)
+        morning_trends = weekly_morning_ritual_trends(morning_checkins, end_day=today)
+        week_start = morning_trends["week_start"]
+        week_end = morning_trends["week_end"]
         recent_checkins = sorted(morning_checkins.items(), reverse=True)[:5]
         weekly_insight_key = f"{panel_key}_{today.isocalendar().year}_w{today.isocalendar().week}_weekly_ai_insight"
         weekly_insight_error_key = f"{panel_key}_{today.isocalendar().year}_w{today.isocalendar().week}_weekly_ai_insight_error"
-        st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Morning Trend Summary</h3><span>Pattern over the last 7 days</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            f"<div class=\"panel-title\" style=\"margin-top:0.9rem;\"><h3>Morning Trend Summary</h3><span>Current week: {week_start.strftime('%b %d')} - {week_end.strftime('%b %d')} (Mon-Sun)</span></div>",
+            unsafe_allow_html=True,
+        )
         trend_cols = st.columns(4)
         trend_cols[0].metric("Check-ins", f"{morning_trends['checkin_count']}/7")
         trend_cols[1].metric("Consistency", f"{int(round(morning_trends['consistency_rate'] * 100))}%")
         trend_cols[2].metric("Avg sleep", morning_trends["average_sleep_label"])
         trend_cols[3].metric("Avg energy", morning_trends["average_energy_label"])
         st.markdown(
-            render_mini_sparkline("Sleep 7-day sparkline", morning_trends["sleep_series"], 4, morning_trends["day_labels"]),
+            render_mini_sparkline("Sleep week sparkline", morning_trends["sleep_series"], 4, morning_trends["day_labels"]),
             unsafe_allow_html=True,
         )
         st.markdown(
-            render_mini_sparkline("Energy 7-day sparkline", morning_trends["energy_series"], 3, morning_trends["day_labels"]),
+            render_mini_sparkline("Energy week sparkline", morning_trends["energy_series"], 3, morning_trends["day_labels"]),
             unsafe_allow_html=True,
         )
         st.markdown(
-            render_mini_sparkline("Mood 7-day sparkline", morning_trends["mood_series"], 4, morning_trends["day_labels"]),
+            render_mini_sparkline("Mood week sparkline", morning_trends["mood_series"], 4, morning_trends["day_labels"]),
             unsafe_allow_html=True,
         )
         st.caption(
@@ -6141,6 +6346,37 @@ def render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="mo
             "</div>",
             unsafe_allow_html=True,
         )
+
+        weekly_history = morning_ritual_weekly_history(morning_checkins, max_weeks=12)
+        monthly_history = morning_ritual_monthly_history(weekly_history, max_months=6)
+
+        if weekly_history:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Weekly Productivity Comparison</h3><span>Morning ritual consistency by week</span></div>', unsafe_allow_html=True)
+            for row in weekly_history[:8]:
+                st.markdown(
+                    f"- **{row['week_start'].strftime('%b %d')} - {row['week_end'].strftime('%b %d')}**"
+                    f" · check-ins {row['checkin_count']}/7"
+                    f" · consistency {int(round(row['consistency_rate'] * 100))}%"
+                    f" · avg sleep {row['average_sleep_label']}"
+                    f" · avg energy {row['average_energy_label']}"
+                )
+
+        if monthly_history:
+            st.markdown('<div class="panel-title" style="margin-top:0.9rem;"><h3>Monthly Productivity Comparison</h3><span>Week-level morning trend rollup by month</span></div>', unsafe_allow_html=True)
+            for row in monthly_history[:6]:
+                planned_rate_text = "N/A"
+                if row.get("planned_yes_rate") is not None:
+                    planned_rate_text = f"{int(round(float(row['planned_yes_rate']) * 100))}%"
+                grounding_rate_text = "N/A"
+                if row.get("grounding_rate") is not None:
+                    grounding_rate_text = f"{int(round(float(row['grounding_rate']) * 100))}%"
+                st.markdown(
+                    f"- **{row['month_key']}**"
+                    f" · weeks tracked {row['week_count']}"
+                    f" · consistency {int(round(row['consistency_rate'] * 100))}%"
+                    f" · morning goals done {planned_rate_text}"
+                    f" · grounding done {grounding_rate_text}"
+                )
 
         if st.button("Generate Weekly AI Insight", key=f"{panel_key}_generate_weekly_morning_insight", type="secondary"):
             insight_text, insight_error = generate_weekly_morning_ritual_insight(
