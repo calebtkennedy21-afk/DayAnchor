@@ -213,6 +213,24 @@ CLINIC_DAY_CLOSEOUT_TEMPLATE_DEFAULTS = [
     "Restock key room and procedure supplies",
 ]
 
+MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
+    {
+        "title": "Minimum Home Routine (Daily)",
+        "target_frequency": 7,
+        "notes": "- Make bed\n- Wash the dishes\n- Clean countertop and sink\n- Put away clutter\n- Keep kitchen organized",
+    },
+    {
+        "title": "Minimum Home Routine (Weekly)",
+        "target_frequency": 1,
+        "notes": "- Change bed sheets\n- Clean bathrooms\n- Mop floors\n- Organize surfaces\n- Quick fridge clean out\n- Check expired food",
+    },
+    {
+        "title": "Minimum Home Routine (Monthly)",
+        "target_frequency": 1,
+        "notes": "- Clean cabinets\n- Organize drawers\n- Deep clean kitchen and oven\n- Review stored products\n- Get rid of what we don't use",
+    },
+]
+
 
 def normalize_database_url(raw_url):
     if not raw_url:
@@ -5765,6 +5783,39 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     goal_metrics[1].metric("On track", len(family_goal_summary["on_track_goals"]))
     goal_metrics[2].metric("This week logs", family_goal_summary["week_checkins"])
     goal_metrics[3].metric("Best streak", family_goal_summary["best_streak"])
+
+    if st.button("Add Minimum Home Routines", key=f"{panel_key}_seed_home_routines", type="secondary"):
+        existing_titles = {
+            str(goal.get("title") or "").strip().lower()
+            for goal in raw_family_goals
+            if isinstance(goal, dict)
+        }
+        updated_family_goals = list(raw_family_goals)
+        added_count = 0
+        for template in MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES:
+            normalized_title = str(template.get("title") or "").strip().lower()
+            if not normalized_title or normalized_title in existing_titles:
+                continue
+            existing_titles.add(normalized_title)
+            updated_family_goals.append(
+                {
+                    "goal_id": uuid4().hex,
+                    "title": str(template.get("title") or "").strip(),
+                    "owner": "Home",
+                    "target_frequency": int(template.get("target_frequency") or 1),
+                    "notes": str(template.get("notes") or "").strip(),
+                    "status": "active",
+                    "created_date": today_value,
+                    "checkin_dates": [],
+                }
+            )
+            added_count += 1
+
+        if added_count:
+            _save_family_goals(updated_family_goals)
+            st.success(f"Added {added_count} minimum home routine goals.")
+            st.rerun()
+        st.info("Minimum home routine goals are already added.")
 
     family_digest_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest"
     family_digest_error_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest_error"
