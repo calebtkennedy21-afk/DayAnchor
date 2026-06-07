@@ -187,6 +187,7 @@ DEFAULT_APP_SETTINGS = {
     "family_weekly_notes": [],
     "family_notes": "",
     "family_notes_updated_at": "",
+    "home_routine_checklists": {},
     "quick_reminders": [],
     "clinic_day_closeout_template": [
         "Confirm all charting is complete",
@@ -215,21 +216,102 @@ CLINIC_DAY_CLOSEOUT_TEMPLATE_DEFAULTS = [
 
 MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
     {
-        "title": "Minimum Home Routine (Daily)",
-        "target_frequency": 7,
-        "notes": "- Make bed\n- Wash the dishes\n- Clean countertop and sink\n- Put away clutter\n- Keep kitchen organized",
+        "cadence": "daily",
+        "title": "Daily minimum home routine",
+        "reset_text": "Resets every day at midnight.",
+        "items": [
+            "Make bed",
+            "Wash the dishes",
+            "Clean countertop and sink",
+            "Put away clutter",
+            "Keep kitchen organized",
+        ],
     },
     {
-        "title": "Minimum Home Routine (Weekly)",
-        "target_frequency": 1,
-        "notes": "- Change bed sheets\n- Clean bathrooms\n- Mop floors\n- Organize surfaces\n- Quick fridge clean out\n- Check expired food",
+        "cadence": "weekly",
+        "title": "Weekly minimum home routine",
+        "reset_text": "Resets on Sunday at midnight.",
+        "items": [
+            "Change bed sheets",
+            "Clean bathrooms",
+            "Mop floors",
+            "Organize surfaces",
+            "Quick fridge clean out",
+            "Check expired food",
+        ],
     },
     {
-        "title": "Minimum Home Routine (Monthly)",
-        "target_frequency": 1,
-        "notes": "- Clean cabinets\n- Organize drawers\n- Deep clean kitchen and oven\n- Review stored products\n- Get rid of what we don't use",
+        "cadence": "monthly",
+        "title": "Monthly minimum home routine",
+        "reset_text": "Resets at month end midnight.",
+        "items": [
+            "Clean cabinets",
+            "Organize drawers",
+            "Deep clean kitchen and oven",
+            "Review stored products",
+            "Get rid of what we don't use",
+        ],
     },
 ]
+
+
+def minimum_home_routine_items(cadence):
+    for entry in MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES:
+        if str(entry.get("cadence") or "").strip().lower() == cadence:
+            return [str(item).strip() for item in (entry.get("items") or []) if str(item).strip()]
+    return []
+
+
+def home_routine_period_key(cadence, day_value=None):
+    anchor = day_value or mountain_today()
+    normalized = str(cadence or "").strip().lower()
+    if normalized == "daily":
+        return anchor.isoformat()
+    if normalized == "weekly":
+        sunday_start = anchor - timedelta(days=(anchor.weekday() + 1) % 7)
+        return sunday_start.isoformat()
+    if normalized == "monthly":
+        return f"{anchor.year:04d}-{anchor.month:02d}"
+    return anchor.isoformat()
+
+
+def normalize_home_routine_checklists(raw_value, day_value=None):
+    normalized_source = raw_value if isinstance(raw_value, dict) else {}
+    anchor = day_value or mountain_today()
+    normalized_output = {}
+
+    for cadence in ("daily", "weekly", "monthly"):
+        cadence_items = minimum_home_routine_items(cadence)
+        cadence_lookup = {item.lower(): item for item in cadence_items}
+        expected_period_key = home_routine_period_key(cadence, anchor)
+        raw_entry = normalized_source.get(cadence)
+        if not isinstance(raw_entry, dict):
+            raw_entry = {}
+
+        raw_period_key = str(raw_entry.get("period_key") or "").strip()
+        raw_completed_items = raw_entry.get("completed_items")
+        normalized_completed_items = []
+        if raw_period_key == expected_period_key and isinstance(raw_completed_items, list):
+            seen = set()
+            for raw_item in raw_completed_items:
+                item_text = str(raw_item or "").strip()
+                if not item_text:
+                    continue
+                canonical = cadence_lookup.get(item_text.lower())
+                if not canonical:
+                    continue
+                if canonical in seen:
+                    continue
+                normalized_completed_items.append(canonical)
+                seen.add(canonical)
+
+        normalized_output[cadence] = {
+            "period_key": expected_period_key,
+            "completed_items": normalized_completed_items,
+            "updated_at": str(raw_entry.get("updated_at") or "").strip(),
+        }
+
+    return normalized_output
 
 
 def normalize_database_url(raw_url):
@@ -5256,6 +5338,7 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     raw_family_weekly_notes = list((app_settings or {}).get("family_weekly_notes") or [])
     raw_family_notes = str((app_settings or {}).get("family_notes") or "")
     raw_family_notes_updated_at = str((app_settings or {}).get("family_notes_updated_at") or "")
+    raw_home_routine_checklists = dict((app_settings or {}).get("home_routine_checklists") or {})
     family_items = normalize_family_schedule_items(raw_family_items)
     family_goals = normalize_family_goals(raw_family_goals, reference_date=mountain_today())
     family_weekly_notes = normalize_family_weekly_notes(raw_family_weekly_notes)
@@ -5266,6 +5349,7 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
         updated_raw_weekly_notes=None,
         updated_family_notes=None,
         updated_family_notes_updated_at=None,
+        updated_home_routine_checklists=None,
     ):
         save_app_settings(
             {
@@ -5278,6 +5362,11 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                     updated_family_notes_updated_at
                     if updated_family_notes_updated_at is not None
                     else raw_family_notes_updated_at
+                ),
+                "home_routine_checklists": (
+                    updated_home_routine_checklists
+                    if updated_home_routine_checklists is not None
+                    else raw_home_routine_checklists
                 ),
             }
         )
@@ -5296,6 +5385,9 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
             updated_family_notes=notes_text,
             updated_family_notes_updated_at=datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
         )
+
+    def _save_home_routine_checklists(updated_home_routine_checklists):
+        _save_family_state(updated_home_routine_checklists=updated_home_routine_checklists)
 
     def _apply_update(item, updates):
         source_index = item.get("source_index")
@@ -5381,6 +5473,48 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
 
     family_goal_summary = family_goal_dashboard_summary(family_goals)
     today_value = mountain_today()
+    home_routine_checklists = normalize_home_routine_checklists(raw_home_routine_checklists, day_value=today_value)
+    if home_routine_checklists != raw_home_routine_checklists:
+        _save_home_routine_checklists(home_routine_checklists)
+
+    st.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Minimum Home Routines</h3><span>Persistent checklists with automatic resets by cadence</span></div>', unsafe_allow_html=True)
+    routine_cols = st.columns(3)
+    home_routine_updated = False
+    for col_index, template in enumerate(MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES):
+        cadence = str(template.get("cadence") or "").strip().lower()
+        cadence_title = str(template.get("title") or cadence.title()).strip()
+        cadence_items = [str(item).strip() for item in (template.get("items") or []) if str(item).strip()]
+        cadence_state = home_routine_checklists.get(cadence) or {
+            "period_key": home_routine_period_key(cadence, today_value),
+            "completed_items": [],
+            "updated_at": "",
+        }
+        completed_items = list(cadence_state.get("completed_items") or [])
+        completed_lookup = set(completed_items)
+
+        with routine_cols[col_index % len(routine_cols)]:
+            st.markdown(f"**{cadence_title}**")
+            st.caption(str(template.get("reset_text") or ""))
+
+            selected_items = []
+            for item_index, item_text in enumerate(cadence_items):
+                checkbox_key = f"{panel_key}_home_routine_{cadence}_{cadence_state['period_key']}_{item_index}"
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = item_text in completed_lookup
+                if st.checkbox(item_text, key=checkbox_key):
+                    selected_items.append(item_text)
+
+            st.caption(f"Progress: {len(selected_items)}/{len(cadence_items)}")
+            if selected_items != completed_items:
+                home_routine_checklists[cadence] = {
+                    "period_key": cadence_state["period_key"],
+                    "completed_items": selected_items,
+                    "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                }
+                home_routine_updated = True
+
+    if home_routine_updated:
+        _save_home_routine_checklists(home_routine_checklists)
 
     timeline_days = [today_value + timedelta(days=offset) for offset in range(4)]
     timeline_by_day = {
@@ -5783,39 +5917,6 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
     goal_metrics[1].metric("On track", len(family_goal_summary["on_track_goals"]))
     goal_metrics[2].metric("This week logs", family_goal_summary["week_checkins"])
     goal_metrics[3].metric("Best streak", family_goal_summary["best_streak"])
-
-    if st.button("Add Minimum Home Routines", key=f"{panel_key}_seed_home_routines", type="secondary"):
-        existing_titles = {
-            str(goal.get("title") or "").strip().lower()
-            for goal in raw_family_goals
-            if isinstance(goal, dict)
-        }
-        updated_family_goals = list(raw_family_goals)
-        added_count = 0
-        for template in MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES:
-            normalized_title = str(template.get("title") or "").strip().lower()
-            if not normalized_title or normalized_title in existing_titles:
-                continue
-            existing_titles.add(normalized_title)
-            updated_family_goals.append(
-                {
-                    "goal_id": uuid4().hex,
-                    "title": str(template.get("title") or "").strip(),
-                    "owner": "Home",
-                    "target_frequency": int(template.get("target_frequency") or 1),
-                    "notes": str(template.get("notes") or "").strip(),
-                    "status": "active",
-                    "created_date": today_value,
-                    "checkin_dates": [],
-                }
-            )
-            added_count += 1
-
-        if added_count:
-            _save_family_goals(updated_family_goals)
-            st.success(f"Added {added_count} minimum home routine goals.")
-            st.rerun()
-        st.info("Minimum home routine goals are already added.")
 
     family_digest_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest"
     family_digest_error_key = f"{panel_key}_{week_start.isoformat()}_family_weekly_digest_error"
