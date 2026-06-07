@@ -6908,6 +6908,11 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             if doc.get("record_type") == record_type and doc.get("record_id") == record_id
         ]
 
+        def _looks_like_pdf(document_item):
+            mime_value = str(document_item.get("file_mime") or "").lower()
+            file_name_value = str(document_item.get("file_name") or "").lower()
+            return mime_value == "application/pdf" or file_name_value.endswith(".pdf")
+
         attachment_file = st.file_uploader(
             "Attach file",
             key=f"{panel_key}_attach_file_{record_type}_{record_id}",
@@ -6934,6 +6939,47 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     st.rerun()
 
         if linked_documents:
+            linked_pdf_documents = []
+            for doc in linked_documents:
+                doc_bytes = doc.get("file_bytes")
+                if isinstance(doc_bytes, memoryview):
+                    doc_bytes = bytes(doc_bytes)
+                if not doc_bytes or not _looks_like_pdf(doc):
+                    continue
+                linked_pdf_documents.append((doc, doc_bytes))
+
+            if linked_pdf_documents:
+                st.markdown("**PDF preview**")
+                pdf_option_labels = [
+                    f"{doc.get('file_name') or 'document.pdf'} ({doc.get('created_date') or 'unknown date'})"
+                    for doc, _ in linked_pdf_documents
+                ]
+                selected_pdf_label = st.selectbox(
+                    "Choose a PDF",
+                    pdf_option_labels,
+                    key=f"{panel_key}_record_pdf_preview_select_{record_type}_{record_id}",
+                )
+                selected_pdf_index = pdf_option_labels.index(selected_pdf_label)
+                selected_pdf_doc, selected_pdf_bytes = linked_pdf_documents[selected_pdf_index]
+                selected_pdf_id = selected_pdf_doc.get("id")
+                selected_start_page = int(
+                    st.number_input(
+                        "Start page",
+                        min_value=1,
+                        value=1,
+                        step=1,
+                        key=f"{panel_key}_record_pdf_preview_start_page_{record_type}_{record_id}_{selected_pdf_id}",
+                    )
+                )
+                page_sections._render_protocol_pdf_preview(
+                    st,
+                    file_bytes=selected_pdf_bytes,
+                    file_mime=selected_pdf_doc.get("file_mime"),
+                    file_name=selected_pdf_doc.get("file_name") or "document.pdf",
+                    height=460,
+                    start_page=selected_start_page,
+                )
+
             for doc in linked_documents:
                 doc_id = doc.get("id")
                 doc_bytes = doc.get("file_bytes")
@@ -7938,6 +7984,47 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
         st.caption(f"Showing {len(visible_documents)} of {len(lead_documents)} file(s)")
         if visible_documents:
+            pdf_documents = []
+            for item in visible_documents:
+                file_bytes = item.get("file_bytes")
+                if isinstance(file_bytes, memoryview):
+                    file_bytes = bytes(file_bytes)
+                looks_like_pdf = (str(item.get("file_mime") or "").lower() == "application/pdf") or str(item.get("file_name") or "").lower().endswith(".pdf")
+                if file_bytes and looks_like_pdf:
+                    pdf_documents.append((item, file_bytes))
+
+            if pdf_documents:
+                st.markdown("#### PDF Preview")
+                preview_options = [
+                    f"{doc.get('file_name') or 'document.pdf'} | {doc.get('section_key') or 'General'} | {doc.get('created_date') or 'unknown date'}"
+                    for doc, _ in pdf_documents
+                ]
+                selected_preview_label = st.selectbox(
+                    "Select a PDF to preview",
+                    preview_options,
+                    key=f"{panel_key}_documents_pdf_preview_select",
+                )
+                selected_preview_index = preview_options.index(selected_preview_label)
+                selected_preview_doc, selected_preview_bytes = pdf_documents[selected_preview_index]
+                selected_preview_doc_id = selected_preview_doc.get("id")
+                selected_preview_start_page = int(
+                    st.number_input(
+                        "Preview start page",
+                        min_value=1,
+                        value=1,
+                        step=1,
+                        key=f"{panel_key}_documents_pdf_preview_start_page_{selected_preview_doc_id}",
+                    )
+                )
+                page_sections._render_protocol_pdf_preview(
+                    st,
+                    file_bytes=selected_preview_bytes,
+                    file_mime=selected_preview_doc.get("file_mime"),
+                    file_name=selected_preview_doc.get("file_name") or "document.pdf",
+                    height=500,
+                    start_page=selected_preview_start_page,
+                )
+
             for item in visible_documents[:120]:
                 doc_id = item.get("id")
                 file_bytes = item.get("file_bytes")
