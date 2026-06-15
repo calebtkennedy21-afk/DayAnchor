@@ -283,163 +283,69 @@ def render_overview_control_tower(
     clinic_summary = deps["clinic_day_summary"](clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = deps["schedule_workload_snapshot"](active_tasks)
 
-    surgical_cases = []
-    protocol_documents = []
-    if deps.get("load_surgical_cases"):
-        try:
-            surgical_cases = deps["load_surgical_cases"]() or []
-        except Exception:
-            surgical_cases = []
-    if deps.get("load_protocol_documents"):
-        try:
-            protocol_documents = deps["load_protocol_documents"]() or []
-        except Exception:
-            protocol_documents = []
-
-    briefing_horizon_key = f"{panel_key}_briefing_horizon_days"
-    briefing_queue_depth_key = f"{panel_key}_briefing_queue_depth"
-    if briefing_horizon_key not in st_module.session_state:
-        st_module.session_state[briefing_horizon_key] = 7
-    if briefing_queue_depth_key not in st_module.session_state:
-        st_module.session_state[briefing_queue_depth_key] = 3
-
-    briefing_horizon_days = int(st_module.session_state.get(briefing_horizon_key, 7) or 7)
-    briefing_queue_depth = int(st_module.session_state.get(briefing_queue_depth_key, 3) or 3)
-
-    upcoming_cases = sorted(
-        [
-            item
-            for item in surgical_cases
-            if item.get("status") == "planned"
-            and item.get("case_date")
-            and item.get("case_date") <= (today + timedelta(days=briefing_horizon_days))
-        ],
-        key=lambda item: item.get("case_date"),
-    )
-
-    case_risk_rows = []
-    for item in upcoming_cases:
-        case_date = item.get("case_date")
-        days_until = (case_date - today).days if case_date else 99
-        has_cpt = bool(str(item.get("cpt_codes") or "").strip())
-        has_protocol_match = bool(
-            protocol_documents
-            and deps["suggest_protocols_for_case"](item, protocol_documents, max_items=1)
-        )
-        risk_score = 0
-        if not has_cpt:
-            risk_score += 10
-        if not has_protocol_match:
-            risk_score += 8
-        risk_score += max(0, 10 - max(days_until, 0))
-        case_risk_rows.append(
-            {
-                "case": item,
-                "risk_score": risk_score,
-                "has_cpt": has_cpt,
-                "has_protocol_match": has_protocol_match,
-                "days_until": days_until,
-            }
-        )
-
-    case_risk_rows.sort(key=lambda item: item["risk_score"], reverse=True)
-    high_risk_cases = [item["case"] for item in case_risk_rows if item["risk_score"] > 0 and not item["has_cpt"]]
-    missing_protocol_cases = [item["case"] for item in case_risk_rows if not item["has_protocol_match"]]
-    top_case_row = case_risk_rows[0] if case_risk_rows else None
-
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(
-        '<div class="panel-title"><h3>Smart Daily Briefing</h3><span>Risk-first summary with one-click fixes</span></div>',
+        '<div class="panel-title"><h3>Smart Daily Briefing</h3><span>Personal, clinical, and schedule signals in one place</span></div>',
         unsafe_allow_html=True,
     )
 
     with st_module.expander("Briefing controls", expanded=False):
-        st_module.slider(
-            "Case lookahead window (days)",
-            min_value=3,
-            max_value=21,
-            value=briefing_horizon_days,
-            key=briefing_horizon_key,
-            help="Controls how far ahead the case risk scan looks.",
-        )
-        st_module.selectbox(
-            "Recommended sequence depth",
-            [3, 4, 5],
-            index=[3, 4, 5].index(briefing_queue_depth) if briefing_queue_depth in (3, 4, 5) else 0,
-            key=briefing_queue_depth_key,
-            help="How many tasks to include in the sequence list.",
-        )
+        st_module.caption("The briefing stays focused on daily work. Case intelligence is available below when you need it.")
 
-    briefing_cols = st_module.columns(4)
-    briefing_cols[0].metric("Overdue tasks", len(overdue_tasks_today))
-    briefing_cols[1].metric(f"Upcoming cases ({briefing_horizon_days}d)", len(upcoming_cases))
-    briefing_cols[2].metric("Cases missing CPT", len(high_risk_cases))
-    briefing_cols[3].metric("Cases missing protocol", len(missing_protocol_cases))
+    personal_active = len(personal_backlog)
+    clinic_active = len(clinic_backlog)
+    scheduled_today_count = len([task for task in today_plan["scheduled_today"]])
+
+    briefing_cols = st_module.columns(5)
+    briefing_cols[0].metric("Personal active", personal_active)
+    briefing_cols[1].metric("Clinical active", clinic_active)
+    briefing_cols[2].metric("Due today", len(due_today_tasks))
+    briefing_cols[3].metric("Scheduled today", scheduled_today_count)
+    briefing_cols[4].metric("Overdue", len(overdue_tasks_today))
 
     summary_col, actions_col = st_module.columns([1.15, 0.85], gap="large")
     with summary_col:
-        if overdue_tasks_today:
-            top_overdue = sorted(overdue_tasks_today, key=lambda task: deps["task_attention_sort_key"](task, today))[0]
-            st_module.markdown(
-                f"- Overdue focus: <strong>{top_overdue.get('title')}</strong>",
-                unsafe_allow_html=True,
-            )
-        else:
-            top_overdue = None
-            st_module.markdown("- Overdue focus: none")
-
-        if today_plan["unscheduled_high"]:
-            top_unscheduled_high = today_plan["unscheduled_high"][0]
-            st_module.markdown(
-                f"- Unscheduled high priority: <strong>{top_unscheduled_high.get('title')}</strong>",
-                unsafe_allow_html=True,
-            )
-        else:
-            top_unscheduled_high = None
-            st_module.markdown("- Unscheduled high priority: none")
-
-        if top_case_row:
-            top_case = top_case_row["case"]
-            case_date = top_case.get("case_date")
-            case_date_label = case_date.strftime("%b %d") if hasattr(case_date, "strftime") else str(case_date)
-            risk_reasons = []
-            if not top_case_row["has_cpt"]:
-                risk_reasons.append("missing CPT")
-            if not top_case_row["has_protocol_match"]:
-                risk_reasons.append("missing protocol")
-            if not risk_reasons:
-                risk_reasons.append("near-term case")
-            st_module.markdown(
-                f"- Highest-risk case: <strong>{top_case.get('procedure_name') or 'Untitled case'}</strong> ({case_date_label}) · {', '.join(risk_reasons)} · risk {top_case_row['risk_score']}",
-                unsafe_allow_html=True,
-            )
-        else:
-            top_case = None
-            st_module.markdown("- Highest-risk case: none")
-
-        if missing_protocol_cases:
-            st_module.markdown(f"- Missing protocol links: {len(missing_protocol_cases)} upcoming case(s)")
-        else:
-            st_module.markdown("- Missing protocol links: none")
-
-        st_module.markdown("- Recommended sequence:")
+        st_module.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Personal: {personal_active} active · Clinical: {clinic_active} active · Scheduled today: {scheduled_today_count}</div>",
+            unsafe_allow_html=True,
+        )
+        st_module.caption(day_context["reason_text"])
+        st_module.markdown(
+            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span><span class='ai-chip'>Runway gap: {schedule_snapshot['capacity_gap']}</span></div>",
+            unsafe_allow_html=True,
+        )
         if today_plan["ordered"]:
-            for index, task in enumerate(today_plan["ordered"][:briefing_queue_depth], start=1):
+            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Immediate queue</h3><span>What should move first</span></div>', unsafe_allow_html=True)
+            for task in today_plan["ordered"][:4]:
+                attention = deps["task_attention_signal"](task, mountain_today())
                 st_module.markdown(
-                    f"  {index}. <strong>{task.get('title')}</strong> · {task.get('category')} · {task.get('priority', 'medium').title()}",
+                    f"- <strong>{task['title']}</strong> · {attention['label']} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
                     unsafe_allow_html=True,
                 )
         else:
-            st_module.markdown("  1. No active tasks in queue")
+            st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
+
+        if today_plan["scheduled_today"]:
+            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Scheduled today</h3><span>Protected time already on the calendar</span></div>', unsafe_allow_html=True)
+            for task in today_plan["scheduled_today"]:
+                scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
+                st_module.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to protect a focus window.</div>', unsafe_allow_html=True)
 
     with actions_col:
         st_module.markdown('<div class="panel-title"><h3>One-Click Fixes</h3><span>Resolve blockers quickly</span></div>', unsafe_allow_html=True)
+        top_overdue = sorted(overdue_tasks_today, key=lambda task: deps["task_attention_sort_key"](task, today))[0] if overdue_tasks_today else None
         if top_overdue and deps.get("set_task_status"):
             if st_module.button("Start top overdue", key=f"{panel_key}_briefing_start_overdue", type="secondary"):
                 deps["set_task_status"](top_overdue.get("id"), "in_progress")
                 st_module.success("Top overdue task moved to In Progress.")
                 st_module.rerun()
 
+        top_unscheduled_high = today_plan["unscheduled_high"][0] if today_plan["unscheduled_high"] else None
         if top_unscheduled_high and deps.get("update_task"):
             if st_module.button("Schedule top high-priority", key=f"{panel_key}_briefing_schedule_high", type="secondary"):
                 deps["update_task"](
@@ -451,64 +357,19 @@ def render_overview_control_tower(
                 st_module.success("Top high-priority task scheduled for today.")
                 st_module.rerun()
 
-        if top_case and deps.get("update_surgical_case"):
-            cpt_suggestions = deps["suggest_cpt_codes_for_case"](
-                top_case,
-                surgical_cases,
-                max_items=1,
-                cpt_reference=deps.get("cpt_reference"),
-            )
-            if cpt_suggestions:
-                if st_module.button("Auto-fill top case CPT", key=f"{panel_key}_briefing_autofill_cpt", type="secondary"):
-                    deps["update_surgical_case"](
-                        top_case.get("id"),
-                        cpt_codes=cpt_suggestions[0].get("cpt_codes"),
-                    )
-                    st_module.success("Top case updated with suggested CPT code(s).")
-                    st_module.rerun()
-
-        if missing_protocol_cases and deps.get("add_task"):
-            reminder_title = "Upload or tag missing protocols for upcoming foot/ankle cases"
-            existing_reminder = next(
-                (
-                    task
-                    for task in active_tasks
-                    if str(task.get("title") or "").strip().lower() == reminder_title.lower()
-                ),
-                None,
-            )
-            if existing_reminder:
-                st_module.caption("Protocol reminder task already exists.")
-            elif st_module.button("Create protocol upload reminder", key=f"{panel_key}_briefing_protocol_reminder", type="secondary"):
-                deps["add_task"](
-                    reminder_title,
-                    f"{len(missing_protocol_cases)} upcoming case(s) have no clear protocol match.",
-                    "Clinic",
-                    "high",
-                    today,
-                )
-                st_module.success("Reminder task created.")
-                st_module.rerun()
-
     st_module.markdown('</div>', unsafe_allow_html=True)
-
-    metric_cols = st_module.columns(4)
-    metric_cols[0].metric("Active", len(active_tasks))
-    metric_cols[1].metric("Due today", len(due_today_tasks))
-    metric_cols[2].metric("Overdue", len(overdue_tasks_today))
-    metric_cols[3].metric("Scheduled", len(scheduled_tasks))
 
     top_left, top_right = st_module.columns([1.25, 0.85], gap="large")
     with top_left:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Today at a Glance</h3><span>Fast read on the day’s operating mode</span></div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Today at a Glance</h3><span>Fast read on personal, clinical, and schedule load</span></div>', unsafe_allow_html=True)
         st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {len(clinic_backlog)} active · Personal: {len(personal_backlog)} active · High-priority unscheduled: {len(unscheduled_high)}</div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {clinic_active} active · Personal: {personal_active} active · Scheduled today: {scheduled_today_count}</div>",
             unsafe_allow_html=True,
         )
         st_module.caption(day_context["reason_text"])
         st_module.markdown(
-            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span></div>",
+            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span><span class='ai-chip'>Overdue: {len(overdue_tasks_today)}</span></div>",
             unsafe_allow_html=True,
         )
         if overview_focus:
@@ -522,20 +383,23 @@ def render_overview_control_tower(
 
     with top_right:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Outpatient Load</h3><span>Editable patient and procedure planning</span></div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Schedule Snapshot</h3><span>What is already placed, what still needs a home</span></div>', unsafe_allow_html=True)
         st_module.metric("Day mode", day_context["mode"])
         st_module.caption(f"{site_display_label} · {overview_settings['role_label']} · buffer {overview_settings['admin_buffer_minutes']} min")
         st_module.markdown(
-            f"<div class='ai-chip-grid'><span class='ai-chip'>Clinic active: {clinic_summary['active_clinic_count']}</span><span class='ai-chip'>Unscheduled: {clinic_summary['clinic_unscheduled_count']}</span><span class='ai-chip'>Due soon: {clinic_summary['due_soon_count']}</span><span class='ai-chip'>Active pressure: {day_context['active_pressure']}</span></div>",
+            f"<div class='ai-chip-grid'><span class='ai-chip'>Scheduled now: {scheduled_today_count}</span><span class='ai-chip'>Unscheduled: {len(schedule_snapshot['unscheduled'])}</span><span class='ai-chip'>Unscheduled high: {len(schedule_snapshot['unscheduled_high'])}</span><span class='ai-chip'>Runway gap: {schedule_snapshot['capacity_gap']}</span></div>",
             unsafe_allow_html=True,
         )
-        if clinic_summary["top_clinic_tasks"]:
-            st_module.markdown("<div class='panel-title' style='margin-top:0.75rem;'><h3>Top outpatient priorities</h3><span>First things first</span></div>", unsafe_allow_html=True)
-            for task in clinic_summary["top_clinic_tasks"][:3]:
+        if next_scheduled:
+            st_module.markdown("<div class='panel-title' style='margin-top:0.75rem;'><h3>Next scheduled blocks</h3><span>The nearest protected work</span></div>", unsafe_allow_html=True)
+            for task in next_scheduled:
+                scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
                 st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {deps['format_due'](task)}",
+                    f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
                     unsafe_allow_html=True,
                 )
+        else:
+            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to place work into the week.</div>', unsafe_allow_html=True)
         st_module.markdown('</div>', unsafe_allow_html=True)
 
     lower_left, lower_right = st_module.columns(2, gap="large")
@@ -580,16 +444,10 @@ def render_overview_control_tower(
                     f"- <strong>{task['title']}</strong> · {tag} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
                     unsafe_allow_html=True,
                 )
-        if today_plan["scheduled_today"]:
-            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Scheduled blocks</h3><span>Protected time already on the calendar</span></div>', unsafe_allow_html=True)
-        for task in today_plan["scheduled_today"]:
-            scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
-            st_module.markdown(
-                f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
-                unsafe_allow_html=True,
-            )
-        if not today_plan["scheduled_today"]:
-            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to protect a focus window.</div>', unsafe_allow_html=True)
+        st_module.markdown(
+            '<div class="empty-state">Scheduled blocks are summarized in the Schedule Snapshot card so this panel stays focused on execution.</div>',
+            unsafe_allow_html=True,
+        )
         st_module.markdown('</div>', unsafe_allow_html=True)
 
     with lower_right:
@@ -612,6 +470,166 @@ def render_overview_control_tower(
                 st_module.success("Quick task added from overview.")
                 st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
+
+    if deps.get("load_surgical_cases") or deps.get("load_protocol_documents"):
+        surgical_cases = []
+        protocol_documents = []
+        if deps.get("load_surgical_cases"):
+            try:
+                surgical_cases = deps["load_surgical_cases"]() or []
+            except Exception:
+                surgical_cases = []
+        if deps.get("load_protocol_documents"):
+            try:
+                protocol_documents = deps["load_protocol_documents"]() or []
+            except Exception:
+                protocol_documents = []
+
+        briefing_horizon_key = f"{panel_key}_briefing_horizon_days"
+        briefing_queue_depth_key = f"{panel_key}_briefing_queue_depth"
+        if briefing_horizon_key not in st_module.session_state:
+            st_module.session_state[briefing_horizon_key] = 7
+        if briefing_queue_depth_key not in st_module.session_state:
+            st_module.session_state[briefing_queue_depth_key] = 3
+
+        briefing_horizon_days = int(st_module.session_state.get(briefing_horizon_key, 7) or 7)
+        briefing_queue_depth = int(st_module.session_state.get(briefing_queue_depth_key, 3) or 3)
+
+        upcoming_cases = sorted(
+            [
+                item
+                for item in surgical_cases
+                if item.get("status") == "planned"
+                and item.get("case_date")
+                and item.get("case_date") <= (today + timedelta(days=briefing_horizon_days))
+            ],
+            key=lambda item: item.get("case_date"),
+        )
+
+        case_risk_rows = []
+        for item in upcoming_cases:
+            case_date = item.get("case_date")
+            days_until = (case_date - today).days if case_date else 99
+            has_cpt = bool(str(item.get("cpt_codes") or "").strip())
+            has_protocol_match = bool(
+                protocol_documents
+                and deps["suggest_protocols_for_case"](item, protocol_documents, max_items=1)
+            )
+            risk_score = 0
+            if not has_cpt:
+                risk_score += 10
+            if not has_protocol_match:
+                risk_score += 8
+            risk_score += max(0, 10 - max(days_until, 0))
+            case_risk_rows.append(
+                {
+                    "case": item,
+                    "risk_score": risk_score,
+                    "has_cpt": has_cpt,
+                    "has_protocol_match": has_protocol_match,
+                    "days_until": days_until,
+                }
+            )
+
+        case_risk_rows.sort(key=lambda item: item["risk_score"], reverse=True)
+        high_risk_cases = [item["case"] for item in case_risk_rows if item["risk_score"] > 0 and not item["has_cpt"]]
+        missing_protocol_cases = [item["case"] for item in case_risk_rows if not item["has_protocol_match"]]
+        top_case_row = case_risk_rows[0] if case_risk_rows else None
+
+        with st_module.expander("Case follow-up", expanded=False):
+            case_cols = st_module.columns(4)
+            case_cols[0].metric("Upcoming cases", len(upcoming_cases))
+            case_cols[1].metric("Cases missing CPT", len(high_risk_cases))
+            case_cols[2].metric("Cases missing protocol", len(missing_protocol_cases))
+            case_cols[3].metric("Queue depth", briefing_queue_depth)
+
+            followup_left, followup_right = st_module.columns([1.1, 0.9], gap="large")
+            with followup_left:
+                st_module.slider(
+                    "Case lookahead window (days)",
+                    min_value=3,
+                    max_value=21,
+                    value=briefing_horizon_days,
+                    key=briefing_horizon_key,
+                    help="Controls how far ahead the case risk scan looks.",
+                )
+                st_module.selectbox(
+                    "Recommended sequence depth",
+                    [3, 4, 5],
+                    index=[3, 4, 5].index(briefing_queue_depth) if briefing_queue_depth in (3, 4, 5) else 0,
+                    key=briefing_queue_depth_key,
+                    help="How many tasks to include in the sequence list.",
+                )
+
+                if top_case_row:
+                    top_case = top_case_row["case"]
+                    case_date = top_case.get("case_date")
+                    case_date_label = case_date.strftime("%b %d") if hasattr(case_date, "strftime") else str(case_date)
+                    risk_reasons = []
+                    if not top_case_row["has_cpt"]:
+                        risk_reasons.append("missing CPT")
+                    if not top_case_row["has_protocol_match"]:
+                        risk_reasons.append("missing protocol")
+                    if not risk_reasons:
+                        risk_reasons.append("near-term case")
+                    st_module.markdown(
+                        f"- Highest-risk case: <strong>{top_case.get('procedure_name') or 'Untitled case'}</strong> ({case_date_label}) · {', '.join(risk_reasons)} · risk {top_case_row['risk_score']}",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    top_case = None
+                    st_module.markdown("- Highest-risk case: none")
+
+                st_module.markdown("- Recommended sequence:")
+                if today_plan["ordered"]:
+                    for index, task in enumerate(today_plan["ordered"][:briefing_queue_depth], start=1):
+                        st_module.markdown(
+                            f"  {index}. <strong>{task.get('title')}</strong> · {task.get('category')} · {task.get('priority', 'medium').title()}",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st_module.markdown("  1. No active tasks in queue")
+
+            with followup_right:
+                st_module.markdown('<div class="panel-title"><h3>One-Click Fixes</h3><span>Resolve blockers quickly</span></div>', unsafe_allow_html=True)
+                if top_case and deps.get("update_surgical_case"):
+                    cpt_suggestions = deps["suggest_cpt_codes_for_case"](
+                        top_case,
+                        surgical_cases,
+                        max_items=1,
+                        cpt_reference=deps.get("cpt_reference"),
+                    )
+                    if cpt_suggestions:
+                        if st_module.button("Auto-fill top case CPT", key=f"{panel_key}_briefing_autofill_cpt", type="secondary"):
+                            deps["update_surgical_case"](
+                                top_case.get("id"),
+                                cpt_codes=cpt_suggestions[0].get("cpt_codes"),
+                            )
+                            st_module.success("Top case updated with suggested CPT code(s).")
+                            st_module.rerun()
+
+                if missing_protocol_cases and deps.get("add_task"):
+                    reminder_title = "Upload or tag missing protocols for upcoming foot/ankle cases"
+                    existing_reminder = next(
+                        (
+                            task
+                            for task in active_tasks
+                            if str(task.get("title") or "").strip().lower() == reminder_title.lower()
+                        ),
+                        None,
+                    )
+                    if existing_reminder:
+                        st_module.caption("Protocol reminder task already exists.")
+                    elif st_module.button("Create protocol upload reminder", key=f"{panel_key}_briefing_protocol_reminder", type="secondary"):
+                        deps["add_task"](
+                            reminder_title,
+                            f"{len(missing_protocol_cases)} upcoming case(s) have no clear protocol match.",
+                            "Clinic",
+                            "high",
+                            today,
+                        )
+                        st_module.success("Reminder task created.")
+                        st_module.rerun()
 
 
 def render_surgical_cases_panel(
