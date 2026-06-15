@@ -282,116 +282,119 @@ def render_overview_control_tower(
     next_scheduled = scheduled_tasks[:4]
     clinic_summary = deps["clinic_day_summary"](clinic_tasks, active_tasks, app_settings, clinic_mode_key)
     schedule_snapshot = deps["schedule_workload_snapshot"](active_tasks)
+    personal_summary = deps["personal_focus_summary"](personal_tasks, active_tasks, app_settings)
+    family_items = deps["normalize_family_schedule_items"](app_settings.get("family_schedule_items") or []) if deps.get("normalize_family_schedule_items") else []
+    family_summary = deps["weekly_family_schedule_summary"](family_items, end_day=today, window_days=14) if deps.get("weekly_family_schedule_summary") else {
+        "upcoming_count": 0,
+        "appointment_count": 0,
+        "trip_count": 0,
+        "camp_count": 0,
+        "multi_day_count": 0,
+        "recurring_count": 0,
+        "weekend_count": 0,
+        "items_with_checklists": 0,
+        "priority_counts": {"high": 0, "medium": 0, "low": 0},
+        "by_type": {},
+        "upcoming_items": [],
+    }
+    quick_reminders = deps["normalize_quick_reminders"](app_settings.get("quick_reminders") or []) if deps.get("normalize_quick_reminders") else []
+    active_reminders = [item for item in quick_reminders if item.get("status") == "active"]
+    due_reminders = [item for item in active_reminders if item.get("remind_date") and item["remind_date"] <= today]
+    scheduled_today_count = len(today_plan["scheduled_today"])
 
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(
-        '<div class="panel-title"><h3>Smart Daily Briefing</h3><span>Personal, clinical, and schedule signals in one place</span></div>',
+        '<div class="panel-title"><h3>DayAnchor Hub</h3><span>Personal, clinical, family, schedule, and reminders in one snapshot</span></div>',
         unsafe_allow_html=True,
     )
 
-    with st_module.expander("Briefing controls", expanded=False):
-        st_module.caption("The briefing stays focused on daily work. Case intelligence is available below when you need it.")
+    hub_metrics = st_module.columns(6)
+    hub_metrics[0].metric("Personal", personal_summary["personal_count"])
+    hub_metrics[1].metric("Clinical", clinic_summary["active_clinic_count"])
+    hub_metrics[2].metric("Family", family_summary["upcoming_count"])
+    hub_metrics[3].metric("Due today", len(due_today_tasks))
+    hub_metrics[4].metric("Scheduled", scheduled_today_count)
+    hub_metrics[5].metric("Reminders due", len(due_reminders))
 
-    personal_active = len(personal_backlog)
-    clinic_active = len(clinic_backlog)
-    scheduled_today_count = len([task for task in today_plan["scheduled_today"]])
+    st_module.caption(day_context["reason_text"])
+    st_module.markdown(
+        f"<div class='ai-chip-grid'><span class='ai-chip'>Mode: {day_context['mode']}</span><span class='ai-chip'>Focus: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span><span class='ai-chip'>Schedule gap: {schedule_snapshot['capacity_gap']}</span></div>",
+        unsafe_allow_html=True,
+    )
 
-    briefing_cols = st_module.columns(5)
-    briefing_cols[0].metric("Personal active", personal_active)
-    briefing_cols[1].metric("Clinical active", clinic_active)
-    briefing_cols[2].metric("Due today", len(due_today_tasks))
-    briefing_cols[3].metric("Scheduled today", scheduled_today_count)
-    briefing_cols[4].metric("Overdue", len(overdue_tasks_today))
-
-    summary_col, actions_col = st_module.columns([1.15, 0.85], gap="large")
-    with summary_col:
-        st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Personal: {personal_active} active · Clinical: {clinic_active} active · Scheduled today: {scheduled_today_count}</div>",
-            unsafe_allow_html=True,
-        )
-        st_module.caption(day_context["reason_text"])
-        st_module.markdown(
-            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span><span class='ai-chip'>Runway gap: {schedule_snapshot['capacity_gap']}</span></div>",
-            unsafe_allow_html=True,
-        )
-        if today_plan["ordered"]:
-            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Immediate queue</h3><span>What should move first</span></div>', unsafe_allow_html=True)
-            for task in today_plan["ordered"][:4]:
-                attention = deps["task_attention_signal"](task, mountain_today())
-                st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {attention['label']} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
-
-        if today_plan["scheduled_today"]:
-            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Scheduled today</h3><span>Protected time already on the calendar</span></div>', unsafe_allow_html=True)
-            for task in today_plan["scheduled_today"]:
-                scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
-                st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {task['scheduled_date']} at {scheduled_time} · {task.get('scheduled_minutes') or '-'} min",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to protect a focus window.</div>', unsafe_allow_html=True)
-
-    with actions_col:
-        st_module.markdown('<div class="panel-title"><h3>One-Click Fixes</h3><span>Resolve blockers quickly</span></div>', unsafe_allow_html=True)
-        top_overdue = sorted(overdue_tasks_today, key=lambda task: deps["task_attention_sort_key"](task, today))[0] if overdue_tasks_today else None
-        if top_overdue and deps.get("set_task_status"):
-            if st_module.button("Start top overdue", key=f"{panel_key}_briefing_start_overdue", type="secondary"):
-                deps["set_task_status"](top_overdue.get("id"), "in_progress")
-                st_module.success("Top overdue task moved to In Progress.")
-                st_module.rerun()
-
-        top_unscheduled_high = today_plan["unscheduled_high"][0] if today_plan["unscheduled_high"] else None
-        if top_unscheduled_high and deps.get("update_task"):
-            if st_module.button("Schedule top high-priority", key=f"{panel_key}_briefing_schedule_high", type="secondary"):
-                deps["update_task"](
-                    top_unscheduled_high.get("id"),
-                    scheduled_date=today,
-                    scheduled_time=_resolve_default_schedule_time(app_settings.get("default_schedule_time")),
-                    scheduled_minutes=int(app_settings.get("default_duration", 60) or 60),
-                )
-                st_module.success("Top high-priority task scheduled for today.")
-                st_module.rerun()
-
-    st_module.markdown('</div>', unsafe_allow_html=True)
-
-    top_left, top_right = st_module.columns([1.25, 0.85], gap="large")
-    with top_left:
+    lane_top = st_module.columns(3, gap="large")
+    with lane_top[0]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Today at a Glance</h3><span>Fast read on personal, clinical, and schedule load</span></div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Personal Lane</h3><span>What needs your attention first</span></div>', unsafe_allow_html=True)
         st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>{overview_settings['role_label']} at {site_display_label}</strong><br />{day_context['mode']} · {day_context['focus_text']}<br />Clinic: {clinic_active} active · Personal: {personal_active} active · Scheduled today: {scheduled_today_count}</div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>Focus driver:</strong> {personal_summary['focus_name']}<br /><strong>Focus window:</strong> {personal_summary['focus_minutes']} min<br /><strong>Blocked:</strong> {personal_summary['blocked_count']}</div>",
             unsafe_allow_html=True,
         )
-        st_module.caption(day_context["reason_text"])
-        st_module.markdown(
-            f"<div class='ai-chip-grid'><span class='ai-chip'>Target: {day_context['target_value']} {day_context['target_label']}</span><span class='ai-chip'>Shift: {overview_settings['shift_minutes']} min</span><span class='ai-chip'>Focus window: {overview_settings['focus_window_minutes']} min</span><span class='ai-chip'>Overdue: {len(overdue_tasks_today)}</span></div>",
-            unsafe_allow_html=True,
-        )
-        if overview_focus:
-            st_module.markdown(
-                f"<div class='empty-state' style='text-align:left;'><strong>Top action pressure:</strong> {len(overview_focus)} tasks in the immediate queue.<br /><strong>Highest signal:</strong> {overview_focus[0]['title']}</div>",
-                unsafe_allow_html=True,
-            )
+        if personal_summary["focus_tasks"]:
+            for task in personal_summary["focus_tasks"][:3]:
+                st_module.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {deps['format_due'](task)}",
+                    unsafe_allow_html=True,
+                )
         else:
-            st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
+            st_module.markdown('<div class="empty-state">No personal tasks ready right now.</div>', unsafe_allow_html=True)
+        if st_module.button("Open Personal", key=f"{panel_key}_open_personal", use_container_width=True):
+            st_module.session_state["current_page"] = "Personal"
+            st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
-    with top_right:
+    with lane_top[1]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Schedule Snapshot</h3><span>What is already placed, what still needs a home</span></div>', unsafe_allow_html=True)
-        st_module.metric("Day mode", day_context["mode"])
-        st_module.caption(f"{site_display_label} · {overview_settings['role_label']} · buffer {overview_settings['admin_buffer_minutes']} min")
+        st_module.markdown('<div class="panel-title"><h3>Clinical Lane</h3><span>Outpatient flow and task pressure</span></div>', unsafe_allow_html=True)
         st_module.markdown(
-            f"<div class='ai-chip-grid'><span class='ai-chip'>Scheduled now: {scheduled_today_count}</span><span class='ai-chip'>Unscheduled: {len(schedule_snapshot['unscheduled'])}</span><span class='ai-chip'>Unscheduled high: {len(schedule_snapshot['unscheduled_high'])}</span><span class='ai-chip'>Runway gap: {schedule_snapshot['capacity_gap']}</span></div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>Active clinic tasks:</strong> {clinic_summary['active_clinic_count']}<br /><strong>Unscheduled:</strong> {clinic_summary['clinic_unscheduled_count']}<br /><strong>Due soon:</strong> {clinic_summary['due_soon_count']}</div>",
+            unsafe_allow_html=True,
+        )
+        if clinic_summary["top_clinic_tasks"]:
+            for task in clinic_summary["top_clinic_tasks"][:3]:
+                st_module.markdown(
+                    f"- <strong>{task['title']}</strong> · {task['priority'].title()} · {deps['format_due'](task)}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st_module.markdown('<div class="empty-state">No clinic tasks need attention right now.</div>', unsafe_allow_html=True)
+        if st_module.button("Open Clinic", key=f"{panel_key}_open_clinic", use_container_width=True):
+            st_module.session_state["current_page"] = "Clinic"
+            st_module.rerun()
+        st_module.markdown('</div>', unsafe_allow_html=True)
+
+    with lane_top[2]:
+        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Family Lane</h3><span>Schedules, trips, camps, and shared planning</span></div>', unsafe_allow_html=True)
+        st_module.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>Upcoming family items:</strong> {family_summary['upcoming_count']}<br /><strong>Appointments:</strong> {family_summary['appointment_count']}<br /><strong>Trips/Camps:</strong> {family_summary['trip_count'] + family_summary['camp_count']}</div>",
+            unsafe_allow_html=True,
+        )
+        family_next = family_summary["upcoming_items"][:3]
+        if family_next:
+            for item in family_next:
+                item_date = item.get("start_date")
+                item_label = item_date.strftime("%b %d") if hasattr(item_date, "strftime") else str(item_date)
+                st_module.markdown(
+                    f"- <strong>{item['title']}</strong> · {item['item_type']} · {item_label}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st_module.markdown('<div class="empty-state">No family items are on the horizon yet.</div>', unsafe_allow_html=True)
+        if st_module.button("Open Family Schedule", key=f"{panel_key}_open_family", use_container_width=True):
+            st_module.session_state["current_page"] = "Family Schedule"
+            st_module.rerun()
+        st_module.markdown('</div>', unsafe_allow_html=True)
+
+    lane_bottom = st_module.columns(2, gap="large")
+    with lane_bottom[0]:
+        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Schedule Snapshot</h3><span>What is placed and what still needs a home</span></div>', unsafe_allow_html=True)
+        st_module.markdown(
+            f"<div class='empty-state' style='text-align:left;'><strong>Scheduled today:</strong> {scheduled_today_count}<br /><strong>Unscheduled:</strong> {len(schedule_snapshot['unscheduled'])}<br /><strong>Unscheduled high:</strong> {len(schedule_snapshot['unscheduled_high'])}<br /><strong>Runway gap:</strong> {schedule_snapshot['capacity_gap']}</div>",
             unsafe_allow_html=True,
         )
         if next_scheduled:
-            st_module.markdown("<div class='panel-title' style='margin-top:0.75rem;'><h3>Next scheduled blocks</h3><span>The nearest protected work</span></div>", unsafe_allow_html=True)
             for task in next_scheduled:
                 scheduled_time = task.get("scheduled_time").strftime("%I:%M %p").lstrip("0") if task.get("scheduled_time") else "Any time"
                 st_module.markdown(
@@ -399,237 +402,84 @@ def render_overview_control_tower(
                     unsafe_allow_html=True,
                 )
         else:
-            st_module.markdown('<div class="empty-state">No scheduled blocks for today yet. Use the Schedule page to place work into the week.</div>', unsafe_allow_html=True)
+            st_module.markdown('<div class="empty-state">No scheduled blocks yet. Use the Schedule page to place work into the week.</div>', unsafe_allow_html=True)
+        if st_module.button("Open Schedule", key=f"{panel_key}_open_schedule", use_container_width=True):
+            st_module.session_state["current_page"] = "Schedule"
+            st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
-    lower_left, lower_right = st_module.columns(2, gap="large")
-    with lower_left:
+    with lane_bottom[1]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Today Plan</h3><span>One queue for execution</span></div>', unsafe_allow_html=True)
-        st_module.caption(f"{today_plan['unscheduled_count']} unscheduled tasks, {len(today_plan['unscheduled_high'])} high-priority ones, {len(today_plan['scheduled_today'])} scheduled today.")
-        if focus_task:
-            is_focus_pinned = pinned_focus_id == focus_task.get("id")
-            if focus_task in today_plan["urgent_due"]:
-                why_text = "Overdue or due today"
-            elif focus_task in today_plan["scheduled_today"]:
-                why_text = "Already on today's schedule"
-            else:
-                why_text = "High-priority work waiting for an open slot"
-            pin_text = "Pinned for today" if is_focus_pinned else "Not pinned"
-            st_module.markdown(
-                f"<div class='empty-state' style='text-align:left;'><strong>Start here:</strong> {focus_task['title']}<br /><strong>Why now:</strong> {why_text}<br /><strong>Focus status:</strong> {pin_text}</div>",
-                unsafe_allow_html=True,
-            )
-            focus_controls = st_module.columns(2)
-            with focus_controls[0]:
-                if st_module.button("Pin focus task", key=f"{panel_key}_pin_focus", disabled=is_focus_pinned):
-                    st_module.session_state[focus_key] = focus_task.get("id")
-                    st_module.rerun()
-            with focus_controls[1]:
-                if st_module.button("Clear focus", key=f"{panel_key}_clear_focus", disabled=not bool(pinned_focus_id)):
-                    st_module.session_state.pop(focus_key, None)
-                    st_module.rerun()
-        else:
-            st_module.markdown('<div class="empty-state">No active tasks need attention right now.</div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Reminders Inbox</h3><span>Capture and keep the small stuff out of the task board</span></div>', unsafe_allow_html=True)
         st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>Default buffer:</strong> {overview_settings['admin_buffer_minutes']} min<br /><strong>Focus window:</strong> {overview_settings['focus_window_minutes']} min<br /><strong>Recommended mode:</strong> {lens['label']}</div>",
+            f"<div class='empty-state' style='text-align:left;'><strong>Active reminders:</strong> {len(active_reminders)}<br /><strong>Due now:</strong> {len(due_reminders)}<br /><strong>Family reminders:</strong> {len([item for item in active_reminders if str(item.get('category') or '').lower() == 'family'])}</div>",
             unsafe_allow_html=True,
         )
-        if today_plan["ordered"]:
-            st_module.markdown('<div class="panel-title" style="margin-top:1rem;"><h3>Execution queue</h3><span>Ordered by urgency and priority</span></div>', unsafe_allow_html=True)
-            for task in today_plan["ordered"][:4]:
-                attention = deps["task_attention_signal"](task, mountain_today())
-                tag = attention["label"]
+        if active_reminders:
+            for reminder in active_reminders[:3]:
+                reminder_date = reminder.get("remind_date")
+                reminder_time = reminder.get("remind_time")
+                when_label = "Anytime"
+                if reminder_date and reminder_time:
+                    when_label = f"{reminder_date.strftime('%b %d')} at {reminder_time.strftime('%I:%M %p').lstrip('0')}"
+                elif reminder_date:
+                    when_label = reminder_date.strftime("%b %d")
                 st_module.markdown(
-                    f"- <strong>{task['title']}</strong> · {tag} · {task['category']} · {task['priority'].title()} · {deps['format_due'](task)}",
+                    f"- <strong>{reminder['text']}</strong> · {reminder['category']} · {when_label}",
                     unsafe_allow_html=True,
                 )
-        st_module.markdown(
-            '<div class="empty-state">Scheduled blocks are summarized in the Schedule Snapshot card so this panel stays focused on execution.</div>',
-            unsafe_allow_html=True,
-        )
+        else:
+            st_module.markdown('<div class="empty-state">No active reminders yet.</div>', unsafe_allow_html=True)
+        if st_module.button("Open Notifications", key=f"{panel_key}_open_notifications", use_container_width=True):
+            st_module.session_state["current_page"] = "Notifications"
+            st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
-    with lower_right:
-        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
-        st_module.markdown('<div class="panel-title"><h3>Action Shortcuts</h3><span>Fast context before deciding the next move</span></div>', unsafe_allow_html=True)
-        default_lane = "Clinic" if lens_choice in ("Clinic day", "Procedure Friday") else "Personal"
-        st_module.markdown(
-            f"<div class='empty-state' style='text-align:left;'><strong>Suggested lane:</strong> {default_lane}<br /><strong>Overdue right now:</strong> {len(overdue_tasks_today)}<br /><strong>Unscheduled high priority:</strong> {len(unscheduled_high)}<br />Use <strong>Quick capture</strong> in the sidebar to add a task instantly.</div>",
-            unsafe_allow_html=True,
-        )
-        with st_module.form(f"{panel_key}_overview_quick_add", clear_on_submit=True):
-            quick_title = st_module.text_input("Quick add from overview", placeholder="Enter task title")
-            quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
-            quick_submit = st_module.form_submit_button("Add task", type="primary")
-        if quick_submit:
-            if not quick_title.strip():
-                st_module.warning("Add a task title first.")
-            else:
-                deps["add_task"](quick_title.strip(), "", default_lane, quick_priority, mountain_today())
-                st_module.success("Quick task added from overview.")
+    with st_module.expander("Hub actions", expanded=False):
+        action_cols = st_module.columns(5)
+        with action_cols[0]:
+            if st_module.button("Personal", key=f"{panel_key}_jump_personal", use_container_width=True):
+                st_module.session_state["current_page"] = "Personal"
                 st_module.rerun()
-        st_module.markdown('</div>', unsafe_allow_html=True)
+        with action_cols[1]:
+            if st_module.button("Clinic", key=f"{panel_key}_jump_clinic", use_container_width=True):
+                st_module.session_state["current_page"] = "Clinic"
+                st_module.rerun()
+        with action_cols[2]:
+            if st_module.button("Family", key=f"{panel_key}_jump_family", use_container_width=True):
+                st_module.session_state["current_page"] = "Family Schedule"
+                st_module.rerun()
+        with action_cols[3]:
+            if st_module.button("Schedule", key=f"{panel_key}_jump_schedule", use_container_width=True):
+                st_module.session_state["current_page"] = "Schedule"
+                st_module.rerun()
+        with action_cols[4]:
+            if st_module.button("Notifications", key=f"{panel_key}_jump_notifications", use_container_width=True):
+                st_module.session_state["current_page"] = "Notifications"
+                st_module.rerun()
 
-    if deps.get("load_surgical_cases") or deps.get("load_protocol_documents"):
-        surgical_cases = []
-        protocol_documents = []
-        if deps.get("load_surgical_cases"):
-            try:
-                surgical_cases = deps["load_surgical_cases"]() or []
-            except Exception:
-                surgical_cases = []
-        if deps.get("load_protocol_documents"):
-            try:
-                protocol_documents = deps["load_protocol_documents"]() or []
-            except Exception:
-                protocol_documents = []
-
-        briefing_horizon_key = f"{panel_key}_briefing_horizon_days"
-        briefing_queue_depth_key = f"{panel_key}_briefing_queue_depth"
-        if briefing_horizon_key not in st_module.session_state:
-            st_module.session_state[briefing_horizon_key] = 7
-        if briefing_queue_depth_key not in st_module.session_state:
-            st_module.session_state[briefing_queue_depth_key] = 3
-
-        briefing_horizon_days = int(st_module.session_state.get(briefing_horizon_key, 7) or 7)
-        briefing_queue_depth = int(st_module.session_state.get(briefing_queue_depth_key, 3) or 3)
-
-        upcoming_cases = sorted(
-            [
-                item
-                for item in surgical_cases
-                if item.get("status") == "planned"
-                and item.get("case_date")
-                and item.get("case_date") <= (today + timedelta(days=briefing_horizon_days))
-            ],
-            key=lambda item: item.get("case_date"),
-        )
-
-        case_risk_rows = []
-        for item in upcoming_cases:
-            case_date = item.get("case_date")
-            days_until = (case_date - today).days if case_date else 99
-            has_cpt = bool(str(item.get("cpt_codes") or "").strip())
-            has_protocol_match = bool(
-                protocol_documents
-                and deps["suggest_protocols_for_case"](item, protocol_documents, max_items=1)
-            )
-            risk_score = 0
-            if not has_cpt:
-                risk_score += 10
-            if not has_protocol_match:
-                risk_score += 8
-            risk_score += max(0, 10 - max(days_until, 0))
-            case_risk_rows.append(
-                {
-                    "case": item,
-                    "risk_score": risk_score,
-                    "has_cpt": has_cpt,
-                    "has_protocol_match": has_protocol_match,
-                    "days_until": days_until,
-                }
-            )
-
-        case_risk_rows.sort(key=lambda item: item["risk_score"], reverse=True)
-        high_risk_cases = [item["case"] for item in case_risk_rows if item["risk_score"] > 0 and not item["has_cpt"]]
-        missing_protocol_cases = [item["case"] for item in case_risk_rows if not item["has_protocol_match"]]
-        top_case_row = case_risk_rows[0] if case_risk_rows else None
-
-        with st_module.expander("Case follow-up", expanded=False):
-            case_cols = st_module.columns(4)
-            case_cols[0].metric("Upcoming cases", len(upcoming_cases))
-            case_cols[1].metric("Cases missing CPT", len(high_risk_cases))
-            case_cols[2].metric("Cases missing protocol", len(missing_protocol_cases))
-            case_cols[3].metric("Queue depth", briefing_queue_depth)
-
-            followup_left, followup_right = st_module.columns([1.1, 0.9], gap="large")
-            with followup_left:
-                st_module.slider(
-                    "Case lookahead window (days)",
-                    min_value=3,
-                    max_value=21,
-                    value=briefing_horizon_days,
-                    key=briefing_horizon_key,
-                    help="Controls how far ahead the case risk scan looks.",
-                )
-                st_module.selectbox(
-                    "Recommended sequence depth",
-                    [3, 4, 5],
-                    index=[3, 4, 5].index(briefing_queue_depth) if briefing_queue_depth in (3, 4, 5) else 0,
-                    key=briefing_queue_depth_key,
-                    help="How many tasks to include in the sequence list.",
-                )
-
-                if top_case_row:
-                    top_case = top_case_row["case"]
-                    case_date = top_case.get("case_date")
-                    case_date_label = case_date.strftime("%b %d") if hasattr(case_date, "strftime") else str(case_date)
-                    risk_reasons = []
-                    if not top_case_row["has_cpt"]:
-                        risk_reasons.append("missing CPT")
-                    if not top_case_row["has_protocol_match"]:
-                        risk_reasons.append("missing protocol")
-                    if not risk_reasons:
-                        risk_reasons.append("near-term case")
-                    st_module.markdown(
-                        f"- Highest-risk case: <strong>{top_case.get('procedure_name') or 'Untitled case'}</strong> ({case_date_label}) · {', '.join(risk_reasons)} · risk {top_case_row['risk_score']}",
-                        unsafe_allow_html=True,
+        hub_action_cols = st_module.columns(2)
+        top_overdue = sorted(overdue_tasks_today, key=lambda task: deps["task_attention_sort_key"](task, today))[0] if overdue_tasks_today else None
+        with hub_action_cols[0]:
+            if top_overdue and deps.get("set_task_status"):
+                if st_module.button("Start top overdue", key=f"{panel_key}_start_overdue", type="secondary", use_container_width=True):
+                    deps["set_task_status"](top_overdue.get("id"), "in_progress")
+                    st_module.success("Top overdue task moved to In Progress.")
+                    st_module.rerun()
+        with hub_action_cols[1]:
+            top_unscheduled_high = today_plan["unscheduled_high"][0] if today_plan["unscheduled_high"] else None
+            if top_unscheduled_high and deps.get("update_task"):
+                if st_module.button("Schedule top high-priority", key=f"{panel_key}_schedule_high", type="secondary", use_container_width=True):
+                    deps["update_task"](
+                        top_unscheduled_high.get("id"),
+                        scheduled_date=today,
+                        scheduled_time=_resolve_default_schedule_time(app_settings.get("default_schedule_time")),
+                        scheduled_minutes=int(app_settings.get("default_duration", 60) or 60),
                     )
-                else:
-                    top_case = None
-                    st_module.markdown("- Highest-risk case: none")
+                    st_module.success("Top high-priority task scheduled for today.")
+                    st_module.rerun()
 
-                st_module.markdown("- Recommended sequence:")
-                if today_plan["ordered"]:
-                    for index, task in enumerate(today_plan["ordered"][:briefing_queue_depth], start=1):
-                        st_module.markdown(
-                            f"  {index}. <strong>{task.get('title')}</strong> · {task.get('category')} · {task.get('priority', 'medium').title()}",
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st_module.markdown("  1. No active tasks in queue")
-
-            with followup_right:
-                st_module.markdown('<div class="panel-title"><h3>One-Click Fixes</h3><span>Resolve blockers quickly</span></div>', unsafe_allow_html=True)
-                if top_case and deps.get("update_surgical_case"):
-                    cpt_suggestions = deps["suggest_cpt_codes_for_case"](
-                        top_case,
-                        surgical_cases,
-                        max_items=1,
-                        cpt_reference=deps.get("cpt_reference"),
-                    )
-                    if cpt_suggestions:
-                        if st_module.button("Auto-fill top case CPT", key=f"{panel_key}_briefing_autofill_cpt", type="secondary"):
-                            deps["update_surgical_case"](
-                                top_case.get("id"),
-                                cpt_codes=cpt_suggestions[0].get("cpt_codes"),
-                            )
-                            st_module.success("Top case updated with suggested CPT code(s).")
-                            st_module.rerun()
-
-                if missing_protocol_cases and deps.get("add_task"):
-                    reminder_title = "Upload or tag missing protocols for upcoming foot/ankle cases"
-                    existing_reminder = next(
-                        (
-                            task
-                            for task in active_tasks
-                            if str(task.get("title") or "").strip().lower() == reminder_title.lower()
-                        ),
-                        None,
-                    )
-                    if existing_reminder:
-                        st_module.caption("Protocol reminder task already exists.")
-                    elif st_module.button("Create protocol upload reminder", key=f"{panel_key}_briefing_protocol_reminder", type="secondary"):
-                        deps["add_task"](
-                            reminder_title,
-                            f"{len(missing_protocol_cases)} upcoming case(s) have no clear protocol match.",
-                            "Clinic",
-                            "high",
-                            today,
-                        )
-                        st_module.success("Reminder task created.")
-                        st_module.rerun()
+    st_module.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_surgical_cases_panel(

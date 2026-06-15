@@ -660,49 +660,69 @@ def run_app(context, st_module=st):
     list_preview_limit = min(base_list_limit, 3) if focus_mode else base_list_limit
 
     if current_page == "Overview":
-        render_page_banner("overview", "Control Tower", "Snapshot first, details on demand.")
+        render_page_banner("overview", "DayAnchor Hub", "Personal, clinical, family, and reminders in one place.")
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="overview_page")
-        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_task_list_panel("Due Today", "Only the highest attention work", due_today, "today", "No tasks due today.", max_items=list_preview_limit)
 
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-            with st_module.expander("More overview details", expanded=False):
-                context_tab, calendar_tab, news_tab = st_module.tabs(["Context", "Calendar", "News"])
-                with context_tab:
-                    overview_notes_cols = st_module.columns(2, gap="large")
-                    with overview_notes_cols[0]:
-                        render_saved_notes_panel(
-                            "Personal Notes",
-                            "Quick access from overview.",
-                            "personal_notes",
-                            "personal_notes_updated_at",
-                            "overview_personal_notes",
-                            "Write personal notes, reminders, and planning thoughts here...",
-                        )
-                    with overview_notes_cols[1]:
-                        render_saved_notes_panel(
-                            "Clinical Notes",
-                            "Quick access from overview.",
-                            "clinical_notes",
-                            "clinical_notes_updated_at",
-                            "overview_clinical_notes",
-                            "Write clinic notes, operational reminders, and follow-ups (non-PHI) here...",
-                        )
-                    st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-                    render_quick_reminder_capture("overview_quick_reminder")
-                    st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-                    render_personal_focus_panel(personal_tasks, active_tasks, app_settings, panel_key="overview_personal")
-                    st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-                    render_clinic_command_center(clinic_tasks, active_tasks, app_settings, panel_key="overview_clinic")
-                with calendar_tab:
-                    render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
-                with news_tab:
+            st_module.markdown('<div class="panel-title"><h3>Notes and reminders</h3><span>Editable capture for the personal, clinical, and family lanes</span></div>', unsafe_allow_html=True)
+            note_cols = st_module.columns(3, gap="large")
+            with note_cols[0]:
+                render_saved_notes_panel(
+                    "Personal Notes",
+                    "Quick access from overview.",
+                    "personal_notes",
+                    "personal_notes_updated_at",
+                    "overview_personal_notes",
+                    "Write personal notes, reminders, and planning thoughts here...",
+                )
+            with note_cols[1]:
+                render_saved_notes_panel(
+                    "Clinical Notes",
+                    "Quick access from overview.",
+                    "clinical_notes",
+                    "clinical_notes_updated_at",
+                    "overview_clinical_notes",
+                    "Write clinic notes, operational reminders, and follow-ups (non-PHI) here...",
+                )
+            with note_cols[2]:
+                render_saved_notes_panel(
+                    "Family Notes",
+                    "Shared context for the family lane.",
+                    "family_notes",
+                    "family_notes_updated_at",
+                    "overview_family_notes",
+                    "Write family planning notes, packing lists, reminders, and coordination thoughts here...",
+                )
+
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            reminder_and_links = st_module.columns([1.1, 0.9], gap="large")
+            with reminder_and_links[0]:
+                render_quick_reminder_capture("overview_quick_reminder")
+            with reminder_and_links[1]:
+                st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+                st_module.markdown('<div class="panel-title"><h3>More Tools</h3><span>Calendar and news live here when you need them</span></div>', unsafe_allow_html=True)
+                st_module.markdown(
+                    '<div class="empty-state" style="text-align:left;"><strong>Calendar:</strong> Use the schedule page for dense planning.<br /><strong>News:</strong> Keep the digest here as an optional read.</div>',
+                    unsafe_allow_html=True,
+                )
+                if st_module.button("Open Schedule", key="overview_open_schedule_tools", use_container_width=True):
+                    st_module.session_state["current_page"] = "Schedule"
+                    st_module.rerun()
+                if st_module.button("Open Family Schedule", key="overview_open_family_tools", use_container_width=True):
+                    st_module.session_state["current_page"] = "Family Schedule"
+                    st_module.rerun()
+                st_module.markdown('</div>', unsafe_allow_html=True)
+
+            if not focus_mode:
+                with st_module.expander("Optional context", expanded=False):
+                    if render_task_calendar_panel:
+                        render_task_calendar_panel(tasks, "overview_tasks", "Task Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
                     if render_morning_digest_panel and news_articles:
                         render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
-                    else:
+                    elif render_morning_digest_panel:
                         st_module.info("No news digest is available right now.")
     elif current_page == "Morning Ritual":
         render_page_banner("personal", "Morning Ritual", "Start intentionally before the day gets noisy.")
