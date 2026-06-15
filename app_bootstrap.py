@@ -145,7 +145,12 @@ def run_app(context, st_module=st):
     def render_quick_reminder_capture(panel_key="overview_quick_reminder"):
         nonlocal app_settings
         reminders = list(app_settings.get("quick_reminders") or [])
-        active_count = len([item for item in reminders if isinstance(item, dict) and str(item.get("status") or "active").lower() == "active"])
+        active_reminders = [
+            item
+            for item in reminders
+            if isinstance(item, dict) and str(item.get("status") or "active").lower() == "active"
+        ]
+        active_count = len(active_reminders)
 
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Quick Reminder</h3><span>Capture it now without creating a task</span></div>', unsafe_allow_html=True)
@@ -192,6 +197,28 @@ def run_app(context, st_module=st):
                 )
                 st_module.success("Reminder saved.")
                 st_module.rerun()
+
+        if active_reminders:
+            st_module.markdown('<div class="panel-title" style="margin-top:0.8rem;"><h3>Active reminders</h3><span>Live preview from your reminders inbox</span></div>', unsafe_allow_html=True)
+            for reminder in active_reminders[:6]:
+                reminder_text_value = str(reminder.get("text") or "").strip() or "Untitled reminder"
+                reminder_category = str(reminder.get("category") or "General").strip() or "General"
+                remind_date = reminder.get("remind_date")
+                remind_time = reminder.get("remind_time")
+                when_label = "Anytime"
+                if remind_date and remind_time and hasattr(remind_date, "strftime") and hasattr(remind_time, "strftime"):
+                    when_label = f"{remind_date.strftime('%b %d')} at {remind_time.strftime('%I:%M %p').lstrip('0')}"
+                elif remind_date and hasattr(remind_date, "strftime"):
+                    when_label = remind_date.strftime("%b %d")
+                elif remind_date:
+                    when_label = str(remind_date)
+
+                st_module.markdown(
+                    f"- <strong>{reminder_text_value}</strong> · {reminder_category} · {when_label}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st_module.caption("No active reminders yet. Add one above to see it here instantly.")
 
         st_module.markdown('</div>', unsafe_allow_html=True)
 
