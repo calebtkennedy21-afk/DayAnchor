@@ -439,6 +439,128 @@ def generate_ai_daily_summary(
         return "", f"AI daily summary failed: {exc}"
 
 
+def generate_ma_lead_coaching(
+    lead_context,
+    user_prompt,
+    coaching_mode,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    context = lead_context or {}
+    mode = str(coaching_mode or "Leadership pulse").strip() or "Leadership pulse"
+    prompt_text = str(user_prompt or "").strip()
+
+    open_issues = int(context.get("open_issues") or 0)
+    escalated_issues = int(context.get("escalated_issues") or 0)
+    waiting_psr = int(context.get("waiting_psr") or 0)
+    waiting_leadership = int(context.get("waiting_leadership") or 0)
+    overdue_actions = int(context.get("overdue_actions") or 0)
+    due_checkins = int(context.get("due_checkins") or 0)
+    pending_signoffs = int(context.get("pending_signoffs") or 0)
+    open_education_requests = int(context.get("open_education_requests") or 0)
+    autoclave_due = int(context.get("autoclave_due") or 0)
+
+    top_items = []
+    for item in list(context.get("top_items") or [])[:5]:
+        cleaned = str(item).strip()
+        if cleaned:
+            top_items.append(cleaned)
+    top_items_text = "\n".join(f"- {item}" for item in top_items) if top_items else "- None"
+
+    priorities = []
+    for item in list(context.get("weekly_priorities") or [])[:5]:
+        cleaned = str(item).strip()
+        if cleaned:
+            priorities.append(cleaned)
+    priorities_text = "\n".join(f"- {item}" for item in priorities) if priorities else "- None"
+
+    if not ai_enabled_fn():
+        fallback_talking_points = [
+            f"State the operational reality first: {open_issues} open issues, {escalated_issues} escalations, and {overdue_actions} overdue follow-up actions.",
+            "Name one owner and one due date for each unresolved leadership dependency.",
+            "Close by confirming what support you need from PSR lead and management today.",
+        ]
+        if mode.lower().startswith("difficult"):
+            fallback_talking_points[0] = "Lead with observed facts and impact, then ask for the MA's perspective before coaching next steps."
+        elif mode.lower().startswith("huddle"):
+            fallback_talking_points[0] = "Open huddle with safety and patient-flow risks, then assign clear owners for the top two blockers."
+
+        fallback = (
+            "### MA Lead Coaching Brief\n"
+            f"Mode: {mode}\n\n"
+            "## Immediate Move\n"
+            f"Use the next 15 minutes to triage escalations ({escalated_issues}) and overdue actions ({overdue_actions}) into explicit owner + deadline commitments.\n\n"
+            "## Talking Points\n"
+            f"- {fallback_talking_points[0]}\n"
+            f"- {fallback_talking_points[1]}\n"
+            f"- {fallback_talking_points[2]}\n\n"
+            "## Risks to Watch\n"
+            f"- Waiting on PSR lane: {waiting_psr}\n"
+            f"- Waiting on manager/supervisor: {waiting_leadership}\n"
+            f"- Biweekly check-ins due: {due_checkins}\n"
+            f"- Pending sign-offs: {pending_signoffs}\n\n"
+            "## 24-Hour Follow-through\n"
+            "- Re-check unresolved items at end of day and escalate anything still blocked without a committed owner."
+        )
+        return fallback, ""
+
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.35,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an executive MA leadership coach. "
+                        "Give practical, concise, and psychologically safe coaching for clinic operations leadership. "
+                        "Use direct language, clear ownership, and time-bound recommendations."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Coaching mode: {mode}\n"
+                        f"Leader request: {prompt_text or 'No additional prompt provided.'}\n\n"
+                        "Current MA lead operational context:\n"
+                        f"- Open issues: {open_issues}\n"
+                        f"- Escalated issues: {escalated_issues}\n"
+                        f"- Waiting on PSR lane: {waiting_psr}\n"
+                        f"- Waiting on manager/supervisor: {waiting_leadership}\n"
+                        f"- Overdue follow-up actions: {overdue_actions}\n"
+                        f"- Check-ins due now: {due_checkins}\n"
+                        f"- Pending sign-offs: {pending_signoffs}\n"
+                        f"- Open education requests: {open_education_requests}\n"
+                        f"- Autoclave due soon/overdue: {autoclave_due}\n\n"
+                        "Top priority items:\n"
+                        f"{top_items_text}\n\n"
+                        "Leader weekly priorities:\n"
+                        f"{priorities_text}\n\n"
+                        "Return markdown with exactly these sections:\n"
+                        "### MA Lead Coaching Brief\n"
+                        "## Immediate Move\n"
+                        "## Talking Points\n"
+                        "## Risks to Watch\n"
+                        "## 24-Hour Follow-through\n"
+                        "Requirements:\n"
+                        "- Keep it concise (8-16 lines total).\n"
+                        "- In Talking Points include exactly 3 bullets the lead can say verbatim.\n"
+                        "- Avoid medical diagnosis/treatment advice; focus on team leadership and operations."
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        if not text:
+            return "", "AI returned an empty MA Lead coaching response."
+        return text.strip(), ""
+    except Exception as exc:
+        return "", f"AI MA Lead coaching failed: {exc}"
+
+
 def generate_weekly_nightly_insight(
     weekly_trends,
     recent_reflections,

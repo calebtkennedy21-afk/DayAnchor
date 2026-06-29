@@ -7264,6 +7264,14 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     biweekly_settings = normalize_ma_lead_biweekly_settings(app_settings.get("ma_lead_biweekly_settings"))
     biweekly_checkins = normalize_ma_lead_biweekly_checkins(raw_biweekly_checkins)
     biweekly_actions = normalize_ma_lead_biweekly_action_items(raw_biweekly_actions)
+    raw_lead_development = app_settings.get("ma_lead_development") or {}
+    lead_development = raw_lead_development if isinstance(raw_lead_development, dict) else {}
+    lead_dev_journal_entries = list(lead_development.get("journal_entries") or [])
+    weekly_priorities = [
+        str(item).strip()
+        for item in list(app_settings.get("ma_lead_weekly_priorities") or [])
+        if str(item).strip()
+    ][:5]
 
     def _save_ma_lead_settings(
         updated_weekly_targets=None,
@@ -7275,6 +7283,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         updated_biweekly_actions=None,
         updated_biweekly_template=None,
         updated_biweekly_settings=None,
+        updated_weekly_priorities=None,
+        updated_lead_development=None,
     ):
         save_app_settings(
             {
@@ -7292,6 +7302,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "ma_lead_biweekly_action_items": updated_biweekly_actions if updated_biweekly_actions is not None else app_settings.get("ma_lead_biweekly_action_items", []),
                 "ma_lead_biweekly_template": updated_biweekly_template if updated_biweekly_template is not None else app_settings.get("ma_lead_biweekly_template", {}),
                 "ma_lead_biweekly_settings": updated_biweekly_settings if updated_biweekly_settings is not None else app_settings.get("ma_lead_biweekly_settings", {}),
+                "ma_lead_weekly_priorities": updated_weekly_priorities if updated_weekly_priorities is not None else app_settings.get("ma_lead_weekly_priorities", []),
+                "ma_lead_development": updated_lead_development if updated_lead_development is not None else app_settings.get("ma_lead_development", {}),
             }
         )
 
@@ -7433,6 +7445,148 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             }
         ]
 
+    def _signal_state(value, green_limit, yellow_limit):
+        if value <= green_limit:
+            return "green"
+        if value <= yellow_limit:
+            return "yellow"
+        return "red"
+
+    signal_colors = {
+        "green": "#16a34a",
+        "yellow": "#facc15",
+        "red": "#dc2626",
+    }
+
+    at_risk_count = len([item for item in biweekly_checkins if item.get("status") == "at_risk"])
+    staffing_signal = _signal_state(max(0, 3 - active_ma_assignments), 0, 1)
+    provider_flow_signal = _signal_state(len(waiting_psr), 1, 3)
+    patient_wait_signal = _signal_state(len(open_issues), 3, 6)
+    supplies_signal = _signal_state(autoclave_due_count, 0, 2)
+    morale_signal = _signal_state(at_risk_count, 0, 2)
+    escalations_signal = _signal_state(len(escalated_issues), 1, 2)
+
+    score_penalty = (
+        (len(escalated_issues) * 8)
+        + (len(overdue_biweekly_actions) * 5)
+        + (len(waiting_leadership) * 4)
+        + (len(waiting_psr) * 2)
+        + (autoclave_due_count * 2)
+    )
+    score_recovery = min(12, len(resolved_today) * 2)
+    leadership_score = max(55, min(99, 100 - score_penalty + score_recovery))
+    clinic_health_state = "Stable"
+    clinic_health_color = signal_colors["green"]
+    if any(signal == "red" for signal in [staffing_signal, provider_flow_signal, patient_wait_signal, supplies_signal, morale_signal, escalations_signal]):
+        clinic_health_state = "Needs support"
+        clinic_health_color = signal_colors["red"]
+    elif any(signal == "yellow" for signal in [staffing_signal, provider_flow_signal, patient_wait_signal, supplies_signal, morale_signal, escalations_signal]):
+        clinic_health_state = "Watchlist"
+        clinic_health_color = signal_colors["yellow"]
+
+    top_priority_label = top_priority_items[0].get("label") if top_priority_items else "No urgent priorities"
+    next_action_label = (
+        f"Run escalation touchpoint now for {len(escalated_issues)} item(s)."
+        if escalated_issues
+        else f"Complete next due check-in ({len(checkins_due_rows)} due)."
+        if checkins_due_rows
+        else "Review tomorrow staffing and huddle prep."
+    )
+    recognition_text = f"{len(resolved_today)} recognition moment(s) today"
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>MA Lead Today</h3><span>Immediate leadership pulse before diving into queues</span></div>', unsafe_allow_html=True)
+
+    hero_cols = st.columns([1.1, 1.1, 2.2, 1.2])
+    hero_cols[0].metric("Leadership Score", f"{leadership_score}%")
+    hero_cols[1].markdown(
+        f"<div style='font-weight:700; margin-top:0.25rem;'>Clinic Health</div><div style='display:inline-flex; align-items:center; gap:0.45rem; margin-top:0.25rem;'><span style='width:0.65rem; height:0.65rem; border-radius:50%; background:{clinic_health_color}; display:inline-block;'></span><span style='font-weight:600;'>{clinic_health_state}</span></div>",
+        unsafe_allow_html=True,
+    )
+    hero_cols[2].markdown(f"**Top Priority**  \n{top_priority_label}")
+    hero_cols[3].markdown(f"**Staff Recognition**  \n{recognition_text}")
+    st.caption(f"Next leadership action: {next_action_label}")
+
+    leadership_rhythm_rows = [
+        ("Morning Walkthrough", "completed" if resolved_today else "pending"),
+        ("Staff Huddle", "completed" if any(item.get("huddle_date") == today_value for item in huddle_logs) else "pending"),
+        ("Provider Check-in", "pending" if waiting_psr else "completed"),
+        ("Staffing Review", "completed" if active_ma_assignments else "pending"),
+        ("Team Recognition", "completed" if resolved_today else "pending"),
+        ("End-of-Day Debrief", "scheduled"),
+    ]
+    st.markdown("#### Today's Leadership")
+    for label, status in leadership_rhythm_rows:
+        status_color = signal_colors["green"] if status == "completed" else signal_colors["yellow"] if status == "scheduled" else "#64748b"
+        st.markdown(
+            f"<div style='display:flex; align-items:center; gap:0.45rem; margin-bottom:0.2rem;'><span style='width:0.6rem; height:0.6rem; border-radius:50%; background:{status_color}; display:inline-block;'></span><span style='font-weight:600;'>{label}</span><span style='color:#94a3b8;'>{status.title()}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("#### Clinic Health Dashboard")
+    clinic_signal_cols = st.columns(3)
+    clinic_signals = [
+        ("Staffing", staffing_signal),
+        ("Provider Flow", provider_flow_signal),
+        ("Patient Wait", patient_wait_signal),
+        ("Supplies", supplies_signal),
+        ("Team Morale", morale_signal),
+        ("Escalations", escalations_signal),
+    ]
+    for index, (label, signal) in enumerate(clinic_signals):
+        dot_color = signal_colors.get(signal, signal_colors["green"])
+        clinic_signal_cols[index % 3].markdown(
+            f"<div style='display:flex; align-items:center; gap:0.45rem; margin:0.2rem 0;'><span style='width:0.72rem; height:0.72rem; border-radius:50%; background:{dot_color}; display:inline-block;'></span><span style='font-weight:600;'>{label}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    needs_me = []
+    if escalated_issues:
+        needs_me.append(f"{len(escalated_issues)} escalation(s) require direct MA lead ownership")
+    if overdue_biweekly_actions:
+        needs_me.append(f"{len(overdue_biweekly_actions)} overdue follow-up action(s)")
+    if checkins_due_rows:
+        needs_me.append(f"{len(checkins_due_rows)} biweekly check-in(s) due now")
+    if not needs_me:
+        needs_me.append("No urgent direct-leadership interventions right now")
+
+    does_not_need_me = []
+    if waiting_psr:
+        does_not_need_me.append(f"{len(waiting_psr)} item(s) waiting on PSR")
+    if waiting_leadership:
+        does_not_need_me.append(f"{len(waiting_leadership)} item(s) awaiting manager/supervisor decision")
+    if open_issues and not (waiting_psr or waiting_leadership):
+        does_not_need_me.append("Route non-urgent queue work to delegated owners")
+    if not does_not_need_me:
+        does_not_need_me.append("No obvious delegation opportunities right now")
+
+    triage_cols = st.columns(2)
+    with triage_cols[0]:
+        st.markdown("#### What Needs Me?")
+        for line in needs_me[:5]:
+            st.markdown(f"- {line}")
+    with triage_cols[1]:
+        st.markdown("#### Doesn't Need Me")
+        for line in does_not_need_me[:5]:
+            st.markdown(f"- {line}")
+
+    dependability_score = max(60, min(99, 97 - (len(overdue_biweekly_actions) * 4) - len(escalated_issues)))
+    communication_score = max(60, min(99, 95 - (len(waiting_psr) * 3) - (len(waiting_leadership) * 3)))
+    team_support_score = max(60, min(99, 96 - (at_risk_count * 4) - (len(checkins_due_rows) * 2)))
+    organization_score = max(60, min(99, 94 - (len(open_issues) * 2) - (autoclave_due_count * 3)))
+    delegation_score = max(60, min(99, 92 - (len(waiting_leadership) * 2) + min(6, active_ma_assignments)))
+    trend_label = "Improving" if len(resolved_today) >= len(escalated_issues) else "Needs reset"
+
+    st.markdown("#### Leadership Review")
+    review_cols = st.columns(3)
+    review_cols[0].metric("Dependability", f"{dependability_score}%")
+    review_cols[1].metric("Communication", f"{communication_score}%")
+    review_cols[2].metric("Team Support", f"{team_support_score}%")
+    review_cols[0].metric("Organization", f"{organization_score}%")
+    review_cols[1].metric("Delegation", f"{delegation_score}%")
+    review_cols[2].metric("Trend", trend_label)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('<div style="height: 0.45rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>MA Lead Focus - Today</h3><span>Start here for urgent actions, then move into detailed tabs</span></div>', unsafe_allow_html=True)
@@ -7484,6 +7638,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         "Daily Huddle",
         "SOP Playbook",
         "Biweekly Check-ins",
+        "Leadership Development",
     ]
 
     advanced_tab_labels = [
@@ -7662,6 +7817,73 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     st.markdown(f"- **{item.get('title')}** · closed by {item.get('owner_name') or 'unassigned'}")
             else:
                 st.markdown("No items marked resolved today.")
+
+        st.markdown('<div style="height: 0.55rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Weekly leadership priorities")
+        priorities_default_text = "\n".join(weekly_priorities)
+        priorities_text = st.text_area(
+            "Top 3-5 leadership priorities (one per line)",
+            value=priorities_default_text,
+            height=120,
+            key=f"{panel_key}_leadership_priorities_editor",
+            placeholder="Close all escalations older than 48h\nTighten PSR handoff reliability\nComplete two coaching check-ins",
+        )
+        if st.button("Save priorities", key=f"{panel_key}_save_leadership_priorities", type="secondary"):
+            parsed_priorities = [line.strip() for line in priorities_text.splitlines() if line.strip()][:5]
+            _save_ma_lead_settings(updated_weekly_priorities=parsed_priorities)
+            st.success("Leadership priorities saved.")
+            st.rerun()
+
+        st.markdown('<div style="height: 0.45rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### AI Leadership Coach")
+        st.caption("Get concise leadership coaching from your live MA Lead queue context.")
+
+        coach_mode = st.selectbox(
+            "Coaching mode",
+            [
+                "Leadership pulse",
+                "Huddle framing",
+                "Difficult conversation prep",
+                "Escalation strategy",
+                "Staffing stability",
+            ],
+            key=f"{panel_key}_coach_mode",
+        )
+        coach_prompt = st.text_area(
+            "What situation do you want coaching on?",
+            key=f"{panel_key}_coach_prompt",
+            height=100,
+            placeholder="Example: I need to coach an MA who keeps missing callback documentation while keeping trust and accountability high.",
+        )
+
+        coach_response_key = f"{panel_key}_coach_response"
+        coach_error_key = f"{panel_key}_coach_error"
+        if st.button("Generate leadership coaching", key=f"{panel_key}_generate_coach", type="primary"):
+            coaching_context = {
+                "open_issues": len(open_issues),
+                "escalated_issues": len(escalated_issues),
+                "waiting_psr": len(waiting_psr),
+                "waiting_leadership": len(waiting_leadership),
+                "overdue_actions": len(overdue_biweekly_actions),
+                "due_checkins": len(checkins_due_rows),
+                "pending_signoffs": pending_signoffs,
+                "open_education_requests": open_education_requests,
+                "autoclave_due": autoclave_due_count,
+                "weekly_priorities": weekly_priorities,
+                "top_items": [item.get("label") for item in top_priority_items[:5] if item.get("label")],
+            }
+            coach_result, coach_error = generate_ma_lead_coaching(
+                coaching_context,
+                coach_prompt,
+                coach_mode,
+            )
+            st.session_state[coach_response_key] = coach_result
+            st.session_state[coach_error_key] = coach_error
+
+        if st.session_state.get(coach_error_key):
+            st.warning(st.session_state.get(coach_error_key))
+        if st.session_state.get(coach_response_key):
+            st.markdown(st.session_state.get(coach_response_key))
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_lookup["Clinical Triage Queue"]:
@@ -9127,6 +9349,136 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         )
 
         st.markdown('</div>', unsafe_allow_html=True)
+
+    if "Leadership Development" in tab_lookup:
+        with tab_lookup["Leadership Development"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Leadership Development</h3><span>Build stronger leadership systems, not just cleaner task lists</span></div>', unsafe_allow_html=True)
+
+            stored_goals = lead_development.get("goals_90_day")
+            goals_lines = [str(item).strip() for item in (stored_goals if isinstance(stored_goals, list) else str(stored_goals or "").splitlines()) if str(item).strip()]
+            stored_books = lead_development.get("books")
+            book_lines = [str(item).strip() for item in (stored_books if isinstance(stored_books, list) else str(stored_books or "").splitlines()) if str(item).strip()]
+
+            with st.form(f"{panel_key}_leadership_development_form"):
+                dev_cols = st.columns(2)
+                with dev_cols[0]:
+                    goals_90_day_text = st.text_area(
+                        "90-day goals (one per line)",
+                        value="\n".join(goals_lines),
+                        height=130,
+                        placeholder="Raise delegation score by 10%\nClose escalations within 24 hours\nBuild stable MA backup coverage",
+                    )
+                    books_text = st.text_area(
+                        "Books / learning resources",
+                        value="\n".join(book_lines),
+                        height=110,
+                        placeholder="Crucial Conversations\nThe Coaching Habit",
+                    )
+                    difficult_conversations = st.text_area(
+                        "Difficult conversations",
+                        value=str(lead_development.get("difficult_conversations") or ""),
+                        height=100,
+                        placeholder="Who, what happened, and what approach you used.",
+                    )
+                    leadership_lessons = st.text_area(
+                        "Lessons learned",
+                        value=str(lead_development.get("lessons_learned") or ""),
+                        height=100,
+                        placeholder="What changed in your leadership approach this week?",
+                    )
+                with dev_cols[1]:
+                    feedback_received = st.text_area(
+                        "Feedback received",
+                        value=str(lead_development.get("feedback_received") or ""),
+                        height=100,
+                    )
+                    feedback_given = st.text_area(
+                        "Feedback given",
+                        value=str(lead_development.get("feedback_given") or ""),
+                        height=100,
+                    )
+                    provider_feedback = st.text_area(
+                        "Provider feedback",
+                        value=str(lead_development.get("provider_feedback") or ""),
+                        height=95,
+                    )
+                    staff_feedback = st.text_area(
+                        "Staff feedback",
+                        value=str(lead_development.get("staff_feedback") or ""),
+                        height=95,
+                    )
+                    personal_growth = st.text_area(
+                        "Personal growth focus",
+                        value=str(lead_development.get("personal_growth") or ""),
+                        height=95,
+                        placeholder="One leadership behavior to strengthen next week.",
+                    )
+
+                save_dev = st.form_submit_button("Save leadership development", type="primary")
+
+            if save_dev:
+                updated_development = {
+                    **lead_development,
+                    "goals_90_day": [line.strip() for line in goals_90_day_text.splitlines() if line.strip()][:8],
+                    "books": [line.strip() for line in books_text.splitlines() if line.strip()][:12],
+                    "difficult_conversations": difficult_conversations.strip(),
+                    "feedback_received": feedback_received.strip(),
+                    "feedback_given": feedback_given.strip(),
+                    "lessons_learned": leadership_lessons.strip(),
+                    "provider_feedback": provider_feedback.strip(),
+                    "staff_feedback": staff_feedback.strip(),
+                    "personal_growth": personal_growth.strip(),
+                    "journal_entries": lead_dev_journal_entries,
+                    "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                }
+                _save_ma_lead_settings(updated_lead_development=updated_development)
+                st.success("Leadership development saved.")
+                st.rerun()
+
+            st.markdown("#### Leadership journal")
+            journal_cols = st.columns([1.1, 3.2, 1])
+            with journal_cols[0]:
+                journal_date = st.date_input("Journal date", value=mountain_today(), key=f"{panel_key}_lead_dev_journal_date")
+            with journal_cols[1]:
+                journal_note = st.text_area(
+                    "Journal note",
+                    key=f"{panel_key}_lead_dev_journal_note",
+                    height=90,
+                    placeholder="What leadership moment did you handle well, and what would you improve next time?",
+                )
+            with journal_cols[2]:
+                if st.button("Add entry", key=f"{panel_key}_lead_dev_add_entry"):
+                    if not journal_note.strip():
+                        st.warning("Journal note is required.")
+                    else:
+                        updated_entries = list(lead_dev_journal_entries)
+                        updated_entries.insert(
+                            0,
+                            {
+                                "entry_date": journal_date.isoformat() if isinstance(journal_date, date) else str(journal_date),
+                                "note": journal_note.strip(),
+                                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                            },
+                        )
+                        updated_development = {
+                            **lead_development,
+                            "journal_entries": updated_entries[:40],
+                            "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                        }
+                        _save_ma_lead_settings(updated_lead_development=updated_development)
+                        st.success("Journal entry added.")
+                        st.rerun()
+
+            if lead_dev_journal_entries:
+                for entry in lead_dev_journal_entries[:12]:
+                    entry_date = entry.get("entry_date") or "Unknown date"
+                    entry_note = entry.get("note") or ""
+                    st.markdown(f"- **{entry_date}** - {entry_note}")
+            else:
+                st.caption("No leadership journal entries yet.")
+
+            st.markdown('</div>', unsafe_allow_html=True)
 
     if "Weekly Metrics Dashboard" in tab_lookup:
         with tab_lookup["Weekly Metrics Dashboard"]:
@@ -12458,6 +12810,7 @@ generate_ai_plan = partial(ai_workflows.generate_ai_plan, ai_enabled_fn=ai_enabl
 generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_ma_lead_coaching = partial(ai_workflows.generate_ma_lead_coaching, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_nightly_insight = partial(ai_workflows.generate_weekly_nightly_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_weekly_morning_ritual_insight = partial(ai_workflows.generate_weekly_morning_ritual_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_family_schedule_insight = partial(ai_workflows.generate_family_schedule_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)

@@ -4,7 +4,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_workflows import generate_family_goal_coaching, generate_family_schedule_insight, generate_family_weekly_briefing, generate_family_weekly_digest
+from ai_workflows import (
+    generate_family_goal_coaching,
+    generate_family_schedule_insight,
+    generate_family_weekly_briefing,
+    generate_family_weekly_digest,
+    generate_ma_lead_coaching,
+)
 
 
 def test_generate_family_schedule_insight_fallback_mentions_adjustment():
@@ -128,3 +134,39 @@ def test_generate_family_weekly_digest_fallback_contains_priority_moves():
     assert error == ""
     assert "Family Weekly Digest" in text
     assert "## Priority Moves" in text
+
+
+def test_generate_ma_lead_coaching_fallback_contains_sections():
+    context = {
+        "open_issues": 6,
+        "escalated_issues": 2,
+        "waiting_psr": 2,
+        "waiting_leadership": 1,
+        "overdue_actions": 3,
+        "due_checkins": 2,
+        "pending_signoffs": 4,
+        "open_education_requests": 2,
+        "autoclave_due": 1,
+        "weekly_priorities": [
+            "Close escalations within 24 hours",
+            "Tighten callback handoff reliability",
+        ],
+        "top_items": [
+            "Escalation: delayed callback closure",
+            "Biweekly check-in due: Savannah",
+        ],
+    }
+
+    text, error = generate_ma_lead_coaching(
+        context,
+        "Need prep for tomorrow morning huddle.",
+        "Huddle framing",
+        lambda: False,
+        lambda: "",
+        lambda: "gpt-4o-mini",
+    )
+
+    assert error == ""
+    assert "MA Lead Coaching Brief" in text
+    assert "## Talking Points" in text
+    assert "## 24-Hour Follow-through" in text
