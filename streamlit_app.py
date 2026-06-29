@@ -197,6 +197,11 @@ DEFAULT_APP_SETTINGS = {
         "Restock key room and procedure supplies",
     ],
     "clinic_day_closeout_log": {},
+    "ma_lead_weekly_metric_targets": {},
+    "ma_lead_weekly_metrics_log": {},
+    "ma_lead_rollout_30_day_start_date": "",
+    "ma_lead_rollout_30_day_template": [],
+    "ma_lead_rollout_30_day_log": {},
 }
 
 
@@ -212,6 +217,74 @@ CLINIC_DAY_CLOSEOUT_TEMPLATE_DEFAULTS = [
     "Confirm orders, labs, and imaging follow-through",
     "Verify post-op and follow-up scheduling",
     "Restock key room and procedure supplies",
+]
+
+MA_LEAD_WEEKLY_METRIC_DEFAULTS = [
+    {
+        "key": "first_patient_on_time_start_rate",
+        "label": "First patient on-time start rate",
+        "unit": "%",
+        "direction": "higher_is_better",
+        "target": 90.0,
+    },
+    {
+        "key": "rooming_cycle_minutes",
+        "label": "Rooming cycle time",
+        "unit": "min",
+        "direction": "lower_is_better",
+        "target": 12.0,
+    },
+    {
+        "key": "inbasket_turnaround_hours",
+        "label": "In-basket turnaround",
+        "unit": "hrs",
+        "direction": "lower_is_better",
+        "target": 4.0,
+    },
+    {
+        "key": "refill_turnaround_hours",
+        "label": "Refill turnaround",
+        "unit": "hrs",
+        "direction": "lower_is_better",
+        "target": 8.0,
+    },
+    {
+        "key": "no_show_recovery_rate",
+        "label": "No-show recovery rate",
+        "unit": "%",
+        "direction": "higher_is_better",
+        "target": 50.0,
+    },
+    {
+        "key": "staff_overtime_minutes",
+        "label": "Staff overtime",
+        "unit": "min",
+        "direction": "lower_is_better",
+        "target": 120.0,
+    },
+]
+
+MA_LEAD_ROLLOUT_30_DAY_TEMPLATE_DEFAULTS = [
+    "Map top 5 clinic bottlenecks from this week.",
+    "Document who owns each high-friction workflow.",
+    "Launch start-of-day huddle rhythm with clear timing.",
+    "Launch midday reset and assign real-time coverage float.",
+    "Launch end-of-day debrief and capture one improvement action.",
+    "Publish escalation rules: what, who, and by when.",
+    "Create one-page rooming playbook with done definitions.",
+    "Create one-page refill routing playbook with done definitions.",
+    "Create one-page prior-auth kickoff playbook with done definitions.",
+    "Set first patient on-time start and rooming cycle baselines.",
+    "Set in-basket and refill turnaround baselines.",
+    "Set no-show recovery and overtime baselines.",
+    "Review baseline trends with team (no-blame format).",
+    "Pilot weekly metrics dashboard with this week's values.",
+    "Cross-train at least one backup for each critical task.",
+    "Confirm closed-loop communication behavior for urgent requests.",
+    "Run one after-action review on a recent bottleneck.",
+    "Tighten handoff points that caused delays this week.",
+    "Publish updated workflow expectations from lessons learned.",
+    "Recognize visible wins and reinforce reliability behaviors.",
 ]
 
 MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
@@ -1181,6 +1254,134 @@ def normalize_clinic_day_closeout_log(raw_log, allowed_items=None):
                     continue
                 if text not in completed_items:
                     completed_items.append(text)
+
+        normalized[day_value.isoformat()] = {
+            "completed_items": completed_items,
+            "notes": notes_value,
+            "saved_at": saved_at_value,
+        }
+
+    return dict(sorted(normalized.items()))
+
+
+def normalize_ma_lead_weekly_metric_targets(raw_targets):
+    targets_lookup = {}
+    if isinstance(raw_targets, dict):
+        targets_lookup = raw_targets
+
+    normalized = []
+    for metric in MA_LEAD_WEEKLY_METRIC_DEFAULTS:
+        metric_key = metric["key"]
+        raw_target = targets_lookup.get(metric_key, metric.get("target"))
+        try:
+            target_value = float(raw_target)
+        except (TypeError, ValueError):
+            target_value = float(metric.get("target") or 0.0)
+        normalized.append(
+            {
+                "key": metric_key,
+                "label": metric["label"],
+                "unit": metric["unit"],
+                "direction": metric["direction"],
+                "target": round(target_value, 2),
+            }
+        )
+    return normalized
+
+
+def normalize_ma_lead_weekly_metrics_log(raw_log):
+    if not isinstance(raw_log, dict):
+        return {}
+
+    valid_metric_keys = {item["key"] for item in MA_LEAD_WEEKLY_METRIC_DEFAULTS}
+    normalized = {}
+    for raw_week, raw_entry in raw_log.items():
+        try:
+            week_start = date.fromisoformat(str(raw_week))
+        except ValueError:
+            continue
+
+        values = {}
+        notes_value = ""
+        saved_at_value = ""
+        if isinstance(raw_entry, dict):
+            notes_value = str(raw_entry.get("notes") or "").strip()
+            saved_at_value = str(raw_entry.get("saved_at") or "").strip()
+            raw_values = raw_entry.get("values")
+            if isinstance(raw_values, dict):
+                for key, raw_value in raw_values.items():
+                    if key not in valid_metric_keys:
+                        continue
+                    try:
+                        values[key] = round(float(raw_value), 2)
+                    except (TypeError, ValueError):
+                        continue
+
+        normalized[week_start.isoformat()] = {
+            "values": values,
+            "notes": notes_value,
+            "saved_at": saved_at_value,
+        }
+
+    return dict(sorted(normalized.items()))
+
+
+def normalize_ma_lead_rollout_template(raw_template):
+    if isinstance(raw_template, str):
+        raw_items = raw_template.splitlines()
+    elif isinstance(raw_template, list):
+        raw_items = raw_template
+    else:
+        raw_items = []
+
+    cleaned = []
+    seen = set()
+    for raw_item in raw_items:
+        item = str(raw_item or "").strip().strip("- ").strip()
+        if not item:
+            continue
+        item_key = item.lower()
+        if item_key in seen:
+            continue
+        cleaned.append(item)
+        seen.add(item_key)
+
+    if cleaned:
+        return cleaned
+    return list(MA_LEAD_ROLLOUT_30_DAY_TEMPLATE_DEFAULTS)
+
+
+def normalize_ma_lead_rollout_log(raw_log, allowed_items=None):
+    if not isinstance(raw_log, dict):
+        return {}
+
+    allowed_lookup = None
+    if isinstance(allowed_items, list):
+        allowed_lookup = {str(item).strip().lower() for item in allowed_items if str(item).strip()}
+
+    normalized = {}
+    for raw_day, raw_entry in raw_log.items():
+        try:
+            day_value = date.fromisoformat(str(raw_day))
+        except ValueError:
+            continue
+
+        completed_items = []
+        notes_value = ""
+        saved_at_value = ""
+        if isinstance(raw_entry, dict):
+            notes_value = str(raw_entry.get("notes") or "").strip()
+            saved_at_value = str(raw_entry.get("saved_at") or "").strip()
+            raw_completed_items = raw_entry.get("completed_items")
+            if isinstance(raw_completed_items, list):
+                for raw_item in raw_completed_items:
+                    item = str(raw_item or "").strip()
+                    if not item:
+                        continue
+                    if allowed_lookup is not None and item.lower() not in allowed_lookup:
+                        continue
+                    if item not in completed_items:
+                        completed_items.append(item)
 
         normalized[day_value.isoformat()] = {
             "completed_items": completed_items,
@@ -6892,6 +7093,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
+    app_settings = load_app_settings()
     lead_issues = load_lead_clinical_issues() or []
     sop_entries = load_lead_sop_entries() or []
     relationship_touchpoints = load_lead_relationship_touchpoints() or []
@@ -6901,6 +7103,30 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     education_requests = load_lead_education_requests() or []
     autoclave_items = load_autoclave_maintenance_items() or []
     lead_documents = load_lead_documents() or []
+    weekly_metric_targets = normalize_ma_lead_weekly_metric_targets(app_settings.get("ma_lead_weekly_metric_targets"))
+    weekly_metrics_log = normalize_ma_lead_weekly_metrics_log(app_settings.get("ma_lead_weekly_metrics_log"))
+    rollout_start_date = parse_date_value(app_settings.get("ma_lead_rollout_30_day_start_date")) or mountain_today()
+    rollout_template = normalize_ma_lead_rollout_template(app_settings.get("ma_lead_rollout_30_day_template"))
+    rollout_log = normalize_ma_lead_rollout_log(
+        app_settings.get("ma_lead_rollout_30_day_log"),
+        allowed_items=rollout_template,
+    )
+
+    def _save_ma_lead_settings(updated_weekly_targets=None, updated_weekly_log=None, updated_rollout_start_date=None, updated_rollout_template=None, updated_rollout_log=None):
+        save_app_settings(
+            {
+                **app_settings,
+                "ma_lead_weekly_metric_targets": updated_weekly_targets if updated_weekly_targets is not None else app_settings.get("ma_lead_weekly_metric_targets", {}),
+                "ma_lead_weekly_metrics_log": updated_weekly_log if updated_weekly_log is not None else app_settings.get("ma_lead_weekly_metrics_log", {}),
+                "ma_lead_rollout_30_day_start_date": (
+                    updated_rollout_start_date.isoformat()
+                    if isinstance(updated_rollout_start_date, date)
+                    else (updated_rollout_start_date or app_settings.get("ma_lead_rollout_30_day_start_date", ""))
+                ),
+                "ma_lead_rollout_30_day_template": updated_rollout_template if updated_rollout_template is not None else app_settings.get("ma_lead_rollout_30_day_template", []),
+                "ma_lead_rollout_30_day_log": updated_rollout_log if updated_rollout_log is not None else app_settings.get("ma_lead_rollout_30_day_log", {}),
+            }
+        )
 
     def _load_on_call_schedule_document(document_items):
         schedule_keywords = ("on call", "on-call", "schedule", "roster")
@@ -6972,7 +7198,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     show_relationship_tracker = False
     if show_relationship_tracker:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, weekly_metrics_tab, rollout_tab = st.tabs(
             [
                 "Command Center",
                 "Clinical Triage Queue",
@@ -6984,10 +7210,12 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "Education Liaison",
                 "Autoclave Maintenance",
                 "Documents",
+                "Weekly Metrics Dashboard",
+                "30-Day Rollout",
             ]
         )
     else:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab = st.tabs(
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, weekly_metrics_tab, rollout_tab = st.tabs(
             [
                 "Command Center",
                 "Clinical Triage Queue",
@@ -6998,6 +7226,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "Education Liaison",
                 "Autoclave Maintenance",
                 "Documents",
+                "Weekly Metrics Dashboard",
+                "30-Day Rollout",
             ]
         )
 
@@ -8155,6 +8385,222 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                             st.rerun()
         else:
             st.caption("No documents found for the selected filters.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with weekly_metrics_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Weekly MA Lead Metrics Dashboard</h3><span>Track the core operations metrics every week and review trends</span></div>', unsafe_allow_html=True)
+
+        week_col, caption_col = st.columns([1.2, 2.8])
+        with week_col:
+            metrics_anchor = st.date_input("Week of", value=mountain_today(), key=f"{panel_key}_metrics_week_anchor")
+        selected_week_start = metrics_anchor - timedelta(days=metrics_anchor.weekday())
+        selected_week_end = selected_week_start + timedelta(days=6)
+        with caption_col:
+            st.caption(f"Tracking window: {selected_week_start.strftime('%b %d')} - {selected_week_end.strftime('%b %d, %Y')} (Mon-Sun)")
+
+        selected_week_key = selected_week_start.isoformat()
+        selected_week_entry = weekly_metrics_log.get(selected_week_key, {"values": {}, "notes": "", "saved_at": ""})
+        selected_week_values = dict(selected_week_entry.get("values") or {})
+
+        metric_columns = st.columns(3)
+        for index, metric in enumerate(weekly_metric_targets):
+            metric_key = metric["key"]
+            metric_label = metric["label"]
+            unit = metric["unit"]
+            target_value = float(metric["target"])
+            value = selected_week_values.get(metric_key)
+
+            value_text = "Not set"
+            delta_text = f"Target {target_value:g}{unit}"
+            if isinstance(value, (int, float)):
+                value_text = f"{float(value):g}{unit}"
+                variance = float(value) - target_value
+                if metric["direction"] == "higher_is_better":
+                    delta_text = f"{variance:+g}{unit} vs target"
+                else:
+                    delta_text = f"{-variance:+g}{unit} to target"
+
+            with metric_columns[index % 3]:
+                st.metric(metric_label, value_text, delta=delta_text)
+
+        st.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
+        with st.form(f"{panel_key}_weekly_metrics_form"):
+            input_cols = st.columns(2)
+            metric_inputs = {}
+            for index, metric in enumerate(weekly_metric_targets):
+                metric_key = metric["key"]
+                with input_cols[index % 2]:
+                    metric_inputs[metric_key] = st.number_input(
+                        f"{metric['label']} ({metric['unit']})",
+                        min_value=0.0,
+                        step=1.0,
+                        value=float(selected_week_values.get(metric_key, metric.get("target", 0.0))),
+                        key=f"{panel_key}_weekly_metric_input_{metric_key}",
+                    )
+
+            weekly_notes = st.text_area(
+                "Weekly notes",
+                value=selected_week_entry.get("notes") or "",
+                height=90,
+                placeholder="What improved, what slipped, and what action to take next week",
+            )
+            save_weekly_metrics = st.form_submit_button("Save weekly metrics", type="primary")
+
+        if save_weekly_metrics:
+            updated_log = dict(weekly_metrics_log)
+            updated_log[selected_week_key] = {
+                "values": {key: round(float(value), 2) for key, value in metric_inputs.items()},
+                "notes": weekly_notes.strip(),
+                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+            }
+            _save_ma_lead_settings(updated_weekly_log=updated_log)
+            st.success("Weekly metrics saved.")
+            st.rerun()
+
+        with st.expander("Edit weekly metric targets", expanded=False):
+            target_inputs = {}
+            target_cols = st.columns(2)
+            for index, metric in enumerate(weekly_metric_targets):
+                with target_cols[index % 2]:
+                    target_inputs[metric["key"]] = st.number_input(
+                        f"Target - {metric['label']} ({metric['unit']})",
+                        min_value=0.0,
+                        step=1.0,
+                        value=float(metric.get("target", 0.0)),
+                        key=f"{panel_key}_weekly_metric_target_{metric['key']}",
+                    )
+            if st.button("Save targets", key=f"{panel_key}_save_weekly_metric_targets", type="secondary"):
+                _save_ma_lead_settings(updated_weekly_targets={key: round(float(value), 2) for key, value in target_inputs.items()})
+                st.success("Weekly metric targets saved.")
+                st.rerun()
+
+        st.markdown("#### Recent week trend")
+        available_weeks = sorted(weekly_metrics_log.keys(), reverse=True)
+        if available_weeks:
+            for week_key in available_weeks[:8]:
+                entry = weekly_metrics_log.get(week_key) or {}
+                week_values = entry.get("values") or {}
+                met_count = 0
+                checked_count = 0
+                for metric in weekly_metric_targets:
+                    value = week_values.get(metric["key"])
+                    if not isinstance(value, (int, float)):
+                        continue
+                    checked_count += 1
+                    if metric["direction"] == "higher_is_better" and float(value) >= float(metric["target"]):
+                        met_count += 1
+                    if metric["direction"] == "lower_is_better" and float(value) <= float(metric["target"]):
+                        met_count += 1
+                week_start_day = date.fromisoformat(week_key)
+                week_end_day = week_start_day + timedelta(days=6)
+                st.markdown(
+                    f"- **{week_start_day.strftime('%b %d')} - {week_end_day.strftime('%b %d')}** · "
+                    f"goals hit: {met_count}/{checked_count or len(weekly_metric_targets)} · "
+                    f"saved: {entry.get('saved_at') or 'n/a'}"
+                )
+                if entry.get("notes"):
+                    st.caption(entry.get("notes"))
+        else:
+            st.caption("No weekly metric snapshots saved yet.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with rollout_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>30-Day MA Lead Rollout Checklist</h3><span>Track rollout execution day by day with one editable template</span></div>', unsafe_allow_html=True)
+
+        rollout_cols = st.columns([1.2, 1.2, 2.6])
+        with rollout_cols[0]:
+            selected_rollout_day = st.date_input("Checklist day", value=mountain_today(), key=f"{panel_key}_rollout_day")
+        with rollout_cols[1]:
+            start_date_input = st.date_input("Rollout start date", value=rollout_start_date, key=f"{panel_key}_rollout_start_date")
+            if start_date_input != rollout_start_date:
+                _save_ma_lead_settings(updated_rollout_start_date=start_date_input)
+                st.rerun()
+        day_number = (selected_rollout_day - start_date_input).days + 1
+        phase_label = "Outside 30-day window"
+        if 1 <= day_number <= 7:
+            phase_label = "Week 1: Observe and map bottlenecks"
+        elif 8 <= day_number <= 14:
+            phase_label = "Week 2: Huddles and escalation reliability"
+        elif 15 <= day_number <= 21:
+            phase_label = "Week 3: Playbooks and metrics baseline"
+        elif 22 <= day_number <= 30:
+            phase_label = "Week 4: Tighten handoffs and cross-train"
+        with rollout_cols[2]:
+            st.caption(f"Day {day_number} from rollout start · {phase_label}")
+
+        selected_rollout_day_key = selected_rollout_day.isoformat()
+        rollout_entry = rollout_log.get(selected_rollout_day_key, {"completed_items": [], "notes": "", "saved_at": ""})
+        rollout_completed_items = list(rollout_entry.get("completed_items") or [])
+
+        completion_cols = st.columns([1, 1, 2])
+        completion_cols[0].metric("Completed", len(rollout_completed_items))
+        completion_cols[1].metric("Remaining", max(0, len(rollout_template) - len(rollout_completed_items)))
+        completion_cols[2].caption(f"Last saved: {rollout_entry.get('saved_at') or 'Not saved yet'}")
+
+        action_cols = st.columns([1, 1, 3])
+        if action_cols[0].button("Mark all complete", key=f"{panel_key}_rollout_mark_all", use_container_width=True):
+            updated_rollout_log = dict(rollout_log)
+            updated_rollout_log[selected_rollout_day_key] = {
+                "completed_items": list(rollout_template),
+                "notes": rollout_entry.get("notes") or "",
+                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+            }
+            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+            st.success("Marked all rollout checklist items complete for this day.")
+            st.rerun()
+        if action_cols[1].button("Reset day", key=f"{panel_key}_rollout_reset_day", use_container_width=True):
+            updated_rollout_log = dict(rollout_log)
+            updated_rollout_log.pop(selected_rollout_day_key, None)
+            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+            st.success("Rollout checklist reset for this day.")
+            st.rerun()
+        action_cols[2].caption("Use the same template each day to keep rollout execution visible.")
+
+        with st.form(f"{panel_key}_rollout_day_form"):
+            selected_rollout_items = st.multiselect(
+                "Checklist items completed",
+                rollout_template,
+                default=[item for item in rollout_completed_items if item in rollout_template],
+            )
+            rollout_notes = st.text_area(
+                "Rollout notes",
+                value=rollout_entry.get("notes") or "",
+                height=90,
+                placeholder="What moved forward today and what needs support tomorrow",
+            )
+            save_rollout_day = st.form_submit_button("Save rollout day", type="primary")
+
+        if save_rollout_day:
+            updated_rollout_log = dict(rollout_log)
+            updated_rollout_log[selected_rollout_day_key] = {
+                "completed_items": list(selected_rollout_items),
+                "notes": rollout_notes.strip(),
+                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+            }
+            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+            st.success("Rollout checklist day saved.")
+            st.rerun()
+
+        with st.expander("Edit 30-day rollout template", expanded=False):
+            template_text = st.text_area(
+                "Template items (one per line)",
+                value="\n".join(rollout_template),
+                height=220,
+                key=f"{panel_key}_rollout_template_editor",
+            )
+            if st.button("Save rollout template", key=f"{panel_key}_save_rollout_template", type="secondary"):
+                parsed_template = normalize_ma_lead_rollout_template(template_text)
+                normalized_log = normalize_ma_lead_rollout_log(rollout_log, allowed_items=parsed_template)
+                _save_ma_lead_settings(
+                    updated_rollout_template=parsed_template,
+                    updated_rollout_log=normalized_log,
+                )
+                st.success("30-day rollout template saved.")
+                st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 

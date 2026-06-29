@@ -25,6 +25,8 @@ Current capabilities include:
 - Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
 - Daily Review page now includes a generic Clinic Day Closeout Checklist with per-day completion tracking (independent from task status).
 - Morning Ritual and Daily Review trend tracking now use Monday-Sunday week buckets (reset each Monday) with saved week-over-week and month-level productivity comparisons.
+- MA Lead page now includes a Weekly Metrics Dashboard with saved week-by-week KPI snapshots and editable targets.
+- MA Lead page now includes a 30-Day Rollout Checklist tracker with editable template, rollout start date, and per-day completion logs.
 - Settings page with persistent defaults (category, priority, duration, schedule time, timeline window).
 
 ## Run
