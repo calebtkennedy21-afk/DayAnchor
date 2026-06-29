@@ -7363,43 +7363,168 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         f"Preceptor sign-offs pending: {pending_signoffs} · Education requests open: {open_education_requests} · Autoclave checks due: {autoclave_due_count} · Active MA assignments: {active_ma_assignments}"
     )
 
+    # Keep the top of the page focused on today's actions before deeper tab workflows.
+    today_value = mountain_today()
+    cadence_days = max(7, int(biweekly_settings.get("cadence_days") or 14))
+
+    latest_checkin_by_ma = {}
+    for item in biweekly_checkins:
+        ma_name = str(item.get("ma_name") or "").strip()
+        checkin_date = item.get("checkin_date")
+        if not ma_name or not isinstance(checkin_date, date):
+            continue
+        current = latest_checkin_by_ma.get(ma_name)
+        if not current or checkin_date > current.get("checkin_date"):
+            latest_checkin_by_ma[ma_name] = item
+
+    checkins_due_rows = []
+    for ma_name, latest in latest_checkin_by_ma.items():
+        next_due = latest.get("next_due_date")
+        if not isinstance(next_due, date):
+            next_due = latest.get("checkin_date") + timedelta(days=cadence_days)
+        if isinstance(next_due, date) and next_due <= today_value:
+            checkins_due_rows.append((ma_name, next_due))
+    checkins_due_rows.sort(key=lambda item: (item[1], item[0].lower()))
+
+    open_biweekly_actions = [item for item in biweekly_actions if item.get("status") == "open"]
+    overdue_biweekly_actions = [
+        item
+        for item in open_biweekly_actions
+        if isinstance(item.get("due_date"), date) and item.get("due_date") < today_value
+    ]
+
+    open_tab_state_key = f"{panel_key}_preferred_tab"
+    severity_colors = {
+        "critical": "#b91c1c",
+        "high": "#c2410c",
+        "medium": "#0369a1",
+        "normal": "#475569",
+    }
+
+    top_priority_items = []
+    for item in sorted(escalated_issues, key=lambda issue: issue.get("due_date") or date.max)[:3]:
+        top_priority_items.append(
+            {
+                "severity": "critical",
+                "label": f"Escalation: {item.get('title')} (owner: {item.get('owner_name') or 'unassigned'})",
+                "target_tab": "Clinical Triage Queue",
+                "target_ma_name": "",
+            }
+        )
+    for ma_name, due_date in checkins_due_rows[:3]:
+        top_priority_items.append(
+            {
+                "severity": "high",
+                "label": f"Biweekly check-in due: {ma_name} (due {due_date.strftime('%b %d')})",
+                "target_tab": "Biweekly Check-ins",
+                "target_ma_name": ma_name,
+            }
+        )
+    for item in sorted(overdue_biweekly_actions, key=lambda action: action.get("due_date") or date.max)[:3]:
+        top_priority_items.append(
+            {
+                "severity": "high",
+                "label": f"Follow-up overdue: {item.get('ma_name')} - {item.get('action_text')}",
+                "target_tab": "Biweekly Check-ins",
+                "target_ma_name": str(item.get("ma_name") or "").strip(),
+            }
+        )
+    for task in sorted(clinical_overdue, key=lambda item: item.get("due_date") or date.max)[:3]:
+        top_priority_items.append(
+            {
+                "severity": "medium",
+                "label": f"Clinic task overdue: {task.get('title')} (due {task.get('due_date')})",
+                "target_tab": "Clinical Triage Queue",
+                "target_ma_name": "",
+            }
+        )
+    if not top_priority_items:
+        top_priority_items = [
+            {
+                "severity": "normal",
+                "label": "No urgent priority items right now.",
+                "target_tab": "Command Center",
+                "target_ma_name": "",
+            }
+        ]
+
+    st.markdown('<div style="height: 0.45rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>MA Lead Focus - Today</h3><span>Start here for urgent actions, then move into detailed tabs</span></div>', unsafe_allow_html=True)
+
+    focus_cols = st.columns([1.8, 1.2], gap="large")
+    with focus_cols[0]:
+        st.markdown("#### Priority queue")
+        for index, item in enumerate(top_priority_items[:8]):
+            row_cols = st.columns([4, 1])
+            with row_cols[0]:
+                severity = item.get("severity") or "normal"
+                severity_color = severity_colors.get(severity, severity_colors["normal"])
+                st.markdown(
+                    f"<span style='display:inline-block; padding:0.08rem 0.45rem; border-radius:999px; background:{severity_color}; color:#fff; font-size:0.72rem; font-weight:600; margin-right:0.45rem;'>{severity.title()}</span>{item.get('label')}",
+                    unsafe_allow_html=True,
+                )
+            with row_cols[1]:
+                if st.button("Open", key=f"{panel_key}_focus_open_{index}"):
+                    target_tab = str(item.get("target_tab") or "Command Center")
+                    st.session_state[open_tab_state_key] = target_tab
+                    target_ma_name = str(item.get("target_ma_name") or "").strip()
+                    if target_ma_name:
+                        st.session_state[f"{panel_key}_biweekly_ma_name"] = target_ma_name
+                    st.rerun()
+    with focus_cols[1]:
+        st.markdown("#### Quick snapshot")
+        quick_metrics = st.columns(2)
+        quick_metrics[0].metric("Escalations", len(escalated_issues))
+        quick_metrics[1].metric("Biweekly due", len(checkins_due_rows))
+        quick_metrics[0].metric("Action items overdue", len(overdue_biweekly_actions))
+        quick_metrics[1].metric("Clinic overdue tasks", len(clinical_overdue))
+        st.caption("Use tabs: Triage for issue resolution, Biweekly for coaching loops, Daily Huddle for shift communication.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     show_relationship_tracker = False
+    show_advanced_tabs = st.toggle(
+        "Show advanced MA Lead sections",
+        value=False,
+        key=f"{panel_key}_show_advanced_tabs",
+        help="Turn off to keep the first-screen workflow focused on core daily operations.",
+    )
+
+    primary_tab_labels = [
+        "Command Center",
+        "Clinical Triage Queue",
+        "MA Assignments",
+        "Daily Huddle",
+        "SOP Playbook",
+        "Biweekly Check-ins",
+    ]
+
+    advanced_tab_labels = [
+        "Preceptor Sign-offs",
+        "Education Liaison",
+        "Autoclave Maintenance",
+        "Documents",
+        "Weekly Metrics Dashboard",
+        "30-Day Rollout",
+    ]
+
     if show_relationship_tracker:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, biweekly_tab, weekly_metrics_tab, rollout_tab = st.tabs(
-            [
-                "Command Center",
-                "Clinical Triage Queue",
-                "MA Assignments",
-                "Daily Huddle",
-                "SOP Playbook",
-                "Relationship Tracker",
-                "Preceptor Sign-offs",
-                "Education Liaison",
-                "Autoclave Maintenance",
-                "Documents",
-                "Biweekly Check-ins",
-                "Weekly Metrics Dashboard",
-                "30-Day Rollout",
-            ]
-        )
+        advanced_tab_labels.insert(0, "Relationship Tracker")
+
+    visible_tab_labels = list(primary_tab_labels)
+    if show_advanced_tabs:
+        visible_tab_labels.extend(advanced_tab_labels)
+
+    preferred_tab_label = str(st.session_state.get(open_tab_state_key) or "").strip()
+    if preferred_tab_label in visible_tab_labels:
+        ordered_tab_labels = [preferred_tab_label] + [label for label in visible_tab_labels if label != preferred_tab_label]
     else:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, biweekly_tab, weekly_metrics_tab, rollout_tab = st.tabs(
-            [
-                "Command Center",
-                "Clinical Triage Queue",
-                "MA Assignments",
-                "Daily Huddle",
-                "SOP Playbook",
-                "Preceptor Sign-offs",
-                "Education Liaison",
-                "Autoclave Maintenance",
-                "Documents",
-                "Biweekly Check-ins",
-                "Weekly Metrics Dashboard",
-                "30-Day Rollout",
-            ]
-        )
+        ordered_tab_labels = list(visible_tab_labels)
+
+    tab_objects = st.tabs(ordered_tab_labels)
+    tab_lookup = dict(zip(ordered_tab_labels, tab_objects))
 
     def render_record_attachments(section_key, record_type, record_id, default_title):
         st.markdown("##### Attachments")
@@ -7505,7 +7630,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         else:
             st.caption("No attachments for this item yet.")
 
-    with command_tab:
+    with tab_lookup["Command Center"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>MA Lead Command Center</h3><span>Go-to view for staffing, escalations, and cross-team dependencies</span></div>', unsafe_allow_html=True)
         alert_cols = st.columns(2)
@@ -7554,7 +7679,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 st.markdown("No items marked resolved today.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with triage_tab:
+    with tab_lookup["Clinical Triage Queue"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Clinical Issue Triage Queue</h3><span>Capture requests from clinical staff, PSR, and leadership with clear escalation paths</span></div>', unsafe_allow_html=True)
 
@@ -7639,7 +7764,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             st.markdown('<div class="empty-state">No open triage issues.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with ma_assignments_tab:
+    with tab_lookup["MA Assignments"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>MA Assignment Tracker</h3><span>Track MA provider pairings, room stocking ownership, additional tasks, and clinic days</span></div>', unsafe_allow_html=True)
 
@@ -7776,7 +7901,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with huddle_tab:
+    with tab_lookup["Daily Huddle"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Daily Huddle Builder</h3><span>Auto-generate agenda and send-ready recap notes</span></div>', unsafe_allow_html=True)
 
@@ -8010,7 +8135,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             st.caption("No huddle logs saved yet.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with sop_tab:
+    with tab_lookup["SOP Playbook"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>SOP + Playbook Library</h3><span>Quick-reference workflows for consistent clinic execution</span></div>', unsafe_allow_html=True)
 
@@ -8067,8 +8192,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             st.markdown('<div class="empty-state">No SOP entries match that search.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if show_relationship_tracker:
-        with relationship_tab:
+    if "Relationship Tracker" in tab_lookup:
+        with tab_lookup["Relationship Tracker"]:
             st.markdown('<div class="panel">', unsafe_allow_html=True)
             st.markdown('<div class="panel-title"><h3>Relationship Health Tracker</h3><span>Maintain strong working loops with PSR lead, manager, and supervisor</span></div>', unsafe_allow_html=True)
 
@@ -8136,429 +8261,433 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 st.caption("No relationship touchpoints tracked yet.")
             st.markdown('</div>', unsafe_allow_html=True)
 
-    with preceptor_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Preceptor Skill Sign-offs</h3><span>Track onboarding skills and formal sign-off status</span></div>', unsafe_allow_html=True)
-
-        with st.form(f"{panel_key}_signoff_form", clear_on_submit=True):
-            signoff_cols = st.columns(3)
-            with signoff_cols[0]:
-                signoff_staff_name = st.text_input("Staff name")
-                signoff_role = st.selectbox("Role", ["Medical Assistant", "Extern", "Nurse", "Other"])
-            with signoff_cols[1]:
-                signoff_skill = st.text_input("Skill")
-                signoff_due_date = st.date_input("Sign-off due date", value=mountain_today() + timedelta(days=7))
-            with signoff_cols[2]:
-                signoff_status = st.selectbox("Status", ["pending", "in_progress", "signed_off"], index=0)
-                signoff_by = st.text_input("Signed off by", value="")
-            signoff_notes = st.text_area("Notes", height=90)
-            submit_signoff = st.form_submit_button("Add skill sign-off", type="primary")
-
-        if submit_signoff:
-            if not signoff_staff_name.strip() or not signoff_skill.strip():
-                st.warning("Staff name and skill are required.")
-            else:
-                add_lead_skill_signoff(
-                    staff_name=signoff_staff_name,
-                    role_label=signoff_role,
-                    skill_name=signoff_skill,
-                    due_date=signoff_due_date,
-                    notes=signoff_notes,
-                    status=signoff_status,
-                    signed_off_date=mountain_today() if signoff_status == "signed_off" else None,
-                    signed_off_by=signoff_by,
-                )
-                st.success("Skill sign-off added.")
-                st.rerun()
-
-        st.markdown("#### Skill tracker")
-        ordered_signoffs = sorted(
-            skill_signoffs,
-            key=lambda item: (
-                0 if item.get("status") in ("pending", "in_progress") else 1,
-                item.get("due_date") or date.max,
-            ),
-        )
-        if ordered_signoffs:
-            default_signer = st.text_input("Default signer", value="", key=f"{panel_key}_default_signer")
-            for item in ordered_signoffs[:40]:
-                signoff_id = item.get("id")
-                due_label = format_due(item.get("due_date"))
-                with st.expander(f"{item.get('staff_name')} · {item.get('skill_name')} · {item.get('status')} · due {due_label}", expanded=False):
-                    st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
-                    if item.get("notes"):
-                        st.markdown(f"**Notes:** {item.get('notes')}")
-                    if item.get("signed_off_date"):
-                        st.caption(f"Signed off on {item.get('signed_off_date')} by {item.get('signed_off_by') or 'Not recorded'}")
-
-                    action_cols = st.columns(3)
-                    if action_cols[0].button("Mark In Progress", key=f"{panel_key}_signoff_progress_{signoff_id}"):
-                        update_lead_skill_signoff(signoff_id, status="in_progress")
-                        st.rerun()
-                    if action_cols[1].button("Sign Off", key=f"{panel_key}_signoff_complete_{signoff_id}"):
-                        update_lead_skill_signoff(
-                            signoff_id,
-                            status="signed_off",
-                            signed_off_date=mountain_today(),
-                            signed_off_by=default_signer,
-                        )
-                        st.rerun()
-                    if action_cols[2].button("Reopen", key=f"{panel_key}_signoff_reopen_{signoff_id}"):
-                        update_lead_skill_signoff(signoff_id, status="pending", signed_off_date=None)
-                        st.rerun()
-
-                    render_record_attachments(
-                        "Preceptor Sign-offs",
-                        "skill_signoff",
-                        signoff_id,
-                        f"{item.get('staff_name')} - {item.get('skill_name')}",
+    if "Preceptor Sign-offs" in tab_lookup:
+        with tab_lookup["Preceptor Sign-offs"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Preceptor Skill Sign-offs</h3><span>Track onboarding skills and formal sign-off status</span></div>', unsafe_allow_html=True)
+    
+            with st.form(f"{panel_key}_signoff_form", clear_on_submit=True):
+                signoff_cols = st.columns(3)
+                with signoff_cols[0]:
+                    signoff_staff_name = st.text_input("Staff name")
+                    signoff_role = st.selectbox("Role", ["Medical Assistant", "Extern", "Nurse", "Other"])
+                with signoff_cols[1]:
+                    signoff_skill = st.text_input("Skill")
+                    signoff_due_date = st.date_input("Sign-off due date", value=mountain_today() + timedelta(days=7))
+                with signoff_cols[2]:
+                    signoff_status = st.selectbox("Status", ["pending", "in_progress", "signed_off"], index=0)
+                    signoff_by = st.text_input("Signed off by", value="")
+                signoff_notes = st.text_area("Notes", height=90)
+                submit_signoff = st.form_submit_button("Add skill sign-off", type="primary")
+    
+            if submit_signoff:
+                if not signoff_staff_name.strip() or not signoff_skill.strip():
+                    st.warning("Staff name and skill are required.")
+                else:
+                    add_lead_skill_signoff(
+                        staff_name=signoff_staff_name,
+                        role_label=signoff_role,
+                        skill_name=signoff_skill,
+                        due_date=signoff_due_date,
+                        notes=signoff_notes,
+                        status=signoff_status,
+                        signed_off_date=mountain_today() if signoff_status == "signed_off" else None,
+                        signed_off_by=signoff_by,
                     )
-        else:
-            st.caption("No skill sign-offs tracked yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with education_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Education Team Liaison</h3><span>Track hospital education requests, prep, and delivery status</span></div>', unsafe_allow_html=True)
-
-        with st.form(f"{panel_key}_education_form", clear_on_submit=True):
-            edu_cols = st.columns(3)
-            with edu_cols[0]:
-                edu_title = st.text_input("Request title")
-                edu_team = st.text_input("Requesting team", value="Hospital Education Team")
-            with edu_cols[1]:
-                edu_topic = st.selectbox("Topic", ["Clinical skills", "Workflow orientation", "Safety", "Sterile processing", "Other"])
-                edu_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
-            with edu_cols[2]:
-                edu_needed_by = st.date_input("Needed by", value=mountain_today() + timedelta(days=5))
-                edu_session_date = st.date_input("Session date", value=mountain_today() + timedelta(days=7))
-            edu_owner = st.text_input("Owner", value="")
-            edu_notes = st.text_area("Notes", height=90)
-            submit_edu = st.form_submit_button("Add education request", type="primary")
-
-        if submit_edu:
-            if not edu_title.strip():
-                st.warning("Request title is required.")
-            else:
-                add_lead_education_request(
-                    request_title=edu_title,
-                    requesting_team=edu_team,
-                    topic=edu_topic,
-                    priority=edu_priority,
-                    needed_by_date=edu_needed_by,
-                    session_date=edu_session_date,
-                    owner_name=edu_owner,
-                    notes=edu_notes,
-                )
-                st.success("Education request saved.")
-                st.rerun()
-
-        st.markdown("#### Request queue")
-        ordered_requests = sorted(
-            education_requests,
-            key=lambda item: (
-                0 if item.get("status") in ("new", "preparing") else 1,
-                item.get("needed_by_date") or date.max,
-            ),
-        )
-        if ordered_requests:
-            for item in ordered_requests[:40]:
-                request_id = item.get("id")
-                with st.expander(f"{item.get('request_title')} · {item.get('status')} · need by {item.get('needed_by_date')}", expanded=False):
-                    st.markdown(f"**Team:** {item.get('requesting_team') or 'Not set'}")
-                    st.markdown(f"**Topic:** {item.get('topic')}")
-                    st.markdown(f"**Priority:** {item.get('priority')}")
-                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Unassigned'}")
-                    if item.get("notes"):
-                        st.markdown(f"**Notes:** {item.get('notes')}")
-
-                    action_cols = st.columns(4)
-                    if action_cols[0].button("Preparing", key=f"{panel_key}_edu_prepare_{request_id}"):
-                        update_lead_education_request(request_id, status="preparing")
-                        st.rerun()
-                    if action_cols[1].button("Delivered", key=f"{panel_key}_edu_delivered_{request_id}"):
-                        update_lead_education_request(request_id, status="delivered", session_date=mountain_today())
-                        st.rerun()
-                    if action_cols[2].button("Close", key=f"{panel_key}_edu_close_{request_id}"):
-                        update_lead_education_request(request_id, status="closed")
-                        st.rerun()
-                    if action_cols[3].button("Reopen", key=f"{panel_key}_edu_reopen_{request_id}"):
-                        update_lead_education_request(request_id, status="new")
-                        st.rerun()
-
-                    render_record_attachments(
-                        "Education Liaison",
-                        "education_request",
-                        request_id,
-                        item.get("request_title") or "Education Request",
-                    )
-        else:
-            st.caption("No education liaison requests tracked yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with autoclave_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Autoclave Maintenance</h3><span>Monitor sterilizer checks, service, and overdue maintenance</span></div>', unsafe_allow_html=True)
-
-        with st.form(f"{panel_key}_autoclave_form", clear_on_submit=True):
-            auto_cols = st.columns(3)
-            with auto_cols[0]:
-                auto_unit = st.text_input("Autoclave unit")
-                auto_type = st.selectbox("Maintenance type", ["Spore test", "Biological indicator", "Routine cleaning", "Preventive service", "Repair"])
-            with auto_cols[1]:
-                auto_frequency = st.selectbox("Frequency", ["Daily", "Weekly", "Monthly", "Quarterly", "As needed"], index=1)
-                auto_next_due = st.date_input("Next due", value=mountain_today() + timedelta(days=7))
-            with auto_cols[2]:
-                auto_last_done = st.date_input("Last completed", value=mountain_today() - timedelta(days=7))
-                auto_status = st.selectbox("Status", ["due_soon", "overdue", "completed", "out_of_service"], index=0)
-            auto_owner = st.text_input("Owner")
-            auto_vendor = st.text_input("Vendor/contact")
-            auto_notes = st.text_area("Notes", height=90)
-            submit_auto = st.form_submit_button("Add maintenance item", type="primary")
-
-        if submit_auto:
-            if not auto_unit.strip():
-                st.warning("Autoclave unit is required.")
-            else:
-                add_autoclave_maintenance_item(
-                    unit_label=auto_unit,
-                    maintenance_type=auto_type,
-                    frequency_label=auto_frequency,
-                    next_due_date=auto_next_due,
-                    last_completed_date=auto_last_done,
-                    status=auto_status,
-                    owner_name=auto_owner,
-                    vendor_contact=auto_vendor,
-                    notes=auto_notes,
-                )
-                st.success("Maintenance item saved.")
-                st.rerun()
-
-        st.markdown("#### Maintenance board")
-        ordered_auto = sorted(
-            autoclave_items,
-            key=lambda item: (
-                0 if item.get("status") == "overdue" else 1 if item.get("status") == "due_soon" else 2,
-                item.get("next_due_date") or date.max,
-            ),
-        )
-        if ordered_auto:
-            for item in ordered_auto[:50]:
-                auto_id = item.get("id")
-                with st.expander(f"{item.get('unit_label')} · {item.get('maintenance_type')} · {item.get('status')} · next due {item.get('next_due_date')}", expanded=False):
-                    st.markdown(f"**Frequency:** {item.get('frequency_label')}")
-                    st.markdown(f"**Owner:** {item.get('owner_name') or 'Not set'}")
-                    if item.get("vendor_contact"):
-                        st.markdown(f"**Vendor/contact:** {item.get('vendor_contact')}")
-                    if item.get("notes"):
-                        st.markdown(f"**Notes:** {item.get('notes')}")
-
-                    action_cols = st.columns(4)
-                    if action_cols[0].button("Mark Completed", key=f"{panel_key}_auto_complete_{auto_id}"):
-                        completed_on = mountain_today()
-                        next_due = autoclave_next_due_date(
-                            completed_on,
-                            item.get("frequency_label"),
-                            item.get("next_due_date"),
-                        )
-                        update_autoclave_maintenance_item(
-                            auto_id,
-                            status="completed",
-                            last_completed_date=completed_on,
-                            next_due_date=next_due,
-                        )
-                        st.rerun()
-                    if action_cols[1].button("Mark Due Soon", key=f"{panel_key}_auto_due_{auto_id}"):
-                        update_autoclave_maintenance_item(auto_id, status="due_soon")
-                        st.rerun()
-                    if action_cols[2].button("Mark Overdue", key=f"{panel_key}_auto_overdue_{auto_id}"):
-                        update_autoclave_maintenance_item(auto_id, status="overdue")
-                        st.rerun()
-                    if action_cols[3].button("Out of Service", key=f"{panel_key}_auto_oos_{auto_id}"):
-                        update_autoclave_maintenance_item(auto_id, status="out_of_service")
-                        st.rerun()
-
-                    render_record_attachments(
-                        "Autoclave Maintenance",
-                        "autoclave_item",
-                        auto_id,
-                        f"{item.get('unit_label')} - {item.get('maintenance_type')}",
-                    )
-        else:
-            st.caption("No autoclave maintenance items tracked yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with documents_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>MA Lead Documents</h3><span>Upload and organize files for each leadership section</span></div>', unsafe_allow_html=True)
-
-        section_options = [
-            "Command Center",
-            "Clinical Triage Queue",
-            "Daily Huddle",
-            "SOP Playbook",
-            "Relationship Tracker",
-            "Preceptor Sign-offs",
-            "Education Liaison",
-            "Autoclave Maintenance",
-            "General",
-        ]
-
-        with st.form(f"{panel_key}_documents_form", clear_on_submit=True):
-            doc_cols = st.columns(3)
-            with doc_cols[0]:
-                doc_section = st.selectbox("Section", section_options)
-                doc_title = st.text_input("Title (optional)")
-            with doc_cols[1]:
-                doc_uploaded_by = st.text_input("Uploaded by")
-                doc_notes = st.text_area("Notes", height=90)
-            with doc_cols[2]:
-                doc_files = st.file_uploader(
-                    "Select file(s)",
-                    accept_multiple_files=True,
-                    key=f"{panel_key}_documents_uploader",
-                    help="Upload documents, images, PDFs, spreadsheets, or other support files.",
-                )
-                st.caption("For monthly on-call schedules, use a file with a Date column and a Provider/On Call column.")
-            submit_docs = st.form_submit_button("Upload files", type="primary")
-
-        if submit_docs:
-            if not doc_files:
-                st.warning("Select at least one file to upload.")
-            else:
-                uploaded_count = 0
-                skipped_count = 0
-                for doc_file in doc_files:
-                    file_bytes = doc_file.getvalue()
-                    if len(file_bytes) > 25 * 1024 * 1024:
-                        skipped_count += 1
-                        continue
-                    add_lead_document(
-                        section_key=doc_section,
-                        title=doc_title,
-                        file_name=doc_file.name,
-                        file_mime=getattr(doc_file, "type", None),
-                        file_bytes=file_bytes,
-                        notes=doc_notes,
-                        uploaded_by=doc_uploaded_by,
-                    )
-                    uploaded_count += 1
-
-                if uploaded_count:
-                    st.success(f"Uploaded {uploaded_count} file(s).")
-                if skipped_count:
-                    st.warning(f"Skipped {skipped_count} file(s) over 25 MB.")
-                if uploaded_count:
+                    st.success("Skill sign-off added.")
                     st.rerun()
-
-        filter_cols = st.columns(2)
-        with filter_cols[0]:
-            section_filter = st.selectbox(
-                "Filter by section",
-                ["All sections"] + section_options,
-                key=f"{panel_key}_documents_section_filter",
+    
+            st.markdown("#### Skill tracker")
+            ordered_signoffs = sorted(
+                skill_signoffs,
+                key=lambda item: (
+                    0 if item.get("status") in ("pending", "in_progress") else 1,
+                    item.get("due_date") or date.max,
+                ),
             )
-        with filter_cols[1]:
-            document_query = st.text_input(
-                "Search files",
-                key=f"{panel_key}_documents_query",
-                placeholder="Title, filename, notes, or uploader",
-            )
-
-        normalized_query = (document_query or "").strip().lower()
-        visible_documents = []
-        for item in lead_documents:
-            if section_filter != "All sections" and item.get("section_key") != section_filter:
-                continue
-            if normalized_query:
-                searchable = " ".join(
-                    [
-                        str(item.get("title") or ""),
-                        str(item.get("file_name") or ""),
-                        str(item.get("notes") or ""),
-                        str(item.get("uploaded_by") or ""),
-                    ]
-                ).lower()
-                if normalized_query not in searchable:
-                    continue
-            visible_documents.append(item)
-
-        st.caption(f"Showing {len(visible_documents)} of {len(lead_documents)} file(s)")
-        if visible_documents:
-            pdf_documents = []
-            for item in visible_documents:
-                file_bytes = item.get("file_bytes")
-                if isinstance(file_bytes, memoryview):
-                    file_bytes = bytes(file_bytes)
-                looks_like_pdf = (str(item.get("file_mime") or "").lower() == "application/pdf") or str(item.get("file_name") or "").lower().endswith(".pdf")
-                if file_bytes and looks_like_pdf:
-                    pdf_documents.append((item, file_bytes))
-
-            if pdf_documents:
-                st.markdown("#### PDF Preview")
-                preview_options = [
-                    f"{doc.get('file_name') or 'document.pdf'} | {doc.get('section_key') or 'General'} | {doc.get('created_date') or 'unknown date'}"
-                    for doc, _ in pdf_documents
-                ]
-                selected_preview_label = st.selectbox(
-                    "Select a PDF to preview",
-                    preview_options,
-                    key=f"{panel_key}_documents_pdf_preview_select",
-                )
-                selected_preview_index = preview_options.index(selected_preview_label)
-                selected_preview_doc, selected_preview_bytes = pdf_documents[selected_preview_index]
-                selected_preview_doc_id = selected_preview_doc.get("id")
-                selected_preview_start_page = int(
-                    st.number_input(
-                        "Preview start page",
-                        min_value=1,
-                        value=1,
-                        step=1,
-                        key=f"{panel_key}_documents_pdf_preview_start_page_{selected_preview_doc_id}",
-                    )
-                )
-                page_sections._render_protocol_pdf_preview(
-                    st,
-                    file_bytes=selected_preview_bytes,
-                    file_mime=selected_preview_doc.get("file_mime"),
-                    file_name=selected_preview_doc.get("file_name") or "document.pdf",
-                    height=500,
-                    start_page=selected_preview_start_page,
-                )
-
-            for item in visible_documents[:120]:
-                doc_id = item.get("id")
-                file_bytes = item.get("file_bytes")
-                if isinstance(file_bytes, memoryview):
-                    file_bytes = bytes(file_bytes)
-                with st.expander(f"{item.get('title') or item.get('file_name')} · {item.get('section_key')} · {item.get('created_date')}", expanded=False):
-                    st.markdown(f"**File:** {item.get('file_name')}")
-                    st.markdown(f"**Section:** {item.get('section_key')}")
-                    if item.get("record_type") and item.get("record_id") is not None:
-                        st.markdown(f"**Linked record:** {item.get('record_type')} #{item.get('record_id')}")
-                    st.markdown(f"**Uploaded by:** {item.get('uploaded_by') or 'Not set'}")
-                    if item.get("notes"):
-                        st.markdown(f"**Notes:** {item.get('notes')}")
-                    button_cols = st.columns(2)
-                    with button_cols[0]:
-                        st.download_button(
-                            "Download",
-                            data=file_bytes,
-                            file_name=item.get("file_name") or f"document_{doc_id}",
-                            mime=item.get("file_mime") or "application/octet-stream",
-                            key=f"{panel_key}_doc_download_{doc_id}",
-                        )
-                    with button_cols[1]:
-                        if st.button("Delete", key=f"{panel_key}_doc_delete_{doc_id}"):
-                            delete_lead_document(doc_id)
-                            st.success("Document deleted.")
+            if ordered_signoffs:
+                default_signer = st.text_input("Default signer", value="", key=f"{panel_key}_default_signer")
+                for item in ordered_signoffs[:40]:
+                    signoff_id = item.get("id")
+                    due_label = format_due(item.get("due_date"))
+                    with st.expander(f"{item.get('staff_name')} · {item.get('skill_name')} · {item.get('status')} · due {due_label}", expanded=False):
+                        st.markdown(f"**Role:** {item.get('role_label') or 'Not set'}")
+                        if item.get("notes"):
+                            st.markdown(f"**Notes:** {item.get('notes')}")
+                        if item.get("signed_off_date"):
+                            st.caption(f"Signed off on {item.get('signed_off_date')} by {item.get('signed_off_by') or 'Not recorded'}")
+    
+                        action_cols = st.columns(3)
+                        if action_cols[0].button("Mark In Progress", key=f"{panel_key}_signoff_progress_{signoff_id}"):
+                            update_lead_skill_signoff(signoff_id, status="in_progress")
                             st.rerun()
-        else:
-            st.caption("No documents found for the selected filters.")
+                        if action_cols[1].button("Sign Off", key=f"{panel_key}_signoff_complete_{signoff_id}"):
+                            update_lead_skill_signoff(
+                                signoff_id,
+                                status="signed_off",
+                                signed_off_date=mountain_today(),
+                                signed_off_by=default_signer,
+                            )
+                            st.rerun()
+                        if action_cols[2].button("Reopen", key=f"{panel_key}_signoff_reopen_{signoff_id}"):
+                            update_lead_skill_signoff(signoff_id, status="pending", signed_off_date=None)
+                            st.rerun()
+    
+                        render_record_attachments(
+                            "Preceptor Sign-offs",
+                            "skill_signoff",
+                            signoff_id,
+                            f"{item.get('staff_name')} - {item.get('skill_name')}",
+                        )
+            else:
+                st.caption("No skill sign-offs tracked yet.")
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    if "Education Liaison" in tab_lookup:
+        with tab_lookup["Education Liaison"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Education Team Liaison</h3><span>Track hospital education requests, prep, and delivery status</span></div>', unsafe_allow_html=True)
+    
+            with st.form(f"{panel_key}_education_form", clear_on_submit=True):
+                edu_cols = st.columns(3)
+                with edu_cols[0]:
+                    edu_title = st.text_input("Request title")
+                    edu_team = st.text_input("Requesting team", value="Hospital Education Team")
+                with edu_cols[1]:
+                    edu_topic = st.selectbox("Topic", ["Clinical skills", "Workflow orientation", "Safety", "Sterile processing", "Other"])
+                    edu_priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+                with edu_cols[2]:
+                    edu_needed_by = st.date_input("Needed by", value=mountain_today() + timedelta(days=5))
+                    edu_session_date = st.date_input("Session date", value=mountain_today() + timedelta(days=7))
+                edu_owner = st.text_input("Owner", value="")
+                edu_notes = st.text_area("Notes", height=90)
+                submit_edu = st.form_submit_button("Add education request", type="primary")
+    
+            if submit_edu:
+                if not edu_title.strip():
+                    st.warning("Request title is required.")
+                else:
+                    add_lead_education_request(
+                        request_title=edu_title,
+                        requesting_team=edu_team,
+                        topic=edu_topic,
+                        priority=edu_priority,
+                        needed_by_date=edu_needed_by,
+                        session_date=edu_session_date,
+                        owner_name=edu_owner,
+                        notes=edu_notes,
+                    )
+                    st.success("Education request saved.")
+                    st.rerun()
+    
+            st.markdown("#### Request queue")
+            ordered_requests = sorted(
+                education_requests,
+                key=lambda item: (
+                    0 if item.get("status") in ("new", "preparing") else 1,
+                    item.get("needed_by_date") or date.max,
+                ),
+            )
+            if ordered_requests:
+                for item in ordered_requests[:40]:
+                    request_id = item.get("id")
+                    with st.expander(f"{item.get('request_title')} · {item.get('status')} · need by {item.get('needed_by_date')}", expanded=False):
+                        st.markdown(f"**Team:** {item.get('requesting_team') or 'Not set'}")
+                        st.markdown(f"**Topic:** {item.get('topic')}")
+                        st.markdown(f"**Priority:** {item.get('priority')}")
+                        st.markdown(f"**Owner:** {item.get('owner_name') or 'Unassigned'}")
+                        if item.get("notes"):
+                            st.markdown(f"**Notes:** {item.get('notes')}")
+    
+                        action_cols = st.columns(4)
+                        if action_cols[0].button("Preparing", key=f"{panel_key}_edu_prepare_{request_id}"):
+                            update_lead_education_request(request_id, status="preparing")
+                            st.rerun()
+                        if action_cols[1].button("Delivered", key=f"{panel_key}_edu_delivered_{request_id}"):
+                            update_lead_education_request(request_id, status="delivered", session_date=mountain_today())
+                            st.rerun()
+                        if action_cols[2].button("Close", key=f"{panel_key}_edu_close_{request_id}"):
+                            update_lead_education_request(request_id, status="closed")
+                            st.rerun()
+                        if action_cols[3].button("Reopen", key=f"{panel_key}_edu_reopen_{request_id}"):
+                            update_lead_education_request(request_id, status="new")
+                            st.rerun()
+    
+                        render_record_attachments(
+                            "Education Liaison",
+                            "education_request",
+                            request_id,
+                            item.get("request_title") or "Education Request",
+                        )
+            else:
+                st.caption("No education liaison requests tracked yet.")
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    if "Autoclave Maintenance" in tab_lookup:
+        with tab_lookup["Autoclave Maintenance"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Autoclave Maintenance</h3><span>Monitor sterilizer checks, service, and overdue maintenance</span></div>', unsafe_allow_html=True)
+    
+            with st.form(f"{panel_key}_autoclave_form", clear_on_submit=True):
+                auto_cols = st.columns(3)
+                with auto_cols[0]:
+                    auto_unit = st.text_input("Autoclave unit")
+                    auto_type = st.selectbox("Maintenance type", ["Spore test", "Biological indicator", "Routine cleaning", "Preventive service", "Repair"])
+                with auto_cols[1]:
+                    auto_frequency = st.selectbox("Frequency", ["Daily", "Weekly", "Monthly", "Quarterly", "As needed"], index=1)
+                    auto_next_due = st.date_input("Next due", value=mountain_today() + timedelta(days=7))
+                with auto_cols[2]:
+                    auto_last_done = st.date_input("Last completed", value=mountain_today() - timedelta(days=7))
+                    auto_status = st.selectbox("Status", ["due_soon", "overdue", "completed", "out_of_service"], index=0)
+                auto_owner = st.text_input("Owner")
+                auto_vendor = st.text_input("Vendor/contact")
+                auto_notes = st.text_area("Notes", height=90)
+                submit_auto = st.form_submit_button("Add maintenance item", type="primary")
+    
+            if submit_auto:
+                if not auto_unit.strip():
+                    st.warning("Autoclave unit is required.")
+                else:
+                    add_autoclave_maintenance_item(
+                        unit_label=auto_unit,
+                        maintenance_type=auto_type,
+                        frequency_label=auto_frequency,
+                        next_due_date=auto_next_due,
+                        last_completed_date=auto_last_done,
+                        status=auto_status,
+                        owner_name=auto_owner,
+                        vendor_contact=auto_vendor,
+                        notes=auto_notes,
+                    )
+                    st.success("Maintenance item saved.")
+                    st.rerun()
+    
+            st.markdown("#### Maintenance board")
+            ordered_auto = sorted(
+                autoclave_items,
+                key=lambda item: (
+                    0 if item.get("status") == "overdue" else 1 if item.get("status") == "due_soon" else 2,
+                    item.get("next_due_date") or date.max,
+                ),
+            )
+            if ordered_auto:
+                for item in ordered_auto[:50]:
+                    auto_id = item.get("id")
+                    with st.expander(f"{item.get('unit_label')} · {item.get('maintenance_type')} · {item.get('status')} · next due {item.get('next_due_date')}", expanded=False):
+                        st.markdown(f"**Frequency:** {item.get('frequency_label')}")
+                        st.markdown(f"**Owner:** {item.get('owner_name') or 'Not set'}")
+                        if item.get("vendor_contact"):
+                            st.markdown(f"**Vendor/contact:** {item.get('vendor_contact')}")
+                        if item.get("notes"):
+                            st.markdown(f"**Notes:** {item.get('notes')}")
+    
+                        action_cols = st.columns(4)
+                        if action_cols[0].button("Mark Completed", key=f"{panel_key}_auto_complete_{auto_id}"):
+                            completed_on = mountain_today()
+                            next_due = autoclave_next_due_date(
+                                completed_on,
+                                item.get("frequency_label"),
+                                item.get("next_due_date"),
+                            )
+                            update_autoclave_maintenance_item(
+                                auto_id,
+                                status="completed",
+                                last_completed_date=completed_on,
+                                next_due_date=next_due,
+                            )
+                            st.rerun()
+                        if action_cols[1].button("Mark Due Soon", key=f"{panel_key}_auto_due_{auto_id}"):
+                            update_autoclave_maintenance_item(auto_id, status="due_soon")
+                            st.rerun()
+                        if action_cols[2].button("Mark Overdue", key=f"{panel_key}_auto_overdue_{auto_id}"):
+                            update_autoclave_maintenance_item(auto_id, status="overdue")
+                            st.rerun()
+                        if action_cols[3].button("Out of Service", key=f"{panel_key}_auto_oos_{auto_id}"):
+                            update_autoclave_maintenance_item(auto_id, status="out_of_service")
+                            st.rerun()
+    
+                        render_record_attachments(
+                            "Autoclave Maintenance",
+                            "autoclave_item",
+                            auto_id,
+                            f"{item.get('unit_label')} - {item.get('maintenance_type')}",
+                        )
+            else:
+                st.caption("No autoclave maintenance items tracked yet.")
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    if "Documents" in tab_lookup:
+        with tab_lookup["Documents"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>MA Lead Documents</h3><span>Upload and organize files for each leadership section</span></div>', unsafe_allow_html=True)
 
-        st.markdown('</div>', unsafe_allow_html=True)
+            section_options = [
+                "Command Center",
+                "Clinical Triage Queue",
+                "Daily Huddle",
+                "SOP Playbook",
+                "Relationship Tracker",
+                "Preceptor Sign-offs",
+                "Education Liaison",
+                "Autoclave Maintenance",
+                "General",
+            ]
 
-    with biweekly_tab:
+            with st.form(f"{panel_key}_documents_form", clear_on_submit=True):
+                doc_cols = st.columns(3)
+                with doc_cols[0]:
+                    doc_section = st.selectbox("Section", section_options)
+                    doc_title = st.text_input("Title (optional)")
+                with doc_cols[1]:
+                    doc_uploaded_by = st.text_input("Uploaded by")
+                    doc_notes = st.text_area("Notes", height=90)
+                with doc_cols[2]:
+                    doc_files = st.file_uploader(
+                        "Select file(s)",
+                        accept_multiple_files=True,
+                        key=f"{panel_key}_documents_uploader",
+                        help="Upload documents, images, PDFs, spreadsheets, or other support files.",
+                    )
+                    st.caption("For monthly on-call schedules, use a file with a Date column and a Provider/On Call column.")
+                submit_docs = st.form_submit_button("Upload files", type="primary")
+
+            if submit_docs:
+                if not doc_files:
+                    st.warning("Select at least one file to upload.")
+                else:
+                    uploaded_count = 0
+                    skipped_count = 0
+                    for doc_file in doc_files:
+                        file_bytes = doc_file.getvalue()
+                        if len(file_bytes) > 25 * 1024 * 1024:
+                            skipped_count += 1
+                            continue
+                        add_lead_document(
+                            section_key=doc_section,
+                            title=doc_title,
+                            file_name=doc_file.name,
+                            file_mime=getattr(doc_file, "type", None),
+                            file_bytes=file_bytes,
+                            notes=doc_notes,
+                            uploaded_by=doc_uploaded_by,
+                        )
+                        uploaded_count += 1
+
+                    if uploaded_count:
+                        st.success(f"Uploaded {uploaded_count} file(s).")
+                    if skipped_count:
+                        st.warning(f"Skipped {skipped_count} file(s) over 25 MB.")
+                    if uploaded_count:
+                        st.rerun()
+
+            filter_cols = st.columns(2)
+            with filter_cols[0]:
+                section_filter = st.selectbox(
+                    "Filter by section",
+                    ["All sections"] + section_options,
+                    key=f"{panel_key}_documents_section_filter",
+                )
+            with filter_cols[1]:
+                document_query = st.text_input(
+                    "Search files",
+                    key=f"{panel_key}_documents_query",
+                    placeholder="Title, filename, notes, or uploader",
+                )
+
+            normalized_query = (document_query or "").strip().lower()
+            visible_documents = []
+            for item in lead_documents:
+                if section_filter != "All sections" and item.get("section_key") != section_filter:
+                    continue
+                if normalized_query:
+                    searchable = " ".join(
+                        [
+                            str(item.get("title") or ""),
+                            str(item.get("file_name") or ""),
+                            str(item.get("notes") or ""),
+                            str(item.get("uploaded_by") or ""),
+                        ]
+                    ).lower()
+                    if normalized_query not in searchable:
+                        continue
+                visible_documents.append(item)
+
+            st.caption(f"Showing {len(visible_documents)} of {len(lead_documents)} file(s)")
+            if visible_documents:
+                pdf_documents = []
+                for item in visible_documents:
+                    file_bytes = item.get("file_bytes")
+                    if isinstance(file_bytes, memoryview):
+                        file_bytes = bytes(file_bytes)
+                    looks_like_pdf = (str(item.get("file_mime") or "").lower() == "application/pdf") or str(item.get("file_name") or "").lower().endswith(".pdf")
+                    if file_bytes and looks_like_pdf:
+                        pdf_documents.append((item, file_bytes))
+
+                if pdf_documents:
+                    st.markdown("#### PDF Preview")
+                    preview_options = [
+                        f"{doc.get('file_name') or 'document.pdf'} | {doc.get('section_key') or 'General'} | {doc.get('created_date') or 'unknown date'}"
+                        for doc, _ in pdf_documents
+                    ]
+                    selected_preview_label = st.selectbox(
+                        "Select a PDF to preview",
+                        preview_options,
+                        key=f"{panel_key}_documents_pdf_preview_select",
+                    )
+                    selected_preview_index = preview_options.index(selected_preview_label)
+                    selected_preview_doc, selected_preview_bytes = pdf_documents[selected_preview_index]
+                    selected_preview_doc_id = selected_preview_doc.get("id")
+                    selected_preview_start_page = int(
+                        st.number_input(
+                            "Preview start page",
+                            min_value=1,
+                            value=1,
+                            step=1,
+                            key=f"{panel_key}_documents_pdf_preview_start_page_{selected_preview_doc_id}",
+                        )
+                    )
+                    page_sections._render_protocol_pdf_preview(
+                        st,
+                        file_bytes=selected_preview_bytes,
+                        file_mime=selected_preview_doc.get("file_mime"),
+                        file_name=selected_preview_doc.get("file_name") or "document.pdf",
+                        height=500,
+                        start_page=selected_preview_start_page,
+                    )
+
+                for item in visible_documents[:120]:
+                    doc_id = item.get("id")
+                    file_bytes = item.get("file_bytes")
+                    if isinstance(file_bytes, memoryview):
+                        file_bytes = bytes(file_bytes)
+                    with st.expander(f"{item.get('title') or item.get('file_name')} · {item.get('section_key')} · {item.get('created_date')}", expanded=False):
+                        st.markdown(f"**File:** {item.get('file_name')}")
+                        st.markdown(f"**Section:** {item.get('section_key')}")
+                        if item.get("record_type") and item.get("record_id") is not None:
+                            st.markdown(f"**Linked record:** {item.get('record_type')} #{item.get('record_id')}")
+                        st.markdown(f"**Uploaded by:** {item.get('uploaded_by') or 'Not set'}")
+                        if item.get("notes"):
+                            st.markdown(f"**Notes:** {item.get('notes')}")
+                        button_cols = st.columns(2)
+                        with button_cols[0]:
+                            st.download_button(
+                                "Download",
+                                data=file_bytes,
+                                file_name=item.get("file_name") or f"document_{doc_id}",
+                                mime=item.get("file_mime") or "application/octet-stream",
+                                key=f"{panel_key}_doc_download_{doc_id}",
+                            )
+                        with button_cols[1]:
+                            if st.button("Delete", key=f"{panel_key}_doc_delete_{doc_id}"):
+                                delete_lead_document(doc_id)
+                                st.success("Document deleted.")
+                                st.rerun()
+            else:
+                st.caption("No documents found for the selected filters.")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab_lookup["Biweekly Check-ins"]:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Biweekly MA Check-ins</h3><span>Run repeatable 1:1s, track actions, and export leadership summaries</span></div>', unsafe_allow_html=True)
 
@@ -9014,212 +9143,214 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with weekly_metrics_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>Weekly MA Lead Metrics Dashboard</h3><span>Track the core operations metrics every week and review trends</span></div>', unsafe_allow_html=True)
-
-        week_col, caption_col = st.columns([1.2, 2.8])
-        with week_col:
-            metrics_anchor = st.date_input("Week of", value=mountain_today(), key=f"{panel_key}_metrics_week_anchor")
-        selected_week_start = metrics_anchor - timedelta(days=metrics_anchor.weekday())
-        selected_week_end = selected_week_start + timedelta(days=6)
-        with caption_col:
-            st.caption(f"Tracking window: {selected_week_start.strftime('%b %d')} - {selected_week_end.strftime('%b %d, %Y')} (Mon-Sun)")
-
-        selected_week_key = selected_week_start.isoformat()
-        selected_week_entry = weekly_metrics_log.get(selected_week_key, {"values": {}, "notes": "", "saved_at": ""})
-        selected_week_values = dict(selected_week_entry.get("values") or {})
-
-        metric_columns = st.columns(3)
-        for index, metric in enumerate(weekly_metric_targets):
-            metric_key = metric["key"]
-            metric_label = metric["label"]
-            unit = metric["unit"]
-            target_value = float(metric["target"])
-            value = selected_week_values.get(metric_key)
-
-            value_text = "Not set"
-            delta_text = f"Target {target_value:g}{unit}"
-            if isinstance(value, (int, float)):
-                value_text = f"{float(value):g}{unit}"
-                variance = float(value) - target_value
-                if metric["direction"] == "higher_is_better":
-                    delta_text = f"{variance:+g}{unit} vs target"
-                else:
-                    delta_text = f"{-variance:+g}{unit} to target"
-
-            with metric_columns[index % 3]:
-                st.metric(metric_label, value_text, delta=delta_text)
-
-        st.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
-        with st.form(f"{panel_key}_weekly_metrics_form"):
-            input_cols = st.columns(2)
-            metric_inputs = {}
+    if "Weekly Metrics Dashboard" in tab_lookup:
+        with tab_lookup["Weekly Metrics Dashboard"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>Weekly MA Lead Metrics Dashboard</h3><span>Track the core operations metrics every week and review trends</span></div>', unsafe_allow_html=True)
+    
+            week_col, caption_col = st.columns([1.2, 2.8])
+            with week_col:
+                metrics_anchor = st.date_input("Week of", value=mountain_today(), key=f"{panel_key}_metrics_week_anchor")
+            selected_week_start = metrics_anchor - timedelta(days=metrics_anchor.weekday())
+            selected_week_end = selected_week_start + timedelta(days=6)
+            with caption_col:
+                st.caption(f"Tracking window: {selected_week_start.strftime('%b %d')} - {selected_week_end.strftime('%b %d, %Y')} (Mon-Sun)")
+    
+            selected_week_key = selected_week_start.isoformat()
+            selected_week_entry = weekly_metrics_log.get(selected_week_key, {"values": {}, "notes": "", "saved_at": ""})
+            selected_week_values = dict(selected_week_entry.get("values") or {})
+    
+            metric_columns = st.columns(3)
             for index, metric in enumerate(weekly_metric_targets):
                 metric_key = metric["key"]
-                with input_cols[index % 2]:
-                    metric_inputs[metric_key] = st.number_input(
-                        f"{metric['label']} ({metric['unit']})",
-                        min_value=0.0,
-                        step=1.0,
-                        value=float(selected_week_values.get(metric_key, metric.get("target", 0.0))),
-                        key=f"{panel_key}_weekly_metric_input_{metric_key}",
-                    )
-
-            weekly_notes = st.text_area(
-                "Weekly notes",
-                value=selected_week_entry.get("notes") or "",
-                height=90,
-                placeholder="What improved, what slipped, and what action to take next week",
-            )
-            save_weekly_metrics = st.form_submit_button("Save weekly metrics", type="primary")
-
-        if save_weekly_metrics:
-            updated_log = dict(weekly_metrics_log)
-            updated_log[selected_week_key] = {
-                "values": {key: round(float(value), 2) for key, value in metric_inputs.items()},
-                "notes": weekly_notes.strip(),
-                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
-            }
-            _save_ma_lead_settings(updated_weekly_log=updated_log)
-            st.success("Weekly metrics saved.")
-            st.rerun()
-
-        with st.expander("Edit weekly metric targets", expanded=False):
-            target_inputs = {}
-            target_cols = st.columns(2)
-            for index, metric in enumerate(weekly_metric_targets):
-                with target_cols[index % 2]:
-                    target_inputs[metric["key"]] = st.number_input(
-                        f"Target - {metric['label']} ({metric['unit']})",
-                        min_value=0.0,
-                        step=1.0,
-                        value=float(metric.get("target", 0.0)),
-                        key=f"{panel_key}_weekly_metric_target_{metric['key']}",
-                    )
-            if st.button("Save targets", key=f"{panel_key}_save_weekly_metric_targets", type="secondary"):
-                _save_ma_lead_settings(updated_weekly_targets={key: round(float(value), 2) for key, value in target_inputs.items()})
-                st.success("Weekly metric targets saved.")
-                st.rerun()
-
-        st.markdown("#### Recent week trend")
-        available_weeks = sorted(weekly_metrics_log.keys(), reverse=True)
-        if available_weeks:
-            for week_key in available_weeks[:8]:
-                entry = weekly_metrics_log.get(week_key) or {}
-                week_values = entry.get("values") or {}
-                met_count = 0
-                checked_count = 0
-                for metric in weekly_metric_targets:
-                    value = week_values.get(metric["key"])
-                    if not isinstance(value, (int, float)):
-                        continue
-                    checked_count += 1
-                    if metric["direction"] == "higher_is_better" and float(value) >= float(metric["target"]):
-                        met_count += 1
-                    if metric["direction"] == "lower_is_better" and float(value) <= float(metric["target"]):
-                        met_count += 1
-                week_start_day = date.fromisoformat(week_key)
-                week_end_day = week_start_day + timedelta(days=6)
-                st.markdown(
-                    f"- **{week_start_day.strftime('%b %d')} - {week_end_day.strftime('%b %d')}** · "
-                    f"goals hit: {met_count}/{checked_count or len(weekly_metric_targets)} · "
-                    f"saved: {entry.get('saved_at') or 'n/a'}"
+                metric_label = metric["label"]
+                unit = metric["unit"]
+                target_value = float(metric["target"])
+                value = selected_week_values.get(metric_key)
+    
+                value_text = "Not set"
+                delta_text = f"Target {target_value:g}{unit}"
+                if isinstance(value, (int, float)):
+                    value_text = f"{float(value):g}{unit}"
+                    variance = float(value) - target_value
+                    if metric["direction"] == "higher_is_better":
+                        delta_text = f"{variance:+g}{unit} vs target"
+                    else:
+                        delta_text = f"{-variance:+g}{unit} to target"
+    
+                with metric_columns[index % 3]:
+                    st.metric(metric_label, value_text, delta=delta_text)
+    
+            st.markdown('<div style="height: 0.4rem;"></div>', unsafe_allow_html=True)
+            with st.form(f"{panel_key}_weekly_metrics_form"):
+                input_cols = st.columns(2)
+                metric_inputs = {}
+                for index, metric in enumerate(weekly_metric_targets):
+                    metric_key = metric["key"]
+                    with input_cols[index % 2]:
+                        metric_inputs[metric_key] = st.number_input(
+                            f"{metric['label']} ({metric['unit']})",
+                            min_value=0.0,
+                            step=1.0,
+                            value=float(selected_week_values.get(metric_key, metric.get("target", 0.0))),
+                            key=f"{panel_key}_weekly_metric_input_{metric_key}",
+                        )
+    
+                weekly_notes = st.text_area(
+                    "Weekly notes",
+                    value=selected_week_entry.get("notes") or "",
+                    height=90,
+                    placeholder="What improved, what slipped, and what action to take next week",
                 )
-                if entry.get("notes"):
-                    st.caption(entry.get("notes"))
-        else:
-            st.caption("No weekly metric snapshots saved yet.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with rollout_tab:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title"><h3>30-Day MA Lead Rollout Checklist</h3><span>Track rollout execution day by day with one editable template</span></div>', unsafe_allow_html=True)
-
-        rollout_cols = st.columns([1.2, 1.2, 2.6])
-        with rollout_cols[0]:
-            selected_rollout_day = st.date_input("Checklist day", value=mountain_today(), key=f"{panel_key}_rollout_day")
-        with rollout_cols[1]:
-            start_date_input = st.date_input("Rollout start date", value=rollout_start_date, key=f"{panel_key}_rollout_start_date")
-            if start_date_input != rollout_start_date:
-                _save_ma_lead_settings(updated_rollout_start_date=start_date_input)
+                save_weekly_metrics = st.form_submit_button("Save weekly metrics", type="primary")
+    
+            if save_weekly_metrics:
+                updated_log = dict(weekly_metrics_log)
+                updated_log[selected_week_key] = {
+                    "values": {key: round(float(value), 2) for key, value in metric_inputs.items()},
+                    "notes": weekly_notes.strip(),
+                    "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+                }
+                _save_ma_lead_settings(updated_weekly_log=updated_log)
+                st.success("Weekly metrics saved.")
                 st.rerun()
-        day_number = (selected_rollout_day - start_date_input).days + 1
-        phase_label = "Outside 30-day window"
-        if 1 <= day_number <= 7:
-            phase_label = "Week 1: Observe and map bottlenecks"
-        elif 8 <= day_number <= 14:
-            phase_label = "Week 2: Huddles and escalation reliability"
-        elif 15 <= day_number <= 21:
-            phase_label = "Week 3: Playbooks and metrics baseline"
-        elif 22 <= day_number <= 30:
-            phase_label = "Week 4: Tighten handoffs and cross-train"
-        with rollout_cols[2]:
-            st.caption(f"Day {day_number} from rollout start · {phase_label}")
-
-        selected_rollout_day_key = selected_rollout_day.isoformat()
-        rollout_entry = rollout_log.get(selected_rollout_day_key, {"completed_items": [], "notes": "", "saved_at": ""})
-        rollout_completed_items = list(rollout_entry.get("completed_items") or [])
-
-        completion_cols = st.columns([1, 1, 2])
-        completion_cols[0].metric("Completed", len(rollout_completed_items))
-        completion_cols[1].metric("Remaining", max(0, len(rollout_template) - len(rollout_completed_items)))
-        completion_cols[2].caption(f"Last saved: {rollout_entry.get('saved_at') or 'Not saved yet'}")
-
-        action_cols = st.columns([1, 1, 3])
-        if action_cols[0].button("Mark all complete", key=f"{panel_key}_rollout_mark_all", use_container_width=True):
-            updated_rollout_log = dict(rollout_log)
-            updated_rollout_log[selected_rollout_day_key] = {
-                "completed_items": list(rollout_template),
-                "notes": rollout_entry.get("notes") or "",
-                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
-            }
-            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
-            st.success("Marked all rollout checklist items complete for this day.")
-            st.rerun()
-        if action_cols[1].button("Reset day", key=f"{panel_key}_rollout_reset_day", use_container_width=True):
-            updated_rollout_log = dict(rollout_log)
-            updated_rollout_log.pop(selected_rollout_day_key, None)
-            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
-            st.success("Rollout checklist reset for this day.")
-            st.rerun()
-        action_cols[2].caption("Use the same template each day to keep rollout execution visible.")
-
-        with st.form(f"{panel_key}_rollout_day_form"):
-            selected_rollout_items = st.multiselect(
-                "Checklist items completed",
-                rollout_template,
-                default=[item for item in rollout_completed_items if item in rollout_template],
-            )
-            rollout_notes = st.text_area(
-                "Rollout notes",
-                value=rollout_entry.get("notes") or "",
-                height=90,
-                placeholder="What moved forward today and what needs support tomorrow",
-            )
-            save_rollout_day = st.form_submit_button("Save rollout day", type="primary")
-
-        if save_rollout_day:
-            updated_rollout_log = dict(rollout_log)
-            updated_rollout_log[selected_rollout_day_key] = {
-                "completed_items": list(selected_rollout_items),
-                "notes": rollout_notes.strip(),
-                "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
-            }
-            _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
-            st.success("Rollout checklist day saved.")
-            st.rerun()
-
-        with st.expander("Edit 30-day rollout template", expanded=False):
-            template_text = st.text_area(
-                "Template items (one per line)",
-                value="\n".join(rollout_template),
-                height=220,
-                key=f"{panel_key}_rollout_template_editor",
-            )
-            if st.button("Save rollout template", key=f"{panel_key}_save_rollout_template", type="secondary"):
-                parsed_template = normalize_ma_lead_rollout_template(template_text)
+    
+            with st.expander("Edit weekly metric targets", expanded=False):
+                target_inputs = {}
+                target_cols = st.columns(2)
+                for index, metric in enumerate(weekly_metric_targets):
+                    with target_cols[index % 2]:
+                        target_inputs[metric["key"]] = st.number_input(
+                            f"Target - {metric['label']} ({metric['unit']})",
+                            min_value=0.0,
+                            step=1.0,
+                            value=float(metric.get("target", 0.0)),
+                            key=f"{panel_key}_weekly_metric_target_{metric['key']}",
+                        )
+                if st.button("Save targets", key=f"{panel_key}_save_weekly_metric_targets", type="secondary"):
+                    _save_ma_lead_settings(updated_weekly_targets={key: round(float(value), 2) for key, value in target_inputs.items()})
+                    st.success("Weekly metric targets saved.")
+                    st.rerun()
+    
+            st.markdown("#### Recent week trend")
+            available_weeks = sorted(weekly_metrics_log.keys(), reverse=True)
+            if available_weeks:
+                for week_key in available_weeks[:8]:
+                    entry = weekly_metrics_log.get(week_key) or {}
+                    week_values = entry.get("values") or {}
+                    met_count = 0
+                    checked_count = 0
+                    for metric in weekly_metric_targets:
+                        value = week_values.get(metric["key"])
+                        if not isinstance(value, (int, float)):
+                            continue
+                        checked_count += 1
+                        if metric["direction"] == "higher_is_better" and float(value) >= float(metric["target"]):
+                            met_count += 1
+                        if metric["direction"] == "lower_is_better" and float(value) <= float(metric["target"]):
+                            met_count += 1
+                    week_start_day = date.fromisoformat(week_key)
+                    week_end_day = week_start_day + timedelta(days=6)
+                    st.markdown(
+                        f"- **{week_start_day.strftime('%b %d')} - {week_end_day.strftime('%b %d')}** · "
+                        f"goals hit: {met_count}/{checked_count or len(weekly_metric_targets)} · "
+                        f"saved: {entry.get('saved_at') or 'n/a'}"
+                    )
+                    if entry.get("notes"):
+                        st.caption(entry.get("notes"))
+            else:
+                st.caption("No weekly metric snapshots saved yet.")
+    
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    if "30-Day Rollout" in tab_lookup:
+        with tab_lookup["30-Day Rollout"]:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title"><h3>30-Day MA Lead Rollout Checklist</h3><span>Track rollout execution day by day with one editable template</span></div>', unsafe_allow_html=True)
+    
+            rollout_cols = st.columns([1.2, 1.2, 2.6])
+            with rollout_cols[0]:
+                selected_rollout_day = st.date_input("Checklist day", value=mountain_today(), key=f"{panel_key}_rollout_day")
+            with rollout_cols[1]:
+                start_date_input = st.date_input("Rollout start date", value=rollout_start_date, key=f"{panel_key}_rollout_start_date")
+                if start_date_input != rollout_start_date:
+                    _save_ma_lead_settings(updated_rollout_start_date=start_date_input)
+                    st.rerun()
+            day_number = (selected_rollout_day - start_date_input).days + 1
+            phase_label = "Outside 30-day window"
+            if 1 <= day_number <= 7:
+                phase_label = "Week 1: Observe and map bottlenecks"
+            elif 8 <= day_number <= 14:
+                phase_label = "Week 2: Huddles and escalation reliability"
+            elif 15 <= day_number <= 21:
+                phase_label = "Week 3: Playbooks and metrics baseline"
+            elif 22 <= day_number <= 30:
+                phase_label = "Week 4: Tighten handoffs and cross-train"
+            with rollout_cols[2]:
+                st.caption(f"Day {day_number} from rollout start · {phase_label}")
+    
+            selected_rollout_day_key = selected_rollout_day.isoformat()
+            rollout_entry = rollout_log.get(selected_rollout_day_key, {"completed_items": [], "notes": "", "saved_at": ""})
+            rollout_completed_items = list(rollout_entry.get("completed_items") or [])
+    
+            completion_cols = st.columns([1, 1, 2])
+            completion_cols[0].metric("Completed", len(rollout_completed_items))
+            completion_cols[1].metric("Remaining", max(0, len(rollout_template) - len(rollout_completed_items)))
+            completion_cols[2].caption(f"Last saved: {rollout_entry.get('saved_at') or 'Not saved yet'}")
+    
+            action_cols = st.columns([1, 1, 3])
+            if action_cols[0].button("Mark all complete", key=f"{panel_key}_rollout_mark_all", use_container_width=True):
+                updated_rollout_log = dict(rollout_log)
+                updated_rollout_log[selected_rollout_day_key] = {
+                    "completed_items": list(rollout_template),
+                    "notes": rollout_entry.get("notes") or "",
+                    "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+                }
+                _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+                st.success("Marked all rollout checklist items complete for this day.")
+                st.rerun()
+            if action_cols[1].button("Reset day", key=f"{panel_key}_rollout_reset_day", use_container_width=True):
+                updated_rollout_log = dict(rollout_log)
+                updated_rollout_log.pop(selected_rollout_day_key, None)
+                _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+                st.success("Rollout checklist reset for this day.")
+                st.rerun()
+            action_cols[2].caption("Use the same template each day to keep rollout execution visible.")
+    
+            with st.form(f"{panel_key}_rollout_day_form"):
+                selected_rollout_items = st.multiselect(
+                    "Checklist items completed",
+                    rollout_template,
+                    default=[item for item in rollout_completed_items if item in rollout_template],
+                )
+                rollout_notes = st.text_area(
+                    "Rollout notes",
+                    value=rollout_entry.get("notes") or "",
+                    height=90,
+                    placeholder="What moved forward today and what needs support tomorrow",
+                )
+                save_rollout_day = st.form_submit_button("Save rollout day", type="primary")
+    
+            if save_rollout_day:
+                updated_rollout_log = dict(rollout_log)
+                updated_rollout_log[selected_rollout_day_key] = {
+                    "completed_items": list(selected_rollout_items),
+                    "notes": rollout_notes.strip(),
+                    "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+                }
+                _save_ma_lead_settings(updated_rollout_log=updated_rollout_log)
+                st.success("Rollout checklist day saved.")
+                st.rerun()
+    
+            with st.expander("Edit 30-day rollout template", expanded=False):
+                template_text = st.text_area(
+                    "Template items (one per line)",
+                    value="\n".join(rollout_template),
+                    height=220,
+                    key=f"{panel_key}_rollout_template_editor",
+                )
+                if st.button("Save rollout template", key=f"{panel_key}_save_rollout_template", type="secondary"):
+                    parsed_template = normalize_ma_lead_rollout_template(template_text)
                 normalized_log = normalize_ma_lead_rollout_log(rollout_log, allowed_items=parsed_template)
                 _save_ma_lead_settings(
                     updated_rollout_template=parsed_template,
