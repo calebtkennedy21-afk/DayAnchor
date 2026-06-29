@@ -1537,7 +1537,7 @@ def normalize_life_dashboard(raw_data):
     return {"entries": normalized_entries, "thresholds": thresholds}
 
 
-
+def normalize_ma_lead_biweekly_checkins(raw_items):
     if not isinstance(raw_items, list):
         return []
 
