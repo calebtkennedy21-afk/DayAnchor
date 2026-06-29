@@ -88,6 +88,7 @@ def run_app(context, st_module=st):
     render_review_command_panel = context["render_review_command_panel"]
     render_notifications_panel = context["render_notifications_panel"]
     render_ma_lead_panel = context["render_ma_lead_panel"]
+    render_life_dashboard_panel = context["render_life_dashboard_panel"]
     render_settings_panel = context["render_settings_panel"]
     render_analytics_panel = context["render_analytics_panel"]
     render_daily_review_panel = context["render_daily_review_panel"]
@@ -267,7 +268,7 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        personal_pages = ["Morning Ritual", "Personal", "Schedule", "Daily Review", "Notifications"]
+        personal_pages = ["Morning Ritual", "Personal", "Life Dashboard", "Schedule", "Daily Review", "Notifications"]
         family_pages = ["Family Schedule"]
         clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols", "MA Lead"]
         additional_pages = ["News", "AI", "Analytics", "Settings"]
@@ -870,6 +871,9 @@ def run_app(context, st_module=st):
     elif current_page == "MA Lead":
         render_page_banner("clinic", "MA Lead", "Lead queue, huddles, playbooks, and relationship follow-through.")
         render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead_page")
+    elif current_page == "Life Dashboard":
+        render_page_banner("overview", "Life Dashboard", "Health, Family, Career, Leadership, Learning, Finances, and Relationship — all in one view.")
+        render_life_dashboard_panel(panel_key="life_dashboard_page")
     elif current_page == "Daily Review":
         render_page_banner("review", "Daily Review", "Close the loop on today and draft tomorrow.")
         render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="review_page")

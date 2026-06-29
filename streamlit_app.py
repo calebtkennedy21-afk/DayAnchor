@@ -319,6 +319,22 @@ MA_LEAD_HEALTH_THRESHOLD_DEFAULTS = {
     "escalations": {"green_max": 1, "yellow_max": 3},
 }
 
+# Life Dashboard — higher score (1-5) = better; green_min = threshold for green, yellow_min = threshold for yellow
+LIFE_DASHBOARD_CATEGORIES = [
+    {"key": "health",       "label": "Health",       "emoji": "🩺", "description": "Physical and mental wellbeing, exercise, sleep, and energy."},
+    {"key": "family",       "label": "Family",       "emoji": "👨‍👩‍👧", "description": "Connection, presence, and intentional time with those who matter most."},
+    {"key": "career",       "label": "Career",       "emoji": "💼", "description": "Job performance, trajectory, and alignment with professional goals."},
+    {"key": "leadership",   "label": "Leadership",   "emoji": "🏥", "description": "Growth and effectiveness in your MA Lead role and influence."},
+    {"key": "learning",     "label": "Learning",     "emoji": "📖", "description": "Active learning, study, reading, and professional development."},
+    {"key": "finances",     "label": "Finances",     "emoji": "💰", "description": "Financial stability, progress toward goals, and spending awareness."},
+    {"key": "relationship", "label": "Relationship", "emoji": "❤️",  "description": "Romantic relationship health, quality time, and communication."},
+]
+
+LIFE_DASHBOARD_THRESHOLD_DEFAULTS = {
+    cat["key"]: {"green_min": 4, "yellow_min": 3}
+    for cat in LIFE_DASHBOARD_CATEGORIES
+}
+
 MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
     {
         "cadence": "daily",
@@ -1471,7 +1487,57 @@ def normalize_ma_lead_health_thresholds(raw_thresholds):
     return normalized
 
 
-def normalize_ma_lead_biweekly_checkins(raw_items):
+def normalize_life_dashboard(raw_data):
+    """Parse and normalize life dashboard entries and thresholds from app_settings."""
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+
+    raw_entries = raw_data.get("entries") or []
+    normalized_entries = []
+    valid_keys = {cat["key"] for cat in LIFE_DASHBOARD_CATEGORIES}
+
+    for raw_entry in raw_entries if isinstance(raw_entries, list) else []:
+        if not isinstance(raw_entry, dict):
+            continue
+        week_start = parse_date_value(raw_entry.get("week_start"))
+        if not week_start:
+            continue
+        scores = {}
+        for key in valid_keys:
+            raw_score = raw_entry.get("scores", {}).get(key)
+            try:
+                score = max(1, min(5, int(raw_score)))
+            except (TypeError, ValueError):
+                score = None
+            scores[key] = score
+        notes = {}
+        for key in valid_keys:
+            notes[key] = str((raw_entry.get("notes") or {}).get(key) or "").strip()
+        normalized_entries.append({
+            "week_start": week_start,
+            "scores": scores,
+            "notes": notes,
+            "saved_at": str(raw_entry.get("saved_at") or "").strip(),
+        })
+
+    normalized_entries.sort(key=lambda e: e["week_start"], reverse=True)
+
+    raw_thresholds = raw_data.get("thresholds") or {}
+    thresholds = {}
+    for cat in LIFE_DASHBOARD_CATEGORIES:
+        key = cat["key"]
+        defaults = LIFE_DASHBOARD_THRESHOLD_DEFAULTS[key]
+        raw_t = raw_thresholds.get(key) if isinstance(raw_thresholds, dict) else {}
+        if not isinstance(raw_t, dict):
+            raw_t = {}
+        green_min = max(1, min(5, safe_int(raw_t.get("green_min"), defaults["green_min"])))
+        yellow_min = max(1, min(green_min, safe_int(raw_t.get("yellow_min"), defaults["yellow_min"])))
+        thresholds[key] = {"green_min": green_min, "yellow_min": yellow_min}
+
+    return {"entries": normalized_entries, "thresholds": thresholds}
+
+
+
     if not isinstance(raw_items, list):
         return []
 
@@ -10103,6 +10169,242 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_life_dashboard_panel(panel_key="life_dashboard"):
+    app_settings = load_app_settings()
+    life_data = normalize_life_dashboard(app_settings.get("life_dashboard") or {})
+    entries = life_data["entries"]
+    thresholds = life_data["thresholds"]
+    today_value = mountain_today()
+    week_start = today_value - timedelta(days=today_value.weekday())
+
+    signal_colors = {"green": "#16a34a", "yellow": "#ca8a04", "red": "#dc2626", "grey": "#64748b"}
+
+    def _life_signal(score, cat_key):
+        if score is None:
+            return "grey"
+        t = thresholds.get(cat_key, LIFE_DASHBOARD_THRESHOLD_DEFAULTS[cat_key])
+        if score >= t["green_min"]:
+            return "green"
+        if score >= t["yellow_min"]:
+            return "yellow"
+        return "red"
+
+    def _save_life_data(updated_entries=None, updated_thresholds=None):
+        save_app_settings({
+            **app_settings,
+            "life_dashboard": {
+                "entries": [
+                    {
+                        "week_start": e["week_start"].isoformat(),
+                        "scores": e["scores"],
+                        "notes": e["notes"],
+                        "saved_at": e["saved_at"],
+                    }
+                    for e in (updated_entries if updated_entries is not None else entries)
+                ],
+                "thresholds": updated_thresholds if updated_thresholds is not None else thresholds,
+            },
+        })
+
+    render_metrics_row()
+    st.markdown('<div style="height:0.75rem;"></div>', unsafe_allow_html=True)
+
+    # ── Hero card ──────────────────────────────────────────────────────────────
+    latest = entries[0] if entries else None
+    latest_scores = latest["scores"] if latest else {}
+    scored_values = [v for v in latest_scores.values() if v is not None]
+    overall_pct = round((sum(scored_values) / (len(scored_values) * 5)) * 100) if scored_values else None
+
+    signals = {cat["key"]: _life_signal(latest_scores.get(cat["key"]), cat["key"]) for cat in LIFE_DASHBOARD_CATEGORIES}
+    reds = [cat["label"] for cat in LIFE_DASHBOARD_CATEGORIES if signals[cat["key"]] == "red"]
+    yellows = [cat["label"] for cat in LIFE_DASHBOARD_CATEGORIES if signals[cat["key"]] == "yellow"]
+
+    if overall_pct is None:
+        balance_label, balance_color = "Not rated yet", signal_colors["grey"]
+    elif overall_pct >= 80:
+        balance_label, balance_color = "Balanced", signal_colors["green"]
+    elif overall_pct >= 60:
+        balance_label, balance_color = "Watchlist", signal_colors["yellow"]
+    else:
+        balance_label, balance_color = "Needs attention", signal_colors["red"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Life Dashboard</h3><span>How balanced is your life this week across every dimension that matters</span></div>', unsafe_allow_html=True)
+
+    hero_cols = st.columns([1.2, 1.2, 3])
+    if overall_pct is not None:
+        hero_cols[0].metric("Life Balance", f"{overall_pct}%")
+    else:
+        hero_cols[0].metric("Life Balance", "—")
+    hero_cols[1].markdown(
+        f"<div style='font-weight:700;margin-top:0.2rem;'>Overall</div>"
+        f"<div style='display:inline-flex;align-items:center;gap:0.45rem;margin-top:0.3rem;'>"
+        f"<span style='width:0.7rem;height:0.7rem;border-radius:50%;background:{balance_color};display:inline-block;'></span>"
+        f"<span style='font-weight:600;'>{balance_label}</span></div>",
+        unsafe_allow_html=True,
+    )
+    with hero_cols[2]:
+        if reds:
+            st.error(f"Needs attention: {', '.join(reds)}")
+        if yellows:
+            st.warning(f"Watchlist: {', '.join(yellows)}")
+        if not reds and not yellows and overall_pct is not None:
+            st.success("All life areas are in a healthy place this week.")
+        if latest:
+            st.caption(f"Last rated: week of {latest['week_start'].strftime('%b %d, %Y')} · saved {latest['saved_at'] or 'n/a'}")
+
+    # ── Signal dots ────────────────────────────────────────────────────────────
+    st.markdown("#### Life Balance Signals")
+    dot_cols = st.columns(len(LIFE_DASHBOARD_CATEGORIES))
+    for idx, cat in enumerate(LIFE_DASHBOARD_CATEGORIES):
+        score = latest_scores.get(cat["key"])
+        sig = signals[cat["key"]]
+        dot_color = signal_colors[sig]
+        score_label = f"{score}/5" if score is not None else "—"
+        dot_cols[idx].markdown(
+            f"<div style='text-align:center;'>"
+            f"<div style='width:1.1rem;height:1.1rem;border-radius:50%;background:{dot_color};margin:0 auto 0.3rem;'></div>"
+            f"<div style='font-weight:700;font-size:0.82rem;'>{cat['emoji']} {cat['label']}</div>"
+            f"<div style='font-size:0.8rem;color:#94a3b8;'>{score_label}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    st.caption("Green = thriving · Yellow = watchlist · Red = needs attention · Grey = not rated this week")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
+
+    # ── Rate this week ─────────────────────────────────────────────────────────
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Rate This Week</h3><span>Take 60 seconds to score each life area and spot where energy is leaking</span></div>', unsafe_allow_html=True)
+
+    current_week_entry = next((e for e in entries if e["week_start"] == week_start), None)
+    current_scores = current_week_entry["scores"] if current_week_entry else {}
+    current_notes = current_week_entry["notes"] if current_week_entry else {}
+
+    with st.form(f"{panel_key}_rate_form"):
+        score_inputs = {}
+        note_inputs = {}
+        for i in range(0, len(LIFE_DASHBOARD_CATEGORIES), 2):
+            row = st.columns(2)
+            for col_idx, cat in enumerate(LIFE_DASHBOARD_CATEGORIES[i:i+2]):
+                with row[col_idx]:
+                    st.markdown(f"**{cat['emoji']} {cat['label']}**")
+                    st.caption(cat["description"])
+                    score_inputs[cat["key"]] = st.slider(
+                        f"{cat['label']} score",
+                        min_value=1, max_value=5,
+                        value=int(current_scores.get(cat["key"]) or 3),
+                        key=f"{panel_key}_score_{cat['key']}",
+                        help="1 = struggling · 3 = okay · 5 = thriving",
+                        label_visibility="collapsed",
+                    )
+                    note_inputs[cat["key"]] = st.text_input(
+                        f"{cat['label']} note",
+                        value=current_notes.get(cat["key"]) or "",
+                        key=f"{panel_key}_note_{cat['key']}",
+                        placeholder=f"One sentence on {cat['label'].lower()} this week (optional)",
+                        label_visibility="collapsed",
+                    )
+        overall_note = st.text_area(
+            "Overall reflection",
+            value=current_week_entry.get("overall_note", "") if current_week_entry else "",
+            height=80,
+            placeholder="What's the biggest life adjustment you want to make next week?",
+            key=f"{panel_key}_overall_note",
+        )
+        save_rating = st.form_submit_button("Save this week's ratings", type="primary")
+
+    if save_rating:
+        new_entry = {
+            "week_start": week_start,
+            "scores": {cat["key"]: int(score_inputs[cat["key"]]) for cat in LIFE_DASHBOARD_CATEGORIES},
+            "notes": {cat["key"]: note_inputs[cat["key"]].strip() for cat in LIFE_DASHBOARD_CATEGORIES},
+            "overall_note": overall_note.strip(),
+            "saved_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="minutes"),
+        }
+        updated = [e for e in entries if e["week_start"] != week_start]
+        updated.insert(0, new_entry)
+        _save_life_data(updated_entries=updated)
+        st.success("Life Dashboard ratings saved.")
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
+
+    # ── 6-week trend ──────────────────────────────────────────────────────────
+    if entries:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>6-Week Trend</h3><span>Spot which life areas are consistently green and which need sustained investment</span></div>', unsafe_allow_html=True)
+        recent = entries[:6]
+        header_cols = st.columns([1.4] + [1] * len(recent))
+        header_cols[0].markdown("**Area**")
+        for i, e in enumerate(recent):
+            header_cols[i + 1].caption(e["week_start"].strftime("%b %d"))
+        for cat in LIFE_DASHBOARD_CATEGORIES:
+            row_cols = st.columns([1.4] + [1] * len(recent))
+            row_cols[0].markdown(f"{cat['emoji']} **{cat['label']}**")
+            for i, e in enumerate(recent):
+                score = e["scores"].get(cat["key"])
+                sig = _life_signal(score, cat["key"])
+                dot_color = signal_colors[sig]
+                score_text = str(score) if score is not None else "—"
+                row_cols[i + 1].markdown(
+                    f"<div style='display:flex;align-items:center;gap:0.3rem;'>"
+                    f"<span style='width:0.55rem;height:0.55rem;border-radius:50%;background:{dot_color};display:inline-block;flex-shrink:0;'></span>"
+                    f"<span style='font-size:0.85rem;'>{score_text}</span></div>",
+                    unsafe_allow_html=True,
+                )
+            if recent[0].get("notes", {}).get(cat["key"]):
+                st.caption(f"This week — {cat['label']}: {recent[0]['notes'][cat['key']]}")
+        if recent[0].get("overall_note"):
+            st.info(f"**Latest reflection:** {recent[0]['overall_note']}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
+
+    # ── Threshold editor ───────────────────────────────────────────────────────
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Adjust Signal Thresholds</h3><span>Set what score counts as green, yellow, or red for each life area</span></div>', unsafe_allow_html=True)
+    st.caption("Score >= green min = 🟢 · score >= yellow min = 🟡 · below yellow min = 🔴")
+    with st.expander("Edit thresholds", expanded=False):
+        edited_thresholds = {}
+        th_cols = st.columns([1.6, 1, 1])
+        th_cols[0].markdown("**Area**")
+        th_cols[1].markdown("**Green min (≥)**")
+        th_cols[2].markdown("**Yellow min (≥)**")
+        for cat in LIFE_DASHBOARD_CATEGORIES:
+            t = thresholds.get(cat["key"], LIFE_DASHBOARD_THRESHOLD_DEFAULTS[cat["key"]])
+            row = st.columns([1.6, 1, 1])
+            row[0].markdown(f"{cat['emoji']} {cat['label']}")
+            green_v = row[1].number_input(
+                "Green",
+                min_value=1, max_value=5, step=1,
+                value=int(t["green_min"]),
+                key=f"{panel_key}_th_green_{cat['key']}",
+                label_visibility="collapsed",
+            )
+            yellow_v = row[2].number_input(
+                "Yellow",
+                min_value=1, max_value=int(green_v), step=1,
+                value=min(int(t["yellow_min"]), int(green_v)),
+                key=f"{panel_key}_th_yellow_{cat['key']}",
+                label_visibility="collapsed",
+            )
+            edited_thresholds[cat["key"]] = {"green_min": int(green_v), "yellow_min": int(yellow_v)}
+        save_th_cols = st.columns([1, 1, 3])
+        if save_th_cols[0].button("Save thresholds", key=f"{panel_key}_save_thresholds", type="secondary"):
+            _save_life_data(updated_thresholds=edited_thresholds)
+            st.success("Life signal thresholds saved.")
+            st.rerun()
+        if save_th_cols[1].button("Reset defaults", key=f"{panel_key}_reset_thresholds"):
+            _save_life_data(updated_thresholds=LIFE_DASHBOARD_THRESHOLD_DEFAULTS)
+            st.success("Thresholds reset to defaults.")
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    render_page_footer()
+
+
 def render_settings_panel(app_settings, panel_key="settings"):
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
@@ -13090,6 +13392,7 @@ app_bootstrap.run_app(
         "render_review_command_panel": render_review_command_panel,
         "render_notifications_panel": render_notifications_panel,
         "render_ma_lead_panel": render_ma_lead_panel,
+        "render_life_dashboard_panel": render_life_dashboard_panel,
         "render_settings_panel": render_settings_panel,
         "render_analytics_panel": render_analytics_panel,
         "render_daily_review_panel": render_daily_review_panel,
