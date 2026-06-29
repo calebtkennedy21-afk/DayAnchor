@@ -4,6 +4,7 @@ import html
 import re
 import calendar
 import textwrap
+from collections import Counter
 from io import BytesIO
 from datetime import date, datetime, time, timedelta
 from uuid import uuid4
@@ -202,6 +203,10 @@ DEFAULT_APP_SETTINGS = {
     "ma_lead_rollout_30_day_start_date": "",
     "ma_lead_rollout_30_day_template": [],
     "ma_lead_rollout_30_day_log": {},
+    "ma_lead_biweekly_checkins": [],
+    "ma_lead_biweekly_action_items": [],
+    "ma_lead_biweekly_template": {},
+    "ma_lead_biweekly_settings": {},
 }
 
 
@@ -286,6 +291,20 @@ MA_LEAD_ROLLOUT_30_DAY_TEMPLATE_DEFAULTS = [
     "Publish updated workflow expectations from lessons learned.",
     "Recognize visible wins and reinforce reliability behaviors.",
 ]
+
+MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS = {
+    "wins_prompt": "Wins since last check-in",
+    "blockers_prompt": "Current blockers",
+    "clarifications_prompt": "Clarifications needed",
+    "coaching_focus_prompt": "Coaching focus (one behavior)",
+    "support_needed_prompt": "Support needed from MA Lead",
+}
+
+MA_LEAD_BIWEEKLY_SETTINGS_DEFAULTS = {
+    "cadence_days": 14,
+    "reminder_lead_days": 2,
+    "include_private_notes_in_export": False,
+}
 
 MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
     {
@@ -1390,6 +1409,135 @@ def normalize_ma_lead_rollout_log(raw_log, allowed_items=None):
         }
 
     return dict(sorted(normalized.items()))
+
+
+def normalize_ma_lead_biweekly_template(raw_template):
+    normalized = dict(MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS)
+    if isinstance(raw_template, dict):
+        for key in normalized.keys():
+            value = str(raw_template.get(key) or "").strip()
+            if value:
+                normalized[key] = value
+    return normalized
+
+
+def normalize_ma_lead_biweekly_settings(raw_settings):
+    normalized = dict(MA_LEAD_BIWEEKLY_SETTINGS_DEFAULTS)
+    if isinstance(raw_settings, dict):
+        cadence_days = safe_int(raw_settings.get("cadence_days"), MA_LEAD_BIWEEKLY_SETTINGS_DEFAULTS["cadence_days"])
+        reminder_lead_days = safe_int(raw_settings.get("reminder_lead_days"), MA_LEAD_BIWEEKLY_SETTINGS_DEFAULTS["reminder_lead_days"])
+        normalized["cadence_days"] = max(7, min(30, cadence_days))
+        normalized["reminder_lead_days"] = max(0, min(14, reminder_lead_days))
+        normalized["include_private_notes_in_export"] = bool(raw_settings.get("include_private_notes_in_export"))
+    return normalized
+
+
+def normalize_ma_lead_biweekly_checkins(raw_items):
+    if not isinstance(raw_items, list):
+        return []
+
+    status_options = {"on_track", "needs_support", "at_risk"}
+    normalized = []
+    for source_index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            continue
+
+        ma_name = str(raw_item.get("ma_name") or "").strip()
+        checkin_date = parse_date_value(raw_item.get("checkin_date"))
+        if not ma_name or not checkin_date:
+            continue
+
+        next_due_date = parse_date_value(raw_item.get("next_due_date"))
+        if not next_due_date:
+            next_due_date = checkin_date + timedelta(days=14)
+
+        status_value = str(raw_item.get("status") or "on_track").strip().lower()
+        if status_value not in status_options:
+            status_value = "on_track"
+
+        confidence_score = max(1, min(5, safe_int(raw_item.get("confidence_score"), 3)))
+        workload_score = max(1, min(5, safe_int(raw_item.get("workload_score"), 3)))
+
+        normalized.append(
+            {
+                "checkin_id": str(raw_item.get("checkin_id") or f"ma_checkin_{source_index}_{ma_name.lower().replace(' ', '_')}_{checkin_date.isoformat()}").strip(),
+                "source_index": source_index,
+                "ma_name": ma_name,
+                "checkin_date": checkin_date,
+                "next_due_date": next_due_date,
+                "status": status_value,
+                "confidence_score": confidence_score,
+                "workload_score": workload_score,
+                "wins": str(raw_item.get("wins") or "").strip(),
+                "blockers": str(raw_item.get("blockers") or "").strip(),
+                "clarifications": str(raw_item.get("clarifications") or "").strip(),
+                "coaching_focus": str(raw_item.get("coaching_focus") or "").strip(),
+                "support_needed": str(raw_item.get("support_needed") or "").strip(),
+                "public_notes": str(raw_item.get("public_notes") or "").strip(),
+                "private_notes": str(raw_item.get("private_notes") or "").strip(),
+                "created_at": str(raw_item.get("created_at") or "").strip(),
+                "updated_at": str(raw_item.get("updated_at") or "").strip(),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item.get("checkin_date") or date.min,
+            str(item.get("ma_name") or "").lower(),
+            str(item.get("checkin_id") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def normalize_ma_lead_biweekly_action_items(raw_items):
+    if not isinstance(raw_items, list):
+        return []
+
+    status_options = {"open", "completed", "canceled"}
+    normalized = []
+    for source_index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            continue
+
+        action_text = str(raw_item.get("action_text") or "").strip()
+        ma_name = str(raw_item.get("ma_name") or "").strip()
+        if not action_text or not ma_name:
+            continue
+
+        status_value = str(raw_item.get("status") or "open").strip().lower()
+        if status_value not in status_options:
+            status_value = "open"
+
+        due_date = parse_date_value(raw_item.get("due_date"))
+        completed_date = parse_date_value(raw_item.get("completed_date"))
+
+        normalized.append(
+            {
+                "action_id": str(raw_item.get("action_id") or f"ma_action_{source_index}_{ma_name.lower().replace(' ', '_')}").strip(),
+                "source_index": source_index,
+                "checkin_id": str(raw_item.get("checkin_id") or "").strip(),
+                "ma_name": ma_name,
+                "action_text": action_text,
+                "owner_name": str(raw_item.get("owner_name") or "MA Lead").strip() or "MA Lead",
+                "due_date": due_date,
+                "status": status_value,
+                "completed_date": completed_date,
+                "notes": str(raw_item.get("notes") or "").strip(),
+                "created_at": str(raw_item.get("created_at") or "").strip(),
+                "updated_at": str(raw_item.get("updated_at") or "").strip(),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda item: (
+            0 if item.get("status") == "open" else 1,
+            item.get("due_date") or date.max,
+            str(item.get("ma_name") or "").lower(),
+        ),
+    )
 
 
 def monday_week_bounds(day_value):
@@ -7111,8 +7259,24 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         app_settings.get("ma_lead_rollout_30_day_log"),
         allowed_items=rollout_template,
     )
+    raw_biweekly_checkins = list(app_settings.get("ma_lead_biweekly_checkins") or [])
+    raw_biweekly_actions = list(app_settings.get("ma_lead_biweekly_action_items") or [])
+    biweekly_template = normalize_ma_lead_biweekly_template(app_settings.get("ma_lead_biweekly_template"))
+    biweekly_settings = normalize_ma_lead_biweekly_settings(app_settings.get("ma_lead_biweekly_settings"))
+    biweekly_checkins = normalize_ma_lead_biweekly_checkins(raw_biweekly_checkins)
+    biweekly_actions = normalize_ma_lead_biweekly_action_items(raw_biweekly_actions)
 
-    def _save_ma_lead_settings(updated_weekly_targets=None, updated_weekly_log=None, updated_rollout_start_date=None, updated_rollout_template=None, updated_rollout_log=None):
+    def _save_ma_lead_settings(
+        updated_weekly_targets=None,
+        updated_weekly_log=None,
+        updated_rollout_start_date=None,
+        updated_rollout_template=None,
+        updated_rollout_log=None,
+        updated_biweekly_checkins=None,
+        updated_biweekly_actions=None,
+        updated_biweekly_template=None,
+        updated_biweekly_settings=None,
+    ):
         save_app_settings(
             {
                 **app_settings,
@@ -7125,6 +7289,10 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 ),
                 "ma_lead_rollout_30_day_template": updated_rollout_template if updated_rollout_template is not None else app_settings.get("ma_lead_rollout_30_day_template", []),
                 "ma_lead_rollout_30_day_log": updated_rollout_log if updated_rollout_log is not None else app_settings.get("ma_lead_rollout_30_day_log", {}),
+                "ma_lead_biweekly_checkins": updated_biweekly_checkins if updated_biweekly_checkins is not None else app_settings.get("ma_lead_biweekly_checkins", []),
+                "ma_lead_biweekly_action_items": updated_biweekly_actions if updated_biweekly_actions is not None else app_settings.get("ma_lead_biweekly_action_items", []),
+                "ma_lead_biweekly_template": updated_biweekly_template if updated_biweekly_template is not None else app_settings.get("ma_lead_biweekly_template", {}),
+                "ma_lead_biweekly_settings": updated_biweekly_settings if updated_biweekly_settings is not None else app_settings.get("ma_lead_biweekly_settings", {}),
             }
         )
 
@@ -7198,7 +7366,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     show_relationship_tracker = False
     if show_relationship_tracker:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, weekly_metrics_tab, rollout_tab = st.tabs(
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, relationship_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, biweekly_tab, weekly_metrics_tab, rollout_tab = st.tabs(
             [
                 "Command Center",
                 "Clinical Triage Queue",
@@ -7210,12 +7378,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "Education Liaison",
                 "Autoclave Maintenance",
                 "Documents",
+                "Biweekly Check-ins",
                 "Weekly Metrics Dashboard",
                 "30-Day Rollout",
             ]
         )
     else:
-        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, weekly_metrics_tab, rollout_tab = st.tabs(
+        command_tab, triage_tab, ma_assignments_tab, huddle_tab, sop_tab, preceptor_tab, education_tab, autoclave_tab, documents_tab, biweekly_tab, weekly_metrics_tab, rollout_tab = st.tabs(
             [
                 "Command Center",
                 "Clinical Triage Queue",
@@ -7226,6 +7395,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "Education Liaison",
                 "Autoclave Maintenance",
                 "Documents",
+                "Biweekly Check-ins",
                 "Weekly Metrics Dashboard",
                 "30-Day Rollout",
             ]
@@ -8385,6 +8555,462 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                             st.rerun()
         else:
             st.caption("No documents found for the selected filters.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with biweekly_tab:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Biweekly MA Check-ins</h3><span>Run repeatable 1:1s, track actions, and export leadership summaries</span></div>', unsafe_allow_html=True)
+
+        today_value = mountain_today()
+        cadence_days = max(7, int(biweekly_settings.get("cadence_days") or 14))
+        reminder_lead_days = max(0, int(biweekly_settings.get("reminder_lead_days") or 2))
+        cycle_start = today_value - timedelta(days=cadence_days - 1)
+
+        roster_names = sorted(
+            {
+                str(item.get("ma_name") or "").strip()
+                for item in ma_assignments + biweekly_checkins + biweekly_actions
+                if str(item.get("ma_name") or "").strip()
+            }
+        )
+
+        latest_checkin_by_ma = {}
+        for item in biweekly_checkins:
+            ma_name = str(item.get("ma_name") or "").strip()
+            checkin_date = item.get("checkin_date")
+            if not ma_name or not isinstance(checkin_date, date):
+                continue
+            current = latest_checkin_by_ma.get(ma_name)
+            if not current or checkin_date > current.get("checkin_date"):
+                latest_checkin_by_ma[ma_name] = item
+
+        queue_rows = []
+        for ma_name in roster_names:
+            latest = latest_checkin_by_ma.get(ma_name)
+            last_date = latest.get("checkin_date") if latest else None
+            next_due = latest.get("next_due_date") if latest else today_value
+            if not isinstance(next_due, date):
+                next_due = (last_date + timedelta(days=cadence_days)) if isinstance(last_date, date) else today_value
+            queue_rows.append(
+                {
+                    "ma_name": ma_name,
+                    "last_date": last_date,
+                    "next_due": next_due,
+                    "status": (latest.get("status") if latest else "needs_support") or "needs_support",
+                    "latest": latest,
+                    "is_overdue": next_due < today_value,
+                    "is_due_now": next_due <= (today_value + timedelta(days=reminder_lead_days)),
+                }
+            )
+
+        queue_rows = sorted(
+            queue_rows,
+            key=lambda item: (
+                0 if item["is_overdue"] else 1 if item["is_due_now"] else 2,
+                item["next_due"],
+                item["ma_name"].lower(),
+            ),
+        )
+
+        open_actions_by_ma = Counter()
+        overdue_open_actions_by_ma = Counter()
+        for action_item in biweekly_actions:
+            if action_item.get("status") != "open":
+                continue
+            ma_name = str(action_item.get("ma_name") or "").strip()
+            if not ma_name:
+                continue
+            open_actions_by_ma[ma_name] += 1
+            action_due_date = action_item.get("due_date")
+            if isinstance(action_due_date, date) and action_due_date < today_value:
+                overdue_open_actions_by_ma[ma_name] += 1
+
+        status_priority = {"at_risk": 0, "needs_support": 1, "on_track": 2}
+        suggested_ma_name = ""
+        if queue_rows:
+            prioritized_queue = sorted(
+                queue_rows,
+                key=lambda item: (
+                    0 if item["is_overdue"] else 1 if item["is_due_now"] else 2,
+                    -overdue_open_actions_by_ma.get(item["ma_name"], 0),
+                    -open_actions_by_ma.get(item["ma_name"], 0),
+                    status_priority.get(str(item.get("status") or "on_track"), 3),
+                    item["next_due"],
+                    item["ma_name"].lower(),
+                ),
+            )
+            suggested_ma_name = prioritized_queue[0]["ma_name"]
+
+        completed_this_cycle = [item for item in biweekly_checkins if isinstance(item.get("checkin_date"), date) and item.get("checkin_date") >= cycle_start]
+        open_actions = [item for item in biweekly_actions if item.get("status") == "open"]
+        overdue_actions = [item for item in open_actions if isinstance(item.get("due_date"), date) and item.get("due_date") < today_value]
+        due_now_count = len([item for item in queue_rows if item["is_due_now"]])
+        overdue_count = len([item for item in queue_rows if item["is_overdue"]])
+
+        confidence_values = [item.get("confidence_score") for item in completed_this_cycle if isinstance(item.get("confidence_score"), int)]
+        workload_values = [item.get("workload_score") for item in completed_this_cycle if isinstance(item.get("workload_score"), int)]
+        average_confidence = (sum(confidence_values) / len(confidence_values)) if confidence_values else None
+        average_workload = (sum(workload_values) / len(workload_values)) if workload_values else None
+
+        metric_cols = st.columns(5)
+        metric_cols[0].metric("Check-ins due now", due_now_count)
+        metric_cols[1].metric("Completed this cycle", len(completed_this_cycle))
+        metric_cols[2].metric("Overdue check-ins", overdue_count)
+        metric_cols[3].metric("Open follow-up actions", len(open_actions))
+        metric_cols[4].metric("Overdue actions", len(overdue_actions))
+        st.caption(
+            f"Cycle window: {cycle_start.strftime('%b %d')} - {today_value.strftime('%b %d')} · "
+            f"Avg confidence: {average_confidence:.1f}/5" if average_confidence is not None else
+            f"Cycle window: {cycle_start.strftime('%b %d')} - {today_value.strftime('%b %d')} · Avg confidence: n/a"
+        )
+        if average_workload is not None:
+            st.caption(f"Avg workload: {average_workload:.1f}/5")
+
+        with st.expander("Biweekly check-in settings and template", expanded=False):
+            setting_cols = st.columns(3)
+            cadence_input = setting_cols[0].number_input("Cadence (days)", min_value=7, max_value=30, value=cadence_days, step=1)
+            reminder_input = setting_cols[1].number_input("Reminder lead days", min_value=0, max_value=14, value=reminder_lead_days, step=1)
+            include_private_export = setting_cols[2].checkbox(
+                "Include private notes in export",
+                value=bool(biweekly_settings.get("include_private_notes_in_export")),
+            )
+
+            template_wins = st.text_input("Prompt - Wins", value=biweekly_template.get("wins_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["wins_prompt"])
+            template_blockers = st.text_input("Prompt - Blockers", value=biweekly_template.get("blockers_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["blockers_prompt"])
+            template_clarifications = st.text_input("Prompt - Clarifications", value=biweekly_template.get("clarifications_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["clarifications_prompt"])
+            template_coaching = st.text_input("Prompt - Coaching Focus", value=biweekly_template.get("coaching_focus_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["coaching_focus_prompt"])
+            template_support = st.text_input("Prompt - Support Needed", value=biweekly_template.get("support_needed_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["support_needed_prompt"])
+
+            if st.button("Save biweekly settings", key=f"{panel_key}_save_biweekly_settings", type="secondary"):
+                _save_ma_lead_settings(
+                    updated_biweekly_settings={
+                        "cadence_days": int(cadence_input),
+                        "reminder_lead_days": int(reminder_input),
+                        "include_private_notes_in_export": bool(include_private_export),
+                    },
+                    updated_biweekly_template={
+                        "wins_prompt": template_wins,
+                        "blockers_prompt": template_blockers,
+                        "clarifications_prompt": template_clarifications,
+                        "coaching_focus_prompt": template_coaching,
+                        "support_needed_prompt": template_support,
+                    },
+                )
+                st.success("Biweekly settings saved.")
+                st.rerun()
+
+        st.markdown("#### Due queue")
+        if queue_rows:
+            for row in queue_rows:
+                due_text = row["next_due"].strftime("%b %d") if isinstance(row.get("next_due"), date) else "n/a"
+                status_tag = "overdue" if row["is_overdue"] else "due soon" if row["is_due_now"] else "on schedule"
+                last_text = row["last_date"].strftime("%b %d") if isinstance(row.get("last_date"), date) else "none"
+                with st.expander(f"{row['ma_name']} · next due {due_text} · {status_tag}", expanded=row["is_overdue"]):
+                    st.caption(f"Last check-in: {last_text} · latest status: {row['status']}")
+                    latest = row.get("latest") or {}
+                    if latest.get("coaching_focus"):
+                        st.markdown(f"**Latest coaching focus:** {latest.get('coaching_focus')}")
+                    if latest.get("support_needed"):
+                        st.markdown(f"**Latest support needed:** {latest.get('support_needed')}")
+                    if st.button("Use this MA in check-in form", key=f"{panel_key}_queue_select_{row['ma_name']}"):
+                        st.session_state[f"{panel_key}_biweekly_ma_name"] = row["ma_name"]
+                        st.rerun()
+        else:
+            st.caption("No MA roster yet. Add MA assignments or create the first check-in.")
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Capture check-in")
+        default_ma_name = st.session_state.get(f"{panel_key}_biweekly_ma_name")
+        if not default_ma_name:
+            default_ma_name = suggested_ma_name or (roster_names[0] if roster_names else "")
+        if suggested_ma_name:
+            st.caption(f"Suggested next check-in: {suggested_ma_name}")
+        with st.form(f"{panel_key}_biweekly_checkin_form", clear_on_submit=False):
+            form_cols = st.columns(3)
+            with form_cols[0]:
+                checkin_ma_name = st.text_input("MA name", value=default_ma_name)
+                checkin_date_value = st.date_input("Check-in date", value=today_value)
+                next_due_default = checkin_date_value + timedelta(days=cadence_days)
+                next_due_date_value = st.date_input("Next due date", value=next_due_default)
+            with form_cols[1]:
+                checkin_status = st.selectbox("Current status", ["on_track", "needs_support", "at_risk"], index=1)
+                confidence_score = st.slider("Confidence", min_value=1, max_value=5, value=3)
+                workload_score = st.slider("Workload pressure", min_value=1, max_value=5, value=3)
+            with form_cols[2]:
+                checkin_public_notes = st.text_area("General notes", height=90, placeholder="Quick summary of this check-in")
+                checkin_private_notes = st.text_area("Private notes", height=90, placeholder="Only include what should stay internal")
+
+            wins_text = st.text_area(biweekly_template.get("wins_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["wins_prompt"], height=80)
+            blockers_text = st.text_area(biweekly_template.get("blockers_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["blockers_prompt"], height=80)
+            clarifications_text = st.text_area(biweekly_template.get("clarifications_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["clarifications_prompt"], height=80)
+            coaching_focus_text = st.text_area(biweekly_template.get("coaching_focus_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["coaching_focus_prompt"], height=80)
+            support_needed_text = st.text_area(biweekly_template.get("support_needed_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["support_needed_prompt"], height=80)
+
+            follow_up_actions_text = st.text_area(
+                "Follow-up actions (one per line: Action | Owner | YYYY-MM-DD)",
+                height=90,
+                placeholder="Confirm refill workflow SOP update | MA Lead | 2026-07-03",
+            )
+
+            submit_checkin = st.form_submit_button("Save check-in", type="primary")
+
+        if submit_checkin:
+            if not checkin_ma_name.strip():
+                st.warning("MA name is required.")
+            else:
+                now_text = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                checkin_id = uuid4().hex
+                updated_checkins = list(raw_biweekly_checkins)
+                updated_checkins.append(
+                    {
+                        "checkin_id": checkin_id,
+                        "ma_name": checkin_ma_name.strip(),
+                        "checkin_date": checkin_date_value,
+                        "next_due_date": next_due_date_value,
+                        "status": checkin_status,
+                        "confidence_score": int(confidence_score),
+                        "workload_score": int(workload_score),
+                        "wins": wins_text.strip(),
+                        "blockers": blockers_text.strip(),
+                        "clarifications": clarifications_text.strip(),
+                        "coaching_focus": coaching_focus_text.strip(),
+                        "support_needed": support_needed_text.strip(),
+                        "public_notes": checkin_public_notes.strip(),
+                        "private_notes": checkin_private_notes.strip(),
+                        "created_at": now_text,
+                        "updated_at": now_text,
+                    }
+                )
+
+                updated_actions = list(raw_biweekly_actions)
+                for line in follow_up_actions_text.splitlines():
+                    trimmed = line.strip()
+                    if not trimmed:
+                        continue
+                    parts = [part.strip() for part in trimmed.split("|")]
+                    action_text = parts[0] if parts else ""
+                    owner_name = parts[1] if len(parts) >= 2 and parts[1] else "MA Lead"
+                    due_date_value = parse_date_value(parts[2]) if len(parts) >= 3 else None
+                    if not due_date_value:
+                        due_date_value = checkin_date_value + timedelta(days=7)
+                    if not action_text:
+                        continue
+                    updated_actions.append(
+                        {
+                            "action_id": uuid4().hex,
+                            "checkin_id": checkin_id,
+                            "ma_name": checkin_ma_name.strip(),
+                            "action_text": action_text,
+                            "owner_name": owner_name,
+                            "due_date": due_date_value,
+                            "status": "open",
+                            "completed_date": None,
+                            "notes": "",
+                            "created_at": now_text,
+                            "updated_at": now_text,
+                        }
+                    )
+
+                st.session_state[f"{panel_key}_biweekly_ma_name"] = checkin_ma_name.strip()
+                _save_ma_lead_settings(
+                    updated_biweekly_checkins=updated_checkins,
+                    updated_biweekly_actions=updated_actions,
+                )
+                st.success("Biweekly check-in saved.")
+                st.rerun()
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Follow-up action tracker")
+        action_filter = st.selectbox("Action view", ["Open", "Completed", "All"], index=0, key=f"{panel_key}_biweekly_action_filter")
+        visible_actions = biweekly_actions
+        if action_filter == "Open":
+            visible_actions = [item for item in biweekly_actions if item.get("status") == "open"]
+        elif action_filter == "Completed":
+            visible_actions = [item for item in biweekly_actions if item.get("status") == "completed"]
+
+        if visible_actions:
+            for item in visible_actions[:120]:
+                due_label = item.get("due_date").strftime("%b %d") if isinstance(item.get("due_date"), date) else "No due date"
+                status_label_text = item.get("status") or "open"
+                with st.expander(f"{item.get('ma_name')} · {item.get('action_text')} · {status_label_text} · due {due_label}", expanded=False):
+                    st.caption(f"Owner: {item.get('owner_name') or 'MA Lead'}")
+                    if item.get("notes"):
+                        st.caption(item.get("notes"))
+                    action_cols = st.columns(3)
+                    source_index = item.get("source_index")
+                    if action_cols[0].button("Mark completed", key=f"{panel_key}_action_complete_{item.get('action_id')}"):
+                        if source_index is not None and source_index < len(raw_biweekly_actions):
+                            raw_biweekly_actions[source_index].update(
+                                {
+                                    "status": "completed",
+                                    "completed_date": today_value,
+                                    "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                                }
+                            )
+                            _save_ma_lead_settings(updated_biweekly_actions=raw_biweekly_actions)
+                            st.success("Action marked completed.")
+                            st.rerun()
+                    if action_cols[1].button("Reopen", key=f"{panel_key}_action_reopen_{item.get('action_id')}"):
+                        if source_index is not None and source_index < len(raw_biweekly_actions):
+                            raw_biweekly_actions[source_index].update(
+                                {
+                                    "status": "open",
+                                    "completed_date": None,
+                                    "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                                }
+                            )
+                            _save_ma_lead_settings(updated_biweekly_actions=raw_biweekly_actions)
+                            st.success("Action reopened.")
+                            st.rerun()
+                    if action_cols[2].button("Delete", key=f"{panel_key}_action_delete_{item.get('action_id')}"):
+                        if source_index is not None and source_index < len(raw_biweekly_actions):
+                            updated_actions = [entry for idx, entry in enumerate(raw_biweekly_actions) if idx != source_index]
+                            _save_ma_lead_settings(updated_biweekly_actions=updated_actions)
+                            st.success("Action deleted.")
+                            st.rerun()
+        else:
+            st.caption("No action items match this filter.")
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Check-in trends")
+        status_counts = Counter(item.get("status") for item in completed_this_cycle if item.get("status"))
+        trend_cols = st.columns(3)
+        trend_cols[0].metric("On track", status_counts.get("on_track", 0))
+        trend_cols[1].metric("Needs support", status_counts.get("needs_support", 0))
+        trend_cols[2].metric("At risk", status_counts.get("at_risk", 0))
+
+        if biweekly_checkins:
+            recent_by_ma = {}
+            for item in biweekly_checkins:
+                ma_name = item.get("ma_name")
+                if not ma_name or ma_name in recent_by_ma:
+                    continue
+                recent_by_ma[ma_name] = item
+            for ma_name in sorted(recent_by_ma.keys())[:30]:
+                item = recent_by_ma[ma_name]
+                st.markdown(
+                    f"- **{ma_name}** · {item.get('status')} · confidence {item.get('confidence_score')}/5 · "
+                    f"workload {item.get('workload_score')}/5 · next due {item.get('next_due_date').strftime('%b %d') if isinstance(item.get('next_due_date'), date) else 'n/a'}"
+                )
+                if item.get("coaching_focus"):
+                    st.caption(f"Coaching focus: {item.get('coaching_focus')}")
+        else:
+            st.caption("No check-ins saved yet.")
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Leadership summary export")
+        summary_window_days = st.number_input("Summary lookback (days)", min_value=7, max_value=60, value=max(14, cadence_days), step=1, key=f"{panel_key}_biweekly_summary_days")
+        summary_start = today_value - timedelta(days=int(summary_window_days) - 1)
+        summary_checkins = [item for item in biweekly_checkins if isinstance(item.get("checkin_date"), date) and item.get("checkin_date") >= summary_start]
+        summary_actions = [item for item in biweekly_actions if item.get("status") in ("open", "completed")]
+
+        blocker_counter = Counter()
+        for item in summary_checkins:
+            raw_blockers = str(item.get("blockers") or "")
+            for token in re.split(r"[\n;]+", raw_blockers):
+                blocker_text = token.strip(" -\t").strip()
+                if blocker_text:
+                    blocker_counter[blocker_text] += 1
+        top_blockers = blocker_counter.most_common(3)
+
+        latest_support_requests = []
+        latest_by_ma = {}
+        for item in summary_checkins:
+            ma_name = item.get("ma_name")
+            checkin_date = item.get("checkin_date")
+            if not ma_name or not isinstance(checkin_date, date):
+                continue
+            existing = latest_by_ma.get(ma_name)
+            if not existing or checkin_date > existing.get("checkin_date"):
+                latest_by_ma[ma_name] = item
+        for ma_name, item in sorted(latest_by_ma.items()):
+            support_text = str(item.get("support_needed") or "").strip()
+            if support_text:
+                latest_support_requests.append(f"- {ma_name}: {support_text}")
+
+        completed_actions = [item for item in summary_actions if item.get("status") == "completed"]
+        followup_rate = (len(completed_actions) / len(summary_actions)) if summary_actions else 0.0
+        avg_conf_summary = (
+            sum(item.get("confidence_score") for item in summary_checkins if isinstance(item.get("confidence_score"), int)) / max(1, len([item for item in summary_checkins if isinstance(item.get("confidence_score"), int)]))
+            if summary_checkins else 0.0
+        )
+        avg_workload_summary = (
+            sum(item.get("workload_score") for item in summary_checkins if isinstance(item.get("workload_score"), int)) / max(1, len([item for item in summary_checkins if isinstance(item.get("workload_score"), int)]))
+            if summary_checkins else 0.0
+        )
+
+        blocker_lines = [f"- {label} ({count})" for label, count in top_blockers] or ["- No blocker themes captured."]
+        support_lines = latest_support_requests or ["- No active support requests captured."]
+        blocker_block = "\n".join(blocker_lines)
+        support_block = "\n".join(support_lines)
+        private_note_lines = []
+        if biweekly_settings.get("include_private_notes_in_export"):
+            private_note_lines = [
+                f"- {item.get('ma_name')}: {item.get('private_notes')}"
+                for item in summary_checkins
+                if str(item.get("private_notes") or "").strip()
+            ][:10]
+
+        biweekly_summary_text = (
+            f"Subject: MA Lead Biweekly Check-in Summary ({summary_start.isoformat()} to {today_value.isoformat()})\n"
+            "\n"
+            "Team Morale/Capacity Trend\n"
+            f"- Check-ins captured: {len(summary_checkins)}\n"
+            f"- Average confidence: {avg_conf_summary:.1f}/5\n"
+            f"- Average workload pressure: {avg_workload_summary:.1f}/5\n"
+            f"- Status mix: on_track={status_counts.get('on_track', 0)}, needs_support={status_counts.get('needs_support', 0)}, at_risk={status_counts.get('at_risk', 0)}\n"
+            "\n"
+            "Top Friction Themes\n"
+            f"{blocker_block}\n"
+            "\n"
+            "Open Support Requests\n"
+            f"{support_block}\n"
+            "\n"
+            "Follow-up Completion\n"
+            f"- Follow-up completion rate: {int(round(followup_rate * 100))}% ({len(completed_actions)}/{len(summary_actions)})\n"
+            f"- Open follow-up actions: {len([item for item in summary_actions if item.get('status') == 'open'])}\n"
+        )
+
+        if private_note_lines:
+            biweekly_summary_text += "\nPrivate Notes Included\n" + "\n".join(private_note_lines) + "\n"
+
+        st.text_area(
+            "Generated biweekly summary",
+            value=biweekly_summary_text,
+            height=250,
+            key=f"{panel_key}_biweekly_summary_preview",
+        )
+        st.download_button(
+            "Download biweekly summary",
+            data=biweekly_summary_text,
+            file_name=f"ma_lead_biweekly_summary_{today_value.isoformat()}.txt",
+            mime="text/plain",
+            key=f"{panel_key}_download_biweekly_summary",
+        )
+        biweekly_copy_payload = json.dumps(biweekly_summary_text).replace("</", "<\\/")
+        components.html(
+            f"""
+            <div style=\"display:flex; align-items:center; gap:0.6rem;\"> 
+                <button id=\"{panel_key}_biweekly_copy_btn\" style=\"padding:0.35rem 0.75rem; border-radius:0.45rem; border:1px solid #64748b; background:#111827; color:#f8fafc; cursor:pointer;\">Copy biweekly summary</button>
+                <span id=\"{panel_key}_biweekly_copy_status\" style=\"font-size:0.82rem; color:#0f766e;\"></span>
+            </div>
+            <script>
+                const biweeklyPayload = {biweekly_copy_payload};
+                const biweeklyButton = document.getElementById("{panel_key}_biweekly_copy_btn");
+                const biweeklyStatus = document.getElementById("{panel_key}_biweekly_copy_status");
+                biweeklyButton.addEventListener("click", async () => {{
+                    try {{
+                        await navigator.clipboard.writeText(biweeklyPayload);
+                        biweeklyStatus.textContent = "Copied to clipboard.";
+                    }} catch (error) {{
+                        biweeklyStatus.textContent = "Copy blocked by browser. Use Ctrl+C from the preview box.";
+                    }}
+                }});
+            </script>
+            """,
+            height=48,
+        )
 
         st.markdown('</div>', unsafe_allow_html=True)
 

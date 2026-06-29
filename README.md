@@ -27,6 +27,7 @@ Current capabilities include:
 - Morning Ritual and Daily Review trend tracking now use Monday-Sunday week buckets (reset each Monday) with saved week-over-week and month-level productivity comparisons.
 - MA Lead page now includes a Weekly Metrics Dashboard with saved week-by-week KPI snapshots and editable targets.
 - MA Lead page now includes a 30-Day Rollout Checklist tracker with editable template, rollout start date, and per-day completion logs.
+- MA Lead page now includes a full Biweekly Check-ins tab with due queue, check-in capture, follow-up action tracking, trend snapshots, and leadership summary export.
 - Settings page with persistent defaults (category, priority, duration, schedule time, timeline window).
 
 ## Run
