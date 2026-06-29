@@ -7238,7 +7238,6 @@ def autoclave_next_due_date(last_completed_date, frequency_label, current_next_d
 
 
 def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
-    render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     app_settings = load_app_settings()
@@ -7343,11 +7342,6 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         if item.get("escalation_target") in ("manager", "supervisor")
     ]
     resolved_today = [item for item in lead_issues if item.get("resolved_date") == mountain_today()]
-    clinical_overdue = [
-        task
-        for task in clinic_tasks_all
-        if task.get("status") != "completed" and task.get("due_date") and task.get("due_date") < mountain_today()
-    ]
 
     headline = st.columns(5)
     headline[0].metric("Needs action now", len(open_issues))
@@ -7429,15 +7423,6 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "target_ma_name": str(item.get("ma_name") or "").strip(),
             }
         )
-    for task in sorted(clinical_overdue, key=lambda item: item.get("due_date") or date.max)[:3]:
-        top_priority_items.append(
-            {
-                "severity": "medium",
-                "label": f"Clinic task overdue: {task.get('title')} (due {task.get('due_date')})",
-                "target_tab": "Clinical Triage Queue",
-                "target_ma_name": "",
-            }
-        )
     if not top_priority_items:
         top_priority_items = [
             {
@@ -7478,7 +7463,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         quick_metrics[0].metric("Escalations", len(escalated_issues))
         quick_metrics[1].metric("Biweekly due", len(checkins_due_rows))
         quick_metrics[0].metric("Action items overdue", len(overdue_biweekly_actions))
-        quick_metrics[1].metric("Clinic overdue tasks", len(clinical_overdue))
+        quick_metrics[1].metric("Open triage issues", len(open_issues))
         st.caption("Use tabs: Triage for issue resolution, Biweekly for coaching loops, Daily Huddle for shift communication.")
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -7644,7 +7629,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             if waiting_leadership:
                 st.warning(f"{len(waiting_leadership)} issue(s) waiting on manager/supervisor input.")
         with alert_cols[1]:
-            st.caption(f"Clinic overdue tasks: {len(clinical_overdue)}")
+            st.caption(f"Open lead queue issues: {len(open_issues)}")
             st.caption(f"SOP entries: {len(sop_entries)}")
             due_followups = [
                 person
@@ -8009,7 +7994,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         items_to_work_on = st.text_area(
             "Items we need to work on",
             value=(
-                f"Clinic overdue tasks: {len(clinical_overdue)}\n"
+                f"Open lead queue issues: {len(open_issues)}\n"
                 f"Relationship follow-ups due: {len(relationship_followups)}"
             ),
             key=f"{panel_key}_items_to_work_on",
