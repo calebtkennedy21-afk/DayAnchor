@@ -207,6 +207,10 @@ DEFAULT_APP_SETTINGS = {
     "ma_lead_biweekly_action_items": [],
     "ma_lead_biweekly_template": {},
     "ma_lead_biweekly_settings": {},
+    "ma_lead_weekly_priorities": [],
+    "ma_lead_development": {},
+    "ma_lead_daily_leadership_log": {},
+    "ma_lead_health_thresholds": {},
 }
 
 
@@ -304,6 +308,15 @@ MA_LEAD_BIWEEKLY_SETTINGS_DEFAULTS = {
     "cadence_days": 14,
     "reminder_lead_days": 2,
     "include_private_notes_in_export": False,
+}
+
+MA_LEAD_HEALTH_THRESHOLD_DEFAULTS = {
+    "staffing": {"green_max": 1, "yellow_max": 2},
+    "provider_flow": {"green_max": 2, "yellow_max": 4},
+    "patient_wait": {"green_max": 2, "yellow_max": 4},
+    "supplies": {"green_max": 1, "yellow_max": 3},
+    "morale": {"green_max": 2, "yellow_max": 4},
+    "escalations": {"green_max": 1, "yellow_max": 3},
 }
 
 MINIMUM_HOME_ROUTINE_GOAL_TEMPLATES = [
@@ -1429,6 +1442,32 @@ def normalize_ma_lead_biweekly_settings(raw_settings):
         normalized["cadence_days"] = max(7, min(30, cadence_days))
         normalized["reminder_lead_days"] = max(0, min(14, reminder_lead_days))
         normalized["include_private_notes_in_export"] = bool(raw_settings.get("include_private_notes_in_export"))
+    return normalized
+
+
+def normalize_ma_lead_health_thresholds(raw_thresholds):
+    normalized = {
+        key: {
+            "green_max": int(defaults.get("green_max") or 0),
+            "yellow_max": int(defaults.get("yellow_max") or 0),
+        }
+        for key, defaults in MA_LEAD_HEALTH_THRESHOLD_DEFAULTS.items()
+    }
+
+    if not isinstance(raw_thresholds, dict):
+        return normalized
+
+    for signal_key, defaults in MA_LEAD_HEALTH_THRESHOLD_DEFAULTS.items():
+        raw_entry = raw_thresholds.get(signal_key)
+        if not isinstance(raw_entry, dict):
+            continue
+        green_value = max(0, safe_int(raw_entry.get("green_max"), defaults["green_max"]))
+        yellow_value = max(green_value, safe_int(raw_entry.get("yellow_max"), defaults["yellow_max"]))
+        normalized[signal_key] = {
+            "green_max": green_value,
+            "yellow_max": yellow_value,
+        }
+
     return normalized
 
 
@@ -7262,8 +7301,12 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     raw_biweekly_actions = list(app_settings.get("ma_lead_biweekly_action_items") or [])
     biweekly_template = normalize_ma_lead_biweekly_template(app_settings.get("ma_lead_biweekly_template"))
     biweekly_settings = normalize_ma_lead_biweekly_settings(app_settings.get("ma_lead_biweekly_settings"))
+    ma_lead_health_thresholds = normalize_ma_lead_health_thresholds(app_settings.get("ma_lead_health_thresholds"))
     biweekly_checkins = normalize_ma_lead_biweekly_checkins(raw_biweekly_checkins)
     biweekly_actions = normalize_ma_lead_biweekly_action_items(raw_biweekly_actions)
+    daily_leadership_log = app_settings.get("ma_lead_daily_leadership_log") or {}
+    if not isinstance(daily_leadership_log, dict):
+        daily_leadership_log = {}
     raw_lead_development = app_settings.get("ma_lead_development") or {}
     lead_development = raw_lead_development if isinstance(raw_lead_development, dict) else {}
     lead_dev_journal_entries = list(lead_development.get("journal_entries") or [])
@@ -7283,8 +7326,10 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         updated_biweekly_actions=None,
         updated_biweekly_template=None,
         updated_biweekly_settings=None,
+        updated_health_thresholds=None,
         updated_weekly_priorities=None,
         updated_lead_development=None,
+        updated_daily_leadership_log=None,
     ):
         save_app_settings(
             {
@@ -7302,8 +7347,10 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "ma_lead_biweekly_action_items": updated_biweekly_actions if updated_biweekly_actions is not None else app_settings.get("ma_lead_biweekly_action_items", []),
                 "ma_lead_biweekly_template": updated_biweekly_template if updated_biweekly_template is not None else app_settings.get("ma_lead_biweekly_template", {}),
                 "ma_lead_biweekly_settings": updated_biweekly_settings if updated_biweekly_settings is not None else app_settings.get("ma_lead_biweekly_settings", {}),
+                "ma_lead_health_thresholds": updated_health_thresholds if updated_health_thresholds is not None else app_settings.get("ma_lead_health_thresholds", {}),
                 "ma_lead_weekly_priorities": updated_weekly_priorities if updated_weekly_priorities is not None else app_settings.get("ma_lead_weekly_priorities", []),
                 "ma_lead_development": updated_lead_development if updated_lead_development is not None else app_settings.get("ma_lead_development", {}),
+                "ma_lead_daily_leadership_log": updated_daily_leadership_log if updated_daily_leadership_log is not None else app_settings.get("ma_lead_daily_leadership_log", {}),
             }
         )
 
@@ -7459,22 +7506,50 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     }
 
     at_risk_count = len([item for item in biweekly_checkins if item.get("status") == "at_risk"])
-    staffing_signal = _signal_state(max(0, 3 - active_ma_assignments), 0, 1)
-    provider_flow_signal = _signal_state(len(waiting_psr), 1, 3)
-    patient_wait_signal = _signal_state(len(open_issues), 3, 6)
-    supplies_signal = _signal_state(autoclave_due_count, 0, 2)
-    morale_signal = _signal_state(at_risk_count, 0, 2)
-    escalations_signal = _signal_state(len(escalated_issues), 1, 2)
+    backup_assignments = len([item for item in ma_assignments if item.get("status") == "backup"])
+    critical_or_high_due = [
+        item
+        for item in open_issues
+        if item.get("urgency") in ("critical", "high")
+        and (
+            not item.get("due_date")
+            or item.get("due_date") <= today_value
+        )
+    ]
+    autoclave_overdue = len([item for item in autoclave_items if item.get("status") == "overdue"])
+    autoclave_due_soon = len([item for item in autoclave_items if item.get("status") == "due_soon"])
+
+    staffing_pressure = max(0, 3 - active_ma_assignments) + max(0, 1 - backup_assignments)
+    provider_flow_pressure = len(waiting_psr) + len(
+        [item for item in open_issues if item.get("source_lane") == "clinical_staff" and item.get("urgency") in ("critical", "high")]
+    )
+    patient_wait_pressure = len(critical_or_high_due) + len(escalated_issues)
+    supplies_pressure = (autoclave_overdue * 2) + autoclave_due_soon
+    morale_pressure = at_risk_count + len(checkins_due_rows)
+    escalation_pressure = len(escalated_issues) + len(waiting_leadership)
+
+    staffing_threshold = ma_lead_health_thresholds.get("staffing", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["staffing"])
+    provider_flow_threshold = ma_lead_health_thresholds.get("provider_flow", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["provider_flow"])
+    patient_wait_threshold = ma_lead_health_thresholds.get("patient_wait", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["patient_wait"])
+    supplies_threshold = ma_lead_health_thresholds.get("supplies", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["supplies"])
+    morale_threshold = ma_lead_health_thresholds.get("morale", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["morale"])
+    escalations_threshold = ma_lead_health_thresholds.get("escalations", MA_LEAD_HEALTH_THRESHOLD_DEFAULTS["escalations"])
+
+    staffing_signal = _signal_state(staffing_pressure, staffing_threshold["green_max"], staffing_threshold["yellow_max"])
+    provider_flow_signal = _signal_state(provider_flow_pressure, provider_flow_threshold["green_max"], provider_flow_threshold["yellow_max"])
+    patient_wait_signal = _signal_state(patient_wait_pressure, patient_wait_threshold["green_max"], patient_wait_threshold["yellow_max"])
+    supplies_signal = _signal_state(supplies_pressure, supplies_threshold["green_max"], supplies_threshold["yellow_max"])
+    morale_signal = _signal_state(morale_pressure, morale_threshold["green_max"], morale_threshold["yellow_max"])
+    escalations_signal = _signal_state(escalation_pressure, escalations_threshold["green_max"], escalations_threshold["yellow_max"])
 
     score_penalty = (
-        (len(escalated_issues) * 8)
-        + (len(overdue_biweekly_actions) * 5)
-        + (len(waiting_leadership) * 4)
-        + (len(waiting_psr) * 2)
-        + (autoclave_due_count * 2)
+        (escalation_pressure * 6)
+        + (len(overdue_biweekly_actions) * 4)
+        + (patient_wait_pressure * 3)
+        + (supplies_pressure * 2)
     )
-    score_recovery = min(12, len(resolved_today) * 2)
-    leadership_score = max(55, min(99, 100 - score_penalty + score_recovery))
+    score_recovery = min(15, len(resolved_today) * 2)
+    leadership_score = max(50, min(99, 100 - score_penalty + score_recovery))
     clinic_health_state = "Stable"
     clinic_health_color = signal_colors["green"]
     if any(signal == "red" for signal in [staffing_signal, provider_flow_signal, patient_wait_signal, supplies_signal, morale_signal, escalations_signal]):
@@ -7494,6 +7569,14 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     )
     recognition_text = f"{len(resolved_today)} recognition moment(s) today"
 
+    daily_log_key = today_value.isoformat()
+    today_leadership_entry = daily_leadership_log.get(daily_log_key) or {}
+    if not isinstance(today_leadership_entry, dict):
+        today_leadership_entry = {}
+    saved_statuses = today_leadership_entry.get("status_by_label") or {}
+    if not isinstance(saved_statuses, dict):
+        saved_statuses = {}
+
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>MA Lead Today</h3><span>Immediate leadership pulse before diving into queues</span></div>', unsafe_allow_html=True)
 
@@ -7507,7 +7590,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     hero_cols[3].markdown(f"**Staff Recognition**  \n{recognition_text}")
     st.caption(f"Next leadership action: {next_action_label}")
 
-    leadership_rhythm_rows = [
+    st.markdown("#### Today's Leadership")
+    leadership_rhythm_defaults = [
         ("Morning Walkthrough", "completed" if resolved_today else "pending"),
         ("Staff Huddle", "completed" if any(item.get("huddle_date") == today_value for item in huddle_logs) else "pending"),
         ("Provider Check-in", "pending" if waiting_psr else "completed"),
@@ -7515,60 +7599,154 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         ("Team Recognition", "completed" if resolved_today else "pending"),
         ("End-of-Day Debrief", "scheduled"),
     ]
-    st.markdown("#### Today's Leadership")
-    for label, status in leadership_rhythm_rows:
-        status_color = signal_colors["green"] if status == "completed" else signal_colors["yellow"] if status == "scheduled" else "#64748b"
-        st.markdown(
-            f"<div style='display:flex; align-items:center; gap:0.45rem; margin-bottom:0.2rem;'><span style='width:0.6rem; height:0.6rem; border-radius:50%; background:{status_color}; display:inline-block;'></span><span style='font-weight:600;'>{label}</span><span style='color:#94a3b8;'>{status.title()}</span></div>",
-            unsafe_allow_html=True,
+    status_options = ["pending", "in_progress", "completed", "scheduled"]
+    status_cols = st.columns([1.8, 1.2, 1.2, 1.2])
+    status_cols[0].markdown("**Leadership checkpoint**")
+    status_cols[1].markdown("**Suggested**")
+    status_cols[2].markdown("**Today status**")
+    status_cols[3].markdown("**Open**")
+    current_statuses = {}
+    for idx, (label, suggested_status) in enumerate(leadership_rhythm_defaults):
+        row_cols = st.columns([1.8, 1.2, 1.2, 1.2])
+        active_status = str(saved_statuses.get(label) or suggested_status)
+        if active_status not in status_options:
+            active_status = suggested_status
+        current_statuses[label] = row_cols[2].selectbox(
+            label,
+            status_options,
+            index=status_options.index(active_status),
+            key=f"{panel_key}_rhythm_status_{idx}",
+            label_visibility="collapsed",
         )
+        row_cols[0].markdown(label)
+        row_cols[1].caption(suggested_status.replace("_", " ").title())
+        target_tab = "Daily Huddle" if "Huddle" in label or "Debrief" in label else "Command Center"
+        if "Provider" in label:
+            target_tab = "Clinical Triage Queue"
+        if "Staffing" in label:
+            target_tab = "MA Assignments"
+        if row_cols[3].button("Open", key=f"{panel_key}_rhythm_open_{idx}"):
+            st.session_state[open_tab_state_key] = target_tab
+            st.rerun()
+
+    status_note = st.text_input(
+        "Leadership note for today",
+        value=str(today_leadership_entry.get("note") or ""),
+        key=f"{panel_key}_leadership_status_note",
+        placeholder="What is your biggest leadership focus for this shift?",
+    )
+    if st.button("Save today's leadership status", key=f"{panel_key}_save_rhythm_status", type="secondary"):
+        updated_daily_log = dict(daily_leadership_log)
+        updated_daily_log[daily_log_key] = {
+            "status_by_label": current_statuses,
+            "note": status_note.strip(),
+            "updated_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+        }
+        _save_ma_lead_settings(updated_daily_leadership_log=updated_daily_log)
+        st.success("Today's leadership checkpoints saved.")
+        st.rerun()
 
     st.markdown("#### Clinic Health Dashboard")
     clinic_signal_cols = st.columns(3)
     clinic_signals = [
-        ("Staffing", staffing_signal),
-        ("Provider Flow", provider_flow_signal),
-        ("Patient Wait", patient_wait_signal),
-        ("Supplies", supplies_signal),
-        ("Team Morale", morale_signal),
-        ("Escalations", escalations_signal),
+        ("Staffing", staffing_signal, f"pressure={staffing_pressure} | active={active_ma_assignments}, backup={backup_assignments}"),
+        ("Provider Flow", provider_flow_signal, f"pressure={provider_flow_pressure} | PSR waits={len(waiting_psr)}"),
+        ("Patient Wait", patient_wait_signal, f"pressure={patient_wait_pressure} | high/critical due={len(critical_or_high_due)}"),
+        ("Supplies", supplies_signal, f"pressure={supplies_pressure} | overdue={autoclave_overdue}, due soon={autoclave_due_soon}"),
+        ("Team Morale", morale_signal, f"pressure={morale_pressure} | at risk={at_risk_count}, check-ins due={len(checkins_due_rows)}"),
+        ("Escalations", escalations_signal, f"pressure={escalation_pressure} | escalated={len(escalated_issues)}, leadership waits={len(waiting_leadership)}"),
     ]
-    for index, (label, signal) in enumerate(clinic_signals):
+    for index, (label, signal, detail) in enumerate(clinic_signals):
         dot_color = signal_colors.get(signal, signal_colors["green"])
         clinic_signal_cols[index % 3].markdown(
             f"<div style='display:flex; align-items:center; gap:0.45rem; margin:0.2rem 0;'><span style='width:0.72rem; height:0.72rem; border-radius:50%; background:{dot_color}; display:inline-block;'></span><span style='font-weight:600;'>{label}</span></div>",
             unsafe_allow_html=True,
         )
+        clinic_signal_cols[index % 3].caption(detail)
+    st.caption("Signal colors are driven by live pressure scores from MA Lead data; green=low pressure, yellow=watch, red=high pressure.")
+
+    with st.expander("Adjust health signal thresholds", expanded=False):
+        st.caption("Set the pressure score cutoffs for each signal. Green is <= green max, yellow is <= yellow max, red is above yellow max.")
+        threshold_signal_rows = [
+            ("staffing", "Staffing"),
+            ("provider_flow", "Provider Flow"),
+            ("patient_wait", "Patient Wait"),
+            ("supplies", "Supplies"),
+            ("morale", "Team Morale"),
+            ("escalations", "Escalations"),
+        ]
+        edited_thresholds = {}
+        for signal_key, signal_label in threshold_signal_rows:
+            row = st.columns([2.2, 1, 1])
+            row[0].markdown(f"**{signal_label}**")
+            current = ma_lead_health_thresholds.get(signal_key, MA_LEAD_HEALTH_THRESHOLD_DEFAULTS[signal_key])
+            green_value = row[1].number_input(
+                "Green max",
+                min_value=0,
+                step=1,
+                value=int(current.get("green_max") or 0),
+                key=f"{panel_key}_health_green_{signal_key}",
+                label_visibility="collapsed",
+            )
+            yellow_value = row[2].number_input(
+                "Yellow max",
+                min_value=int(green_value),
+                step=1,
+                value=max(int(green_value), int(current.get("yellow_max") or 0)),
+                key=f"{panel_key}_health_yellow_{signal_key}",
+                label_visibility="collapsed",
+            )
+            edited_thresholds[signal_key] = {
+                "green_max": int(green_value),
+                "yellow_max": int(yellow_value),
+            }
+        save_threshold_cols = st.columns([1, 1, 3])
+        if save_threshold_cols[0].button("Save thresholds", key=f"{panel_key}_save_health_thresholds", type="secondary"):
+            _save_ma_lead_settings(updated_health_thresholds=edited_thresholds)
+            st.success("MA Lead health thresholds saved.")
+            st.rerun()
+        if save_threshold_cols[1].button("Reset defaults", key=f"{panel_key}_reset_health_thresholds"):
+            _save_ma_lead_settings(updated_health_thresholds=MA_LEAD_HEALTH_THRESHOLD_DEFAULTS)
+            st.success("MA Lead health thresholds reset to defaults.")
+            st.rerun()
 
     needs_me = []
     if escalated_issues:
-        needs_me.append(f"{len(escalated_issues)} escalation(s) require direct MA lead ownership")
+        needs_me.append({"label": f"{len(escalated_issues)} escalation(s) require direct MA lead ownership", "target_tab": "Clinical Triage Queue"})
     if overdue_biweekly_actions:
-        needs_me.append(f"{len(overdue_biweekly_actions)} overdue follow-up action(s)")
+        needs_me.append({"label": f"{len(overdue_biweekly_actions)} overdue follow-up action(s)", "target_tab": "Biweekly Check-ins"})
     if checkins_due_rows:
-        needs_me.append(f"{len(checkins_due_rows)} biweekly check-in(s) due now")
+        needs_me.append({"label": f"{len(checkins_due_rows)} biweekly check-in(s) due now", "target_tab": "Biweekly Check-ins"})
     if not needs_me:
-        needs_me.append("No urgent direct-leadership interventions right now")
+        needs_me.append({"label": "No urgent direct-leadership interventions right now", "target_tab": "Command Center"})
 
     does_not_need_me = []
     if waiting_psr:
-        does_not_need_me.append(f"{len(waiting_psr)} item(s) waiting on PSR")
+        does_not_need_me.append({"label": f"{len(waiting_psr)} item(s) waiting on PSR", "target_tab": "Clinical Triage Queue"})
     if waiting_leadership:
-        does_not_need_me.append(f"{len(waiting_leadership)} item(s) awaiting manager/supervisor decision")
+        does_not_need_me.append({"label": f"{len(waiting_leadership)} item(s) awaiting manager/supervisor decision", "target_tab": "Clinical Triage Queue"})
     if open_issues and not (waiting_psr or waiting_leadership):
-        does_not_need_me.append("Route non-urgent queue work to delegated owners")
+        does_not_need_me.append({"label": "Route non-urgent queue work to delegated owners", "target_tab": "Command Center"})
     if not does_not_need_me:
-        does_not_need_me.append("No obvious delegation opportunities right now")
+        does_not_need_me.append({"label": "No obvious delegation opportunities right now", "target_tab": "Command Center"})
 
     triage_cols = st.columns(2)
     with triage_cols[0]:
         st.markdown("#### What Needs Me?")
-        for line in needs_me[:5]:
-            st.markdown(f"- {line}")
+        for idx, item in enumerate(needs_me[:5]):
+            row = st.columns([4, 1])
+            row[0].markdown(f"- {item['label']}")
+            if row[1].button("Open", key=f"{panel_key}_needs_me_open_{idx}"):
+                st.session_state[open_tab_state_key] = item.get("target_tab") or "Command Center"
+                st.rerun()
     with triage_cols[1]:
         st.markdown("#### Doesn't Need Me")
-        for line in does_not_need_me[:5]:
-            st.markdown(f"- {line}")
+        for idx, item in enumerate(does_not_need_me[:5]):
+            row = st.columns([4, 1])
+            row[0].markdown(f"- {item['label']}")
+            if row[1].button("Open", key=f"{panel_key}_does_not_need_me_open_{idx}"):
+                st.session_state[open_tab_state_key] = item.get("target_tab") or "Command Center"
+                st.rerun()
 
     dependability_score = max(60, min(99, 97 - (len(overdue_biweekly_actions) * 4) - len(escalated_issues)))
     communication_score = max(60, min(99, 95 - (len(waiting_psr) * 3) - (len(waiting_leadership) * 3)))
