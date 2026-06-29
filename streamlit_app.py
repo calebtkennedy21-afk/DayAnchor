@@ -9336,13 +9336,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 )
                 if st.button("Save rollout template", key=f"{panel_key}_save_rollout_template", type="secondary"):
                     parsed_template = normalize_ma_lead_rollout_template(template_text)
-                normalized_log = normalize_ma_lead_rollout_log(rollout_log, allowed_items=parsed_template)
-                _save_ma_lead_settings(
-                    updated_rollout_template=parsed_template,
-                    updated_rollout_log=normalized_log,
-                )
-                st.success("30-day rollout template saved.")
-                st.rerun()
+                    normalized_log = normalize_ma_lead_rollout_log(rollout_log, allowed_items=parsed_template)
+                    _save_ma_lead_settings(
+                        updated_rollout_template=parsed_template,
+                        updated_rollout_log=normalized_log,
+                    )
+                    st.success("30-day rollout template saved.")
+                    st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
