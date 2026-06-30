@@ -7910,6 +7910,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
     show_relationship_tracker = False
+    show_weekly_metrics_dashboard = False
     show_advanced_tabs = st.toggle(
         "Show advanced MA Lead sections",
         value=False,
@@ -7932,9 +7933,11 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         "Education Liaison",
         "Autoclave Maintenance",
         "Documents",
-        "Weekly Metrics Dashboard",
         "30-Day Rollout",
     ]
+
+    if show_weekly_metrics_dashboard:
+        advanced_tab_labels.insert(4, "Weekly Metrics Dashboard")
 
     if show_relationship_tracker:
         advanced_tab_labels.insert(0, "Relationship Tracker")
