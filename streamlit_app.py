@@ -200,6 +200,7 @@ DEFAULT_APP_SETTINGS = {
     "clinic_day_closeout_log": {},
     "ma_lead_weekly_metric_targets": {},
     "ma_lead_weekly_metrics_log": {},
+    "ma_lead_weekly_metrics_baseline_week": "",
     "ma_lead_rollout_30_day_start_date": "",
     "ma_lead_rollout_30_day_template": [],
     "ma_lead_rollout_30_day_log": {},
@@ -1372,6 +1373,38 @@ def normalize_ma_lead_weekly_metrics_log(raw_log):
         }
 
     return dict(sorted(normalized.items()))
+
+
+def normalize_ma_lead_weekly_metrics_baseline_week(raw_week):
+    try:
+        return date.fromisoformat(str(raw_week)).isoformat()
+    except ValueError:
+        return ""
+
+
+def calculate_ma_lead_metric_percent_change(baseline_value, current_value, direction):
+    try:
+        baseline_float = float(baseline_value)
+        current_float = float(current_value)
+    except (TypeError, ValueError):
+        return None
+
+    safe_direction = str(direction or "higher_is_better").strip().lower()
+    if safe_direction not in ("higher_is_better", "lower_is_better"):
+        safe_direction = "higher_is_better"
+
+    if baseline_float == 0:
+        if current_float == 0:
+            return 0.0
+        if safe_direction == "higher_is_better":
+            return 100.0 if current_float > 0 else -100.0
+        return 100.0 if current_float < 0 else -100.0
+
+    if safe_direction == "higher_is_better":
+        change = ((current_float - baseline_float) / abs(baseline_float)) * 100
+    else:
+        change = ((baseline_float - current_float) / abs(baseline_float)) * 100
+    return round(change, 1)
 
 
 def normalize_ma_lead_rollout_template(raw_template):
@@ -7357,6 +7390,9 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     lead_documents = load_lead_documents() or []
     weekly_metric_targets = normalize_ma_lead_weekly_metric_targets(app_settings.get("ma_lead_weekly_metric_targets"))
     weekly_metrics_log = normalize_ma_lead_weekly_metrics_log(app_settings.get("ma_lead_weekly_metrics_log"))
+    weekly_metrics_baseline_week = normalize_ma_lead_weekly_metrics_baseline_week(
+        app_settings.get("ma_lead_weekly_metrics_baseline_week")
+    )
     rollout_start_date = parse_date_value(app_settings.get("ma_lead_rollout_30_day_start_date")) or mountain_today()
     rollout_template = normalize_ma_lead_rollout_template(app_settings.get("ma_lead_rollout_30_day_template"))
     rollout_log = normalize_ma_lead_rollout_log(
@@ -7385,6 +7421,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     def _save_ma_lead_settings(
         updated_weekly_targets=None,
         updated_weekly_log=None,
+        updated_weekly_baseline_week=None,
         updated_rollout_start_date=None,
         updated_rollout_template=None,
         updated_rollout_log=None,
@@ -7402,6 +7439,11 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 **app_settings,
                 "ma_lead_weekly_metric_targets": updated_weekly_targets if updated_weekly_targets is not None else app_settings.get("ma_lead_weekly_metric_targets", {}),
                 "ma_lead_weekly_metrics_log": updated_weekly_log if updated_weekly_log is not None else app_settings.get("ma_lead_weekly_metrics_log", {}),
+                "ma_lead_weekly_metrics_baseline_week": (
+                    updated_weekly_baseline_week
+                    if updated_weekly_baseline_week is not None
+                    else app_settings.get("ma_lead_weekly_metrics_baseline_week", "")
+                ),
                 "ma_lead_rollout_30_day_start_date": (
                     updated_rollout_start_date.isoformat()
                     if isinstance(updated_rollout_start_date, date)
@@ -9740,6 +9782,40 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             selected_week_key = selected_week_start.isoformat()
             selected_week_entry = weekly_metrics_log.get(selected_week_key, {"values": {}, "notes": "", "saved_at": ""})
             selected_week_values = dict(selected_week_entry.get("values") or {})
+            available_weeks = sorted(weekly_metrics_log.keys(), reverse=True)
+            baseline_options = sorted(set(available_weeks + [selected_week_key]))
+
+            baseline_col, baseline_action_col = st.columns([2.4, 1.6])
+            with baseline_col:
+                selected_baseline_week = st.selectbox(
+                    "Baseline week",
+                    options=baseline_options,
+                    index=(
+                        baseline_options.index(weekly_metrics_baseline_week)
+                        if weekly_metrics_baseline_week in baseline_options
+                        else 0
+                    ),
+                    format_func=lambda week_key: (
+                        f"{date.fromisoformat(week_key).strftime('%b %d')} - "
+                        f"{(date.fromisoformat(week_key) + timedelta(days=6)).strftime('%b %d, %Y')}"
+                    ),
+                    key=f"{panel_key}_weekly_metrics_baseline_week",
+                    help="Percent improvement is calculated from this week to the selected week.",
+                )
+            with baseline_action_col:
+                if st.button("Save baseline", key=f"{panel_key}_save_weekly_metrics_baseline", use_container_width=True):
+                    _save_ma_lead_settings(updated_weekly_baseline_week=selected_baseline_week)
+                    st.success("Baseline week saved.")
+                    st.rerun()
+
+            reset_cols = st.columns([1.5, 2.5])
+            with reset_cols[0]:
+                if st.button("Start fresh", key=f"{panel_key}_reset_weekly_metrics_history", use_container_width=True):
+                    _save_ma_lead_settings(updated_weekly_log={}, updated_weekly_baseline_week="")
+                    st.success("Weekly metrics history cleared. You can now start fresh with new percentage trends.")
+                    st.rerun()
+            with reset_cols[1]:
+                st.caption("Start fresh clears all saved weekly metric snapshots and removes the baseline week.")
     
             metric_columns = st.columns(3)
             for index, metric in enumerate(weekly_metric_targets):
@@ -9795,6 +9871,81 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 _save_ma_lead_settings(updated_weekly_log=updated_log)
                 st.success("Weekly metrics saved.")
                 st.rerun()
+
+            st.markdown("#### Improvement vs baseline (percent)")
+            current_week_key = selected_week_key if selected_week_key in weekly_metrics_log else ""
+            baseline_week_key = selected_baseline_week if selected_baseline_week in weekly_metrics_log else ""
+            baseline_entry = weekly_metrics_log.get(baseline_week_key, {}) if baseline_week_key else {}
+            current_entry = weekly_metrics_log.get(current_week_key, {}) if current_week_key else {}
+            baseline_values = baseline_entry.get("values") or {}
+            current_values = current_entry.get("values") or {}
+
+            metric_progress_rows = []
+            for metric in weekly_metric_targets:
+                metric_key = metric["key"]
+                baseline_value = baseline_values.get(metric_key)
+                current_value = current_values.get(metric_key)
+                if not isinstance(baseline_value, (int, float)) or not isinstance(current_value, (int, float)):
+                    continue
+                percent_change = calculate_ma_lead_metric_percent_change(
+                    baseline_value,
+                    current_value,
+                    metric.get("direction"),
+                )
+                if percent_change is None:
+                    continue
+                metric_progress_rows.append(
+                    {
+                        "label": metric["label"],
+                        "unit": metric["unit"],
+                        "baseline": float(baseline_value),
+                        "current": float(current_value),
+                        "percent_change": percent_change,
+                    }
+                )
+
+            if baseline_week_key and current_week_key and metric_progress_rows:
+                improved_rows = sorted(
+                    [row for row in metric_progress_rows if row["percent_change"] > 0],
+                    key=lambda row: row["percent_change"],
+                    reverse=True,
+                )
+                slipped_rows = sorted(
+                    [row for row in metric_progress_rows if row["percent_change"] < 0],
+                    key=lambda row: row["percent_change"],
+                )
+
+                summary_cols = st.columns(2)
+                with summary_cols[0]:
+                    st.markdown("**Most improved areas**")
+                    if improved_rows:
+                        for row in improved_rows[:3]:
+                            st.markdown(
+                                f"- {row['label']}: {row['percent_change']:+.1f}% "
+                                f"({row['baseline']:g}{row['unit']} -> {row['current']:g}{row['unit']})"
+                            )
+                    else:
+                        st.caption("No positive changes yet for this comparison.")
+
+                with summary_cols[1]:
+                    st.markdown("**Needs improvement**")
+                    if slipped_rows:
+                        for row in slipped_rows[:3]:
+                            st.markdown(
+                                f"- {row['label']}: {row['percent_change']:+.1f}% "
+                                f"({row['baseline']:g}{row['unit']} -> {row['current']:g}{row['unit']})"
+                            )
+                    else:
+                        st.caption("No negative changes for this comparison.")
+
+                st.caption(
+                    f"Comparison: baseline week {date.fromisoformat(baseline_week_key).strftime('%b %d')} "
+                    f"vs selected week {date.fromisoformat(current_week_key).strftime('%b %d')}."
+                )
+            else:
+                st.caption(
+                    "Save at least two weekly snapshots (including a baseline week) to unlock percentage improvement insights."
+                )
     
             with st.expander("Edit weekly metric targets", expanded=False):
                 target_inputs = {}
@@ -9814,7 +9965,6 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                     st.rerun()
     
             st.markdown("#### Recent week trend")
-            available_weeks = sorted(weekly_metrics_log.keys(), reverse=True)
             if available_weeks:
                 for week_key in available_weeks[:8]:
                     entry = weekly_metrics_log.get(week_key) or {}
@@ -9832,9 +9982,12 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                             met_count += 1
                     week_start_day = date.fromisoformat(week_key)
                     week_end_day = week_start_day + timedelta(days=6)
+                    hit_rate = round((met_count / checked_count) * 100, 1) if checked_count else None
                     st.markdown(
                         f"- **{week_start_day.strftime('%b %d')} - {week_end_day.strftime('%b %d')}** · "
-                        f"goals hit: {met_count}/{checked_count or len(weekly_metric_targets)} · "
+                        f"goals hit: {met_count}/{checked_count or len(weekly_metric_targets)}"
+                        + (f" ({hit_rate:.1f}%)" if hit_rate is not None else "")
+                        + " · "
                         f"saved: {entry.get('saved_at') or 'n/a'}"
                     )
                     if entry.get("notes"):
