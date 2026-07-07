@@ -59,6 +59,8 @@ If the app shows `Detected DB vars: none`, the variables are not reaching the ru
 
 ## Build Roadmap: Make DayAnchor Your Only Productivity App
 
+Concrete execution backlog: see [SPRINT_BACKLOG.md](SPRINT_BACKLOG.md) for ticket-level plan, priorities, estimates, and acceptance criteria.
+
 This is the practical 6-step build order, mapped to this codebase with clear deliverables.
 
 ### Milestone 1: Universal Inbox + Smart Parse
