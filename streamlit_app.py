@@ -10814,6 +10814,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
         )
         app_settings = save_app_settings(
             {
+                **app_settings,
                 "default_category": settings_category,
                 "default_priority": settings_priority,
                 "default_duration": int(settings_duration),
