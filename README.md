@@ -30,6 +30,8 @@ Current capabilities include:
 - MA Lead page now includes a full Biweekly Check-ins tab with due queue, check-in capture, follow-up action tracking, trend snapshots, and leadership summary export.
 - Settings page with persistent defaults (category, priority, duration, schedule time,\timeline window).
 - Settings now includes a Feature Flags section so optional/experimental surfaces can be enabled or disabled without code changes.
+- Optional diagnostics panel is available via Feature Flags and shows render-time timings for key app sections.
+- MA Lead advanced sections now load one selected advanced section at a time to reduce render overhead.
 
 ## Run
 

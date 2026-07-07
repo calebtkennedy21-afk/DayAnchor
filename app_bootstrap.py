@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -105,6 +106,18 @@ def run_app(context, st_module=st):
     render_full_news_page = context.get("render_full_news_page")
     add_task = context["add_task"]
     news_manual_refresh_requested = False
+
+    perf_entries = []
+
+    def _record_perf(label, started_at):
+        elapsed_ms = round((perf_counter() - started_at) * 1000, 1)
+        perf_entries.append({"label": label, "ms": elapsed_ms})
+
+    def _timed_call(label, fn):
+        started_at = perf_counter()
+        result = fn()
+        _record_perf(label, started_at)
+        return result
 
     def render_saved_notes_panel(title, subtitle, setting_key, updated_key, panel_key, help_text):
         nonlocal app_settings
@@ -225,11 +238,15 @@ def run_app(context, st_module=st):
 
     initialize_database()
     app_settings = load_app_settings()
+    feature_flags = app_settings.get("feature_flags") if isinstance(app_settings, dict) else {}
+    if not isinstance(feature_flags, dict):
+        feature_flags = {}
+    diagnostics_enabled = bool(feature_flags.get("app_diagnostics_panel", False))
 
     inject_styles()
     render_hero()
 
-    personal_goals = load_personal_goals()
+    personal_goals = _timed_call("Load personal goals", load_personal_goals)
     personal_goal_summary = personal_goal_dashboard_summary(personal_goals)
 
     with st_module.sidebar:
@@ -478,11 +495,21 @@ def run_app(context, st_module=st):
         st_module.link_button("📊 Signal Scanner", "https://tradingbot-production-ed44.up.railway.app/?auth=eyJlbWFpbCI6ImNhbGViLnQua2VubmVkeTIxQGdtYWlsLmNvbSIsImV4cCI6MTc3OTkzODAxNX0.2zIv6Ip3AFgaTsAHNWzYU9GhlKIGUq8f_B_gA-7nBKE", use_container_width=True)
         st_module.link_button("💰 Budgeting Bot", "https://budgetingbot-production.up.railway.app/", use_container_width=True)
 
+        if diagnostics_enabled:
+            st_module.markdown("---")
+            st_module.markdown("### Diagnostics")
+            last_render_timings = list(st_module.session_state.get("diagnostics_last_render_timings") or [])
+            if last_render_timings:
+                for row in last_render_timings[:5]:
+                    st_module.caption(f"{row.get('label')}: {row.get('ms')} ms")
+            else:
+                st_module.caption("Diagnostics will appear after this render cycle.")
+
     st_module.markdown('<p class="section-lead">Navigate by lane and workflow area from the sidebar.</p>', unsafe_allow_html=True)
 
-    tasks = load_tasks()
-    surgical_cases = load_surgical_cases()
-    protocol_documents = load_protocol_documents()
+    tasks = _timed_call("Load tasks", load_tasks)
+    surgical_cases = _timed_call("Load surgical cases", load_surgical_cases)
+    protocol_documents = _timed_call("Load protocol documents", load_protocol_documents)
     
     # Fetch and cache news for the day (auto-refresh each morning + manual refresh option)
     import os
@@ -493,6 +520,7 @@ def run_app(context, st_module=st):
     cache_missing = "news_articles_cache" not in st_module.session_state
 
     if cache_missing or needs_daily_refresh or force_news_refresh:
+        news_refresh_started = perf_counter()
         if fetch_health_news:
             st_module.session_state.news_articles_cache = fetch_health_news(news_api_key, max_articles=10)
         else:
@@ -508,6 +536,7 @@ def run_app(context, st_module=st):
         else:
             st_module.session_state.news_summary_cache = None
             st_module.session_state.news_takeaways_cache = None
+        _record_perf("Refresh news pipeline", news_refresh_started)
     
     news_articles = st_module.session_state.news_articles_cache
     
@@ -686,6 +715,8 @@ def run_app(context, st_module=st):
 
     base_list_limit = 7 if density_preset == "Comfortable" else 4
     list_preview_limit = min(base_list_limit, 3) if focus_mode else base_list_limit
+
+    page_render_started = perf_counter()
 
     if current_page == "Overview":
         render_page_banner("overview", "DayAnchor Hub", "Personal, clinical, family, and reminders in one place.")
@@ -883,5 +914,22 @@ def run_app(context, st_module=st):
     else:
         render_page_banner("overview", "Control Tower", "High-level triage, fast capture, and the day’s most important work.")
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings)), panel_key="overview_page")
+
+    _record_perf(f"Render page: {current_page}", page_render_started)
+
+    if diagnostics_enabled:
+        sorted_perf = sorted(perf_entries, key=lambda item: item["ms"], reverse=True)
+        st_module.session_state["diagnostics_last_render_timings"] = sorted_perf
+
+        st_module.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+        st_module.markdown('<div class="panel-title"><h3>Diagnostics</h3><span>Render-time timings for this run</span></div>', unsafe_allow_html=True)
+        top_rows = sorted_perf[:8]
+        if top_rows:
+            for row in top_rows:
+                st_module.markdown(f"- **{row['label']}**: {row['ms']} ms")
+        else:
+            st_module.caption("No timing entries captured yet.")
+        st_module.markdown('</div>', unsafe_allow_html=True)
 
     render_page_footer()

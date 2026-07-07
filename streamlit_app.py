@@ -7428,6 +7428,30 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     app_settings = load_app_settings()
+    show_relationship_tracker = feature_flag_enabled(app_settings, "ma_lead_relationship_tracker")
+    show_weekly_metrics_dashboard = feature_flag_enabled(app_settings, "ma_lead_weekly_metrics_dashboard")
+
+    selected_advanced_tab_key = f"{panel_key}_selected_advanced_tab"
+    show_advanced_tabs_cached = bool(st.session_state.get(f"{panel_key}_show_advanced_tabs", False))
+    advanced_tab_labels = [
+        "Preceptor Sign-offs",
+        "Education Liaison",
+        "Autoclave Maintenance",
+        "Documents",
+        "30-Day Rollout",
+    ]
+    if show_weekly_metrics_dashboard:
+        advanced_tab_labels.insert(4, "Weekly Metrics Dashboard")
+    if show_relationship_tracker:
+        advanced_tab_labels.insert(0, "Relationship Tracker")
+
+    selected_advanced_tab_cached = str(st.session_state.get(selected_advanced_tab_key) or "")
+    if selected_advanced_tab_cached not in advanced_tab_labels:
+        selected_advanced_tab_cached = advanced_tab_labels[0] if advanced_tab_labels else ""
+
+    should_load_weekly_metrics = show_advanced_tabs_cached and selected_advanced_tab_cached == "Weekly Metrics Dashboard"
+    should_load_rollout_data = show_advanced_tabs_cached and selected_advanced_tab_cached == "30-Day Rollout"
+
     lead_issues = load_lead_clinical_issues() or []
     sop_entries = load_lead_sop_entries() or []
     relationship_touchpoints = load_lead_relationship_touchpoints() or []
@@ -7437,17 +7461,26 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     education_requests = load_lead_education_requests() or []
     autoclave_items = load_autoclave_maintenance_items() or []
     lead_documents = load_lead_documents() or []
-    weekly_metric_targets = normalize_ma_lead_weekly_metric_targets(app_settings.get("ma_lead_weekly_metric_targets"))
-    weekly_metrics_log = normalize_ma_lead_weekly_metrics_log(app_settings.get("ma_lead_weekly_metrics_log"))
-    weekly_metrics_baseline_week = normalize_ma_lead_weekly_metrics_baseline_week(
-        app_settings.get("ma_lead_weekly_metrics_baseline_week")
-    )
-    rollout_start_date = parse_date_value(app_settings.get("ma_lead_rollout_30_day_start_date")) or mountain_today()
-    rollout_template = normalize_ma_lead_rollout_template(app_settings.get("ma_lead_rollout_30_day_template"))
-    rollout_log = normalize_ma_lead_rollout_log(
-        app_settings.get("ma_lead_rollout_30_day_log"),
-        allowed_items=rollout_template,
-    )
+    weekly_metric_targets = []
+    weekly_metrics_log = {}
+    weekly_metrics_baseline_week = ""
+    if should_load_weekly_metrics:
+        weekly_metric_targets = normalize_ma_lead_weekly_metric_targets(app_settings.get("ma_lead_weekly_metric_targets"))
+        weekly_metrics_log = normalize_ma_lead_weekly_metrics_log(app_settings.get("ma_lead_weekly_metrics_log"))
+        weekly_metrics_baseline_week = normalize_ma_lead_weekly_metrics_baseline_week(
+            app_settings.get("ma_lead_weekly_metrics_baseline_week")
+        )
+
+    rollout_start_date = mountain_today()
+    rollout_template = []
+    rollout_log = {}
+    if should_load_rollout_data:
+        rollout_start_date = parse_date_value(app_settings.get("ma_lead_rollout_30_day_start_date")) or mountain_today()
+        rollout_template = normalize_ma_lead_rollout_template(app_settings.get("ma_lead_rollout_30_day_template"))
+        rollout_log = normalize_ma_lead_rollout_log(
+            app_settings.get("ma_lead_rollout_30_day_log"),
+            allowed_items=rollout_template,
+        )
     raw_biweekly_checkins = list(app_settings.get("ma_lead_biweekly_checkins") or [])
     raw_biweekly_actions = list(app_settings.get("ma_lead_biweekly_action_items") or [])
     biweekly_template = normalize_ma_lead_biweekly_template(app_settings.get("ma_lead_biweekly_template"))
@@ -7958,8 +7991,6 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    show_relationship_tracker = feature_flag_enabled(app_settings, "ma_lead_relationship_tracker")
-    show_weekly_metrics_dashboard = feature_flag_enabled(app_settings, "ma_lead_weekly_metrics_dashboard")
     show_advanced_tabs = st.toggle(
         "Show advanced MA Lead sections",
         value=False,
@@ -7977,23 +8008,22 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         "Leadership Development",
     ]
 
-    advanced_tab_labels = [
-        "Preceptor Sign-offs",
-        "Education Liaison",
-        "Autoclave Maintenance",
-        "Documents",
-        "30-Day Rollout",
-    ]
-
-    if show_weekly_metrics_dashboard:
-        advanced_tab_labels.insert(4, "Weekly Metrics Dashboard")
-
-    if show_relationship_tracker:
-        advanced_tab_labels.insert(0, "Relationship Tracker")
-
     visible_tab_labels = list(primary_tab_labels)
-    if show_advanced_tabs:
-        visible_tab_labels.extend(advanced_tab_labels)
+    selected_advanced_tab = ""
+    if show_advanced_tabs and advanced_tab_labels:
+        preferred_tab_label = str(st.session_state.get(open_tab_state_key) or "").strip()
+        default_advanced_tab = preferred_tab_label if preferred_tab_label in advanced_tab_labels else selected_advanced_tab_cached
+        if default_advanced_tab not in advanced_tab_labels:
+            default_advanced_tab = advanced_tab_labels[0]
+
+        selected_advanced_tab = st.selectbox(
+            "Advanced section",
+            options=advanced_tab_labels,
+            index=advanced_tab_labels.index(default_advanced_tab),
+            key=selected_advanced_tab_key,
+            help="Only the selected advanced section is loaded to keep MA Lead responsive.",
+        )
+        visible_tab_labels.append(selected_advanced_tab)
 
     preferred_tab_label = str(st.session_state.get(open_tab_state_key) or "").strip()
     if preferred_tab_label in visible_tab_labels:
