@@ -138,8 +138,8 @@ def overview_runtime_settings(app_settings):
         "admin_buffer_minutes": safe_int(app_settings.get("overview_admin_buffer_minutes", 60), 60),
         "shift_minutes": safe_int(app_settings.get("overview_shift_minutes", 480), 480),
         "focus_window_minutes": safe_int(app_settings.get("overview_focus_window_minutes", 90), 90),
-        "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Thursday", "Monday"]),
-        "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Tuesday"]),
+        "clinic_weekdays": app_settings.get("overview_clinic_weekdays", ["Tuesday", "Thursday"]),
+        "admin_weekdays": app_settings.get("overview_admin_weekdays", ["Monday", "Friday"]),
         "procedure_friday_frequency_weeks": safe_int(app_settings.get("overview_procedure_friday_frequency_weeks", 2), 2),
         "procedure_friday_cycle_offset": safe_int(app_settings.get("overview_procedure_friday_cycle_offset", 0), 0),
     }
@@ -149,8 +149,8 @@ def resolve_overview_day_context(overview_settings, active_tasks, personal_tasks
     today = reference_date or mountain_today()
     mode = overview_settings.get("day_mode", "Auto")
     weekday_name = today.strftime("%A")
-    clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Monday", "Thursday"]
-    admin_weekdays = overview_settings.get("admin_weekdays") or ["Tuesday"]
+    clinic_weekdays = overview_settings.get("clinic_weekdays") or ["Tuesday", "Thursday"]
+    admin_weekdays = overview_settings.get("admin_weekdays") or ["Monday", "Friday"]
     cadence_weeks = max(1, safe_int(overview_settings.get("procedure_friday_frequency_weeks", 2), 2))
     cycle_offset = safe_int(overview_settings.get("procedure_friday_cycle_offset", 0), 0)
     week_number = today.isocalendar().week

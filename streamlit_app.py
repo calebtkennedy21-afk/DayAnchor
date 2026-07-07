@@ -188,19 +188,20 @@ DEFAULT_APP_SETTINGS = {
     "overview_admin_buffer_minutes": 60,
     "overview_shift_minutes": 480,
     "overview_focus_window_minutes": 90,
-    "overview_clinic_weekdays": ["Thursday", "Monday"],
-    "overview_admin_weekdays": ["Tuesday"],
+    "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+    "overview_admin_weekdays": ["Monday", "Friday"],
     "calendar_weekday_assignments": {
-        "Monday": ["BB clinic"],
-        "Tuesday": ["Office day"],
+        "Monday": ["Office day"],
+        "Tuesday": ["Dr. Boyer clinic"],
         "Wednesday": ["WFH personal catch-up"],
-        "Thursday": ["BB clinic"],
-        "Friday": ["Dr. Rozek TenJet"],
+        "Thursday": ["Dr. Boyer clinic"],
+        "Friday": ["Office day"],
     },
     "calendar_date_overrides": {},
     "overview_procedure_friday_frequency_weeks": 2,
     "overview_procedure_friday_cycle_offset": 0,
-    "or_fixed_weekday": "Friday",
+    "or_fixed_weekday": "Monday",
+    "or_secondary_fixed_weekday": "Wednesday",
     "or_alternating_days": ["Monday", "Wednesday"],
     "or_alternating_cycle_offset": 0,
     "default_surgeon_label": "Dr. Braden Boyer (BB)",
@@ -3266,11 +3267,11 @@ def weekday_name_to_index(name):
 
 def default_calendar_weekday_assignments():
     return {
-        "Monday": ["BB clinic"],
-        "Tuesday": ["Office day"],
+        "Monday": ["Office day"],
+        "Tuesday": ["Dr. Boyer clinic"],
         "Wednesday": ["WFH personal catch-up"],
-        "Thursday": ["BB clinic"],
-        "Friday": ["Dr. Rozek TenJet"],
+        "Thursday": ["Dr. Boyer clinic"],
+        "Friday": ["Office day"],
     }
 
 
@@ -3333,7 +3334,12 @@ def calendar_badge_palette(label):
 
 
 def or_cadence_label_for_day(day, app_settings):
-    fixed_weekday = weekday_name_to_index(app_settings.get("or_fixed_weekday", "Friday"))
+    fixed_weekday = weekday_name_to_index(app_settings.get("or_fixed_weekday", "Monday"))
+    secondary_fixed_weekday_name = str(app_settings.get("or_secondary_fixed_weekday") or "").strip()
+    secondary_fixed_weekday = None
+    if secondary_fixed_weekday_name in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
+        secondary_fixed_weekday = weekday_name_to_index(secondary_fixed_weekday_name)
+
     alternating_days = app_settings.get("or_alternating_days") or ["Monday", "Wednesday"]
     if len(alternating_days) < 2:
         alternating_days = ["Monday", "Wednesday"]
@@ -3342,8 +3348,12 @@ def or_cadence_label_for_day(day, app_settings):
     cycle_offset = safe_int(app_settings.get("or_alternating_cycle_offset", 0), 0)
 
     weekday = day.weekday()
-    if weekday == fixed_weekday:
+    if weekday == fixed_weekday or (secondary_fixed_weekday is not None and weekday == secondary_fixed_weekday):
         return f"OR {day.strftime('%a')}"
+
+    # If a second fixed OR weekday is set, skip alternating cadence labels.
+    if secondary_fixed_weekday is not None:
+        return None
 
     alternating_weekday = alt_day_a if ((day.isocalendar().week + cycle_offset) % 2 == 0) else alt_day_b
     if weekday == alternating_weekday:
@@ -10750,9 +10760,18 @@ def render_settings_panel(app_settings, panel_key="settings"):
     settings_or_fixed_weekday = st.selectbox(
         "Weekly fixed OR day",
         ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-        index=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(app_settings.get("or_fixed_weekday", "Friday"))
-        if app_settings.get("or_fixed_weekday", "Friday") in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        else 4,
+        index=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(app_settings.get("or_fixed_weekday", "Monday"))
+        if app_settings.get("or_fixed_weekday", "Monday") in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        else 0,
+    )
+    settings_or_secondary_fixed_weekday = st.selectbox(
+        "Secondary fixed OR day (optional)",
+        ["None", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        index=["None", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].index(
+            app_settings.get("or_secondary_fixed_weekday", "Wednesday") or "None"
+        )
+        if (app_settings.get("or_secondary_fixed_weekday", "Wednesday") or "None") in ["None", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        else 3,
     )
     settings_or_alternating_days = st.multiselect(
         "Alternating OR weekdays (choose two)",
@@ -10806,6 +10825,28 @@ def render_settings_panel(app_settings, panel_key="settings"):
         st.success("Feature flags reset to defaults.")
         st.rerun()
 
+    st.markdown("### Permanent Schedule Preset")
+    st.caption("Apply your new permanent weekly schedule and OR cadence to current saved settings.")
+    if st.button("Apply Monday/Friday Office + Tue/Thu Dr. Boyer + Wed WFH", key=f"{panel_key}_apply_permanent_schedule"):
+        app_settings = save_app_settings(
+            {
+                **app_settings,
+                "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+                "overview_admin_weekdays": ["Monday", "Friday"],
+                "calendar_weekday_assignments": {
+                    "Monday": ["Office day"],
+                    "Tuesday": ["Dr. Boyer clinic"],
+                    "Wednesday": ["WFH personal catch-up"],
+                    "Thursday": ["Dr. Boyer clinic"],
+                    "Friday": ["Office day"],
+                },
+                "or_fixed_weekday": "Monday",
+                "or_secondary_fixed_weekday": "Wednesday",
+            }
+        )
+        st.success("Permanent schedule preset applied.")
+        st.rerun()
+
     if st.button("Save Settings", type="primary"):
         parsed_closeout_template = normalize_clinic_day_closeout_template(settings_closeout_template_text)
         normalized_closeout_log = normalize_clinic_day_closeout_log(
@@ -10831,6 +10872,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "schedule_capacity_days_per_week": int(settings_capacity_days_per_week),
                 "default_surgeon_label": settings_default_surgeon_label.strip() or "Dr. Braden Boyer (BB)",
                 "or_fixed_weekday": settings_or_fixed_weekday,
+                "or_secondary_fixed_weekday": None if settings_or_secondary_fixed_weekday == "None" else settings_or_secondary_fixed_weekday,
                 "or_alternating_days": settings_or_alternating_days,
                 "or_alternating_cycle_offset": int(settings_or_cycle_offset),
                 "clinic_day_closeout_template": parsed_closeout_template,
