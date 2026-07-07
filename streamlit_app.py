@@ -138,6 +138,33 @@ if "lead_documents" not in st.session_state:
     st.session_state.lead_documents = []
 
 
+FEATURE_FLAG_DEFINITIONS = [
+    {
+        "key": "ma_lead_relationship_tracker",
+        "label": "MA Lead Relationship Tracker",
+        "description": "Show the relationship follow-through tracker tab in MA Lead.",
+        "default": False,
+    },
+    {
+        "key": "ma_lead_weekly_metrics_dashboard",
+        "label": "MA Lead Weekly Metrics Dashboard",
+        "description": "Show the Weekly Metrics Dashboard tab in MA Lead advanced sections.",
+        "default": False,
+    },
+    {
+        "key": "app_diagnostics_panel",
+        "label": "App Diagnostics Panel",
+        "description": "Enable diagnostic controls and timing surfaces where available.",
+        "default": False,
+    },
+]
+
+FEATURE_FLAG_DEFAULTS = {
+    item["key"]: bool(item.get("default", False))
+    for item in FEATURE_FLAG_DEFINITIONS
+}
+
+
 DEFAULT_APP_SETTINGS = {
     "default_category": "Personal",
     "default_priority": "medium",
@@ -212,6 +239,7 @@ DEFAULT_APP_SETTINGS = {
     "ma_lead_development": {},
     "ma_lead_daily_leadership_log": {},
     "ma_lead_health_thresholds": {},
+    "feature_flags": dict(FEATURE_FLAG_DEFAULTS),
 }
 
 
@@ -3523,6 +3551,22 @@ def db_health_status():
         return "error", "Database unreachable right now."
 
 
+def normalize_feature_flags(raw_flags):
+    normalized = dict(FEATURE_FLAG_DEFAULTS)
+    if isinstance(raw_flags, dict):
+        for key in FEATURE_FLAG_DEFAULTS:
+            if key in raw_flags:
+                normalized[key] = bool(raw_flags.get(key))
+    return normalized
+
+
+def feature_flag_enabled(app_settings, flag_key):
+    flags = normalize_feature_flags((app_settings or {}).get("feature_flags"))
+    if flag_key not in FEATURE_FLAG_DEFAULTS:
+        return False
+    return bool(flags.get(flag_key, FEATURE_FLAG_DEFAULTS[flag_key]))
+
+
 def load_app_settings():
     if db_enabled():
         try:
@@ -3534,6 +3578,7 @@ def load_app_settings():
                         payload = json.loads(row["payload"])
                         merged = dict(DEFAULT_APP_SETTINGS)
                         merged.update(payload)
+                        merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
                         if merged.get("overview_site_label") == "Outpatient hospital":
                             merged["overview_site_label"] = "MOA (Mercy Orthopedic Associates)"
                         return merged
@@ -3544,15 +3589,19 @@ def load_app_settings():
     if isinstance(stored, dict):
         merged = dict(DEFAULT_APP_SETTINGS)
         merged.update(stored)
+        merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
         if merged.get("overview_site_label") == "Outpatient hospital":
             merged["overview_site_label"] = "MOA (Mercy Orthopedic Associates)"
         return merged
-    return dict(DEFAULT_APP_SETTINGS)
+    merged = dict(DEFAULT_APP_SETTINGS)
+    merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
+    return merged
 
 
 def save_app_settings(settings):
     merged = dict(DEFAULT_APP_SETTINGS)
     merged.update(settings)
+    merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
 
     if db_enabled():
         try:
@@ -7909,8 +7958,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div style="height: 0.6rem;"></div>', unsafe_allow_html=True)
-    show_relationship_tracker = False
-    show_weekly_metrics_dashboard = False
+    show_relationship_tracker = feature_flag_enabled(app_settings, "ma_lead_relationship_tracker")
+    show_weekly_metrics_dashboard = feature_flag_enabled(app_settings, "ma_lead_weekly_metrics_dashboard")
     show_advanced_tabs = st.toggle(
         "Show advanced MA Lead sections",
         value=False,
@@ -10703,6 +10752,30 @@ def render_settings_panel(app_settings, panel_key="settings"):
         help="This list powers the generic end-of-clinic-day checklist on the Daily Review page.",
     )
 
+    st.markdown("### Feature Flags")
+    st.caption("Enable or disable experimental or optional surfaces without editing code.")
+    current_feature_flags = normalize_feature_flags(app_settings.get("feature_flags"))
+    edited_feature_flags = {}
+    for item in FEATURE_FLAG_DEFINITIONS:
+        flag_key = item["key"]
+        edited_feature_flags[flag_key] = st.toggle(
+            item["label"],
+            value=bool(current_feature_flags.get(flag_key, item.get("default", False))),
+            key=f"{panel_key}_feature_flag_{flag_key}",
+            help=item.get("description") or "",
+        )
+
+    feature_action_cols = st.columns([1, 3])
+    if feature_action_cols[0].button("Reset feature flags", key=f"{panel_key}_reset_feature_flags"):
+        app_settings = save_app_settings(
+            {
+                **app_settings,
+                "feature_flags": dict(FEATURE_FLAG_DEFAULTS),
+            }
+        )
+        st.success("Feature flags reset to defaults.")
+        st.rerun()
+
     if st.button("Save Settings", type="primary"):
         parsed_closeout_template = normalize_clinic_day_closeout_template(settings_closeout_template_text)
         normalized_closeout_log = normalize_clinic_day_closeout_log(
@@ -10731,6 +10804,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "or_alternating_cycle_offset": int(settings_or_cycle_offset),
                 "clinic_day_closeout_template": parsed_closeout_template,
                 "clinic_day_closeout_log": normalized_closeout_log,
+                "feature_flags": edited_feature_flags,
             }
         )
         st.success("Settings saved.")
