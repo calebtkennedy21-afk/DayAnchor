@@ -330,6 +330,7 @@ MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS = {
     "wins_prompt": "Wins since last check-in",
     "blockers_prompt": "Current blockers",
     "clarifications_prompt": "Clarifications needed",
+    "morale_prompt": "Current clinic morale",
     "coaching_focus_prompt": "Coaching focus (one behavior)",
     "support_needed_prompt": "Support needed from MA Lead",
 }
@@ -1638,6 +1639,7 @@ def normalize_ma_lead_biweekly_checkins(raw_items):
                 "wins": str(raw_item.get("wins") or "").strip(),
                 "blockers": str(raw_item.get("blockers") or "").strip(),
                 "clarifications": str(raw_item.get("clarifications") or "").strip(),
+                "morale_snapshot": str(raw_item.get("morale_snapshot") or "").strip(),
                 "coaching_focus": str(raw_item.get("coaching_focus") or "").strip(),
                 "support_needed": str(raw_item.get("support_needed") or "").strip(),
                 "public_notes": str(raw_item.get("public_notes") or "").strip(),
@@ -9393,6 +9395,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             template_wins = st.text_input("Prompt - Wins", value=biweekly_template.get("wins_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["wins_prompt"])
             template_blockers = st.text_input("Prompt - Blockers", value=biweekly_template.get("blockers_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["blockers_prompt"])
             template_clarifications = st.text_input("Prompt - Clarifications", value=biweekly_template.get("clarifications_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["clarifications_prompt"])
+            template_morale = st.text_input("Prompt - Clinic Morale", value=biweekly_template.get("morale_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["morale_prompt"])
             template_coaching = st.text_input("Prompt - Coaching Focus", value=biweekly_template.get("coaching_focus_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["coaching_focus_prompt"])
             template_support = st.text_input("Prompt - Support Needed", value=biweekly_template.get("support_needed_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["support_needed_prompt"])
 
@@ -9407,6 +9410,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         "wins_prompt": template_wins,
                         "blockers_prompt": template_blockers,
                         "clarifications_prompt": template_clarifications,
+                        "morale_prompt": template_morale,
                         "coaching_focus_prompt": template_coaching,
                         "support_needed_prompt": template_support,
                     },
@@ -9427,6 +9431,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         st.markdown(f"**Latest coaching focus:** {latest.get('coaching_focus')}")
                     if latest.get("support_needed"):
                         st.markdown(f"**Latest support needed:** {latest.get('support_needed')}")
+                    if latest.get("morale_snapshot"):
+                        st.markdown(f"**Latest morale snapshot:** {latest.get('morale_snapshot')}")
                     if st.button("Use this MA in check-in form", key=f"{panel_key}_queue_select_{row['ma_name']}"):
                         st.session_state[f"{panel_key}_biweekly_ma_name"] = row["ma_name"]
                         st.rerun()
@@ -9458,6 +9464,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             wins_text = st.text_area(biweekly_template.get("wins_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["wins_prompt"], height=80)
             blockers_text = st.text_area(biweekly_template.get("blockers_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["blockers_prompt"], height=80)
             clarifications_text = st.text_area(biweekly_template.get("clarifications_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["clarifications_prompt"], height=80)
+            morale_text = st.text_area(biweekly_template.get("morale_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["morale_prompt"], height=80)
             coaching_focus_text = st.text_area(biweekly_template.get("coaching_focus_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["coaching_focus_prompt"], height=80)
             support_needed_text = st.text_area(biweekly_template.get("support_needed_prompt") or MA_LEAD_BIWEEKLY_TEMPLATE_DEFAULTS["support_needed_prompt"], height=80)
 
@@ -9488,6 +9495,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                         "wins": wins_text.strip(),
                         "blockers": blockers_text.strip(),
                         "clarifications": clarifications_text.strip(),
+                        "morale_snapshot": morale_text.strip(),
                         "coaching_focus": coaching_focus_text.strip(),
                         "support_needed": support_needed_text.strip(),
                         "public_notes": checkin_public_notes.strip(),
@@ -9609,8 +9617,78 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 )
                 if item.get("coaching_focus"):
                     st.caption(f"Coaching focus: {item.get('coaching_focus')}")
+                if item.get("morale_snapshot"):
+                    st.caption(f"Morale: {item.get('morale_snapshot')}")
         else:
             st.caption("No check-ins saved yet.")
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### MA progress tracker")
+        if biweekly_checkins:
+            tracker_ma_options = sorted({str(item.get("ma_name") or "").strip() for item in biweekly_checkins if str(item.get("ma_name") or "").strip()})
+            tracker_selected_ma = st.selectbox(
+                "Select MA for trend view",
+                options=tracker_ma_options,
+                key=f"{panel_key}_tracker_ma_select",
+            )
+
+            selected_ma_checkins = sorted(
+                [
+                    item
+                    for item in biweekly_checkins
+                    if str(item.get("ma_name") or "").strip() == tracker_selected_ma
+                ],
+                key=lambda item: item.get("checkin_date") or date.min,
+            )
+            selected_ma_actions = [
+                item
+                for item in biweekly_actions
+                if str(item.get("ma_name") or "").strip() == tracker_selected_ma
+            ]
+
+            if selected_ma_checkins:
+                latest_checkin = selected_ma_checkins[-1]
+                conf_values = [item.get("confidence_score") for item in selected_ma_checkins if isinstance(item.get("confidence_score"), int)]
+                workload_values = [item.get("workload_score") for item in selected_ma_checkins if isinstance(item.get("workload_score"), int)]
+                avg_confidence = round(sum(conf_values) / len(conf_values), 1) if conf_values else None
+                avg_workload = round(sum(workload_values) / len(workload_values), 1) if workload_values else None
+                ma_open_actions = len([item for item in selected_ma_actions if item.get("status") == "open"])
+                ma_completed_actions = len([item for item in selected_ma_actions if item.get("status") == "completed"])
+
+                tracker_metric_cols = st.columns(5)
+                tracker_metric_cols[0].metric("Check-ins logged", len(selected_ma_checkins))
+                tracker_metric_cols[1].metric("Latest status", str(latest_checkin.get("status") or "n/a").replace("_", " ").title())
+                tracker_metric_cols[2].metric("Avg confidence", f"{avg_confidence}/5" if avg_confidence is not None else "n/a")
+                tracker_metric_cols[3].metric("Avg workload", f"{avg_workload}/5" if avg_workload is not None else "n/a")
+                tracker_metric_cols[4].metric("Open actions", ma_open_actions, delta=f"Completed: {ma_completed_actions}")
+
+                trend_chart_data = {
+                    "Confidence": [item.get("confidence_score") if isinstance(item.get("confidence_score"), int) else None for item in selected_ma_checkins],
+                    "Workload": [item.get("workload_score") if isinstance(item.get("workload_score"), int) else None for item in selected_ma_checkins],
+                }
+                st.caption("Confidence and workload trend across check-ins (oldest to newest).")
+                st.line_chart(trend_chart_data)
+
+                history_rows = []
+                for item in reversed(selected_ma_checkins):
+                    history_rows.append(
+                        {
+                            "Check-in date": item.get("checkin_date").isoformat() if isinstance(item.get("checkin_date"), date) else "",
+                            "Next due": item.get("next_due_date").isoformat() if isinstance(item.get("next_due_date"), date) else "",
+                            "Status": str(item.get("status") or "").replace("_", " ").title(),
+                            "Confidence": item.get("confidence_score"),
+                            "Workload": item.get("workload_score"),
+                            "Clinic morale": item.get("morale_snapshot") or "",
+                            "Coaching focus": item.get("coaching_focus") or "",
+                            "Support needed": item.get("support_needed") or "",
+                        }
+                    )
+
+                st.dataframe(history_rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No check-ins found for this MA yet.")
+        else:
+            st.caption("Tracker will appear after the first biweekly check-in is saved.")
 
         st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
         st.markdown("#### Leadership summary export")
@@ -9643,6 +9721,12 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             if support_text:
                 latest_support_requests.append(f"- {ma_name}: {support_text}")
 
+        latest_morale_snapshots = []
+        for ma_name, item in sorted(latest_by_ma.items()):
+            morale_text = str(item.get("morale_snapshot") or "").strip()
+            if morale_text:
+                latest_morale_snapshots.append(f"- {ma_name}: {morale_text}")
+
         completed_actions = [item for item in summary_actions if item.get("status") == "completed"]
         followup_rate = (len(completed_actions) / len(summary_actions)) if summary_actions else 0.0
         avg_conf_summary = (
@@ -9656,8 +9740,10 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
         blocker_lines = [f"- {label} ({count})" for label, count in top_blockers] or ["- No blocker themes captured."]
         support_lines = latest_support_requests or ["- No active support requests captured."]
+        morale_lines = latest_morale_snapshots or ["- No morale snapshots captured."]
         blocker_block = "\n".join(blocker_lines)
         support_block = "\n".join(support_lines)
+        morale_block = "\n".join(morale_lines)
         private_note_lines = []
         if biweekly_settings.get("include_private_notes_in_export"):
             private_note_lines = [
@@ -9680,6 +9766,9 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             "\n"
             "Open Support Requests\n"
             f"{support_block}\n"
+            "\n"
+            "Morale Snapshot\n"
+            f"{morale_block}\n"
             "\n"
             "Follow-up Completion\n"
             f"- Follow-up completion rate: {int(round(followup_rate * 100))}% ({len(completed_actions)}/{len(summary_actions)})\n"
