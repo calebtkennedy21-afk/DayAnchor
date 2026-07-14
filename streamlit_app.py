@@ -7440,6 +7440,24 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     app_settings = load_app_settings()
+    persistence_status, persistence_message = db_health_status()
+    if persistence_status == "ok":
+        persistence_mode_label = "Database persistence active"
+        persistence_badge_style = "background: rgba(16, 185, 129, 0.14); color: #065f46; border: 1px solid rgba(16, 185, 129, 0.35);"
+    else:
+        persistence_mode_label = "Session fallback active"
+        persistence_badge_style = "background: rgba(245, 158, 11, 0.14); color: #92400e; border: 1px solid rgba(245, 158, 11, 0.35);"
+    st.markdown(
+        (
+            "<div style='margin:0.2rem 0 0.8rem 0; display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;'>"
+            f"<span style='padding:0.26rem 0.62rem; border-radius:999px; font-size:0.78rem; font-weight:700; {persistence_badge_style}'>"
+            f"{persistence_mode_label}</span>"
+            f"<span style='font-size:0.79rem; color:#475569;'>{persistence_message}</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
     show_relationship_tracker = feature_flag_enabled(app_settings, "ma_lead_relationship_tracker")
     show_weekly_metrics_dashboard = feature_flag_enabled(app_settings, "ma_lead_weekly_metrics_dashboard")
 
