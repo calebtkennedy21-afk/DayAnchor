@@ -9358,7 +9358,13 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
             )
             suggested_ma_name = prioritized_queue[0]["ma_name"]
 
-        completed_this_cycle = [item for item in biweekly_checkins if isinstance(item.get("checkin_date"), date) and item.get("checkin_date") >= cycle_start]
+        completed_this_cycle = [
+            item
+            for item in biweekly_checkins
+            if isinstance(item.get("checkin_date"), date)
+            and cycle_start <= item.get("checkin_date") <= today_value
+        ]
+        all_completed_checkins = [item for item in biweekly_checkins if isinstance(item.get("checkin_date"), date)]
         open_actions = [item for item in biweekly_actions if item.get("status") == "open"]
         overdue_actions = [item for item in open_actions if isinstance(item.get("due_date"), date) and item.get("due_date") < today_value]
         due_now_count = len([item for item in queue_rows if item["is_due_now"]])
@@ -9596,11 +9602,36 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
 
         st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
         st.markdown("#### Check-in trends")
-        status_counts = Counter(item.get("status") for item in completed_this_cycle if item.get("status"))
+        trend_window_days = st.number_input(
+            "Trend lookback (days)",
+            min_value=7,
+            max_value=365,
+            value=max(14, cadence_days),
+            step=1,
+            key=f"{panel_key}_biweekly_trend_days",
+        )
+        trend_start = today_value - timedelta(days=int(trend_window_days) - 1)
+        trend_checkins = [
+            item
+            for item in all_completed_checkins
+            if trend_start <= item.get("checkin_date") <= today_value
+        ]
+        status_counts = Counter(item.get("status") for item in trend_checkins if item.get("status"))
+        all_time_status_counts = Counter(item.get("status") for item in all_completed_checkins if item.get("status"))
         trend_cols = st.columns(3)
         trend_cols[0].metric("On track", status_counts.get("on_track", 0))
         trend_cols[1].metric("Needs support", status_counts.get("needs_support", 0))
         trend_cols[2].metric("At risk", status_counts.get("at_risk", 0))
+        st.caption(
+            f"Trend window: {trend_start.strftime('%b %d, %Y')} - {today_value.strftime('%b %d, %Y')} · "
+            f"check-ins counted: {len(trend_checkins)}"
+        )
+        st.caption(
+            "All-time status totals: "
+            f"on_track={all_time_status_counts.get('on_track', 0)}, "
+            f"needs_support={all_time_status_counts.get('needs_support', 0)}, "
+            f"at_risk={all_time_status_counts.get('at_risk', 0)}"
+        )
 
         if biweekly_checkins:
             recent_by_ma = {}
@@ -9689,6 +9720,43 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 st.caption("No check-ins found for this MA yet.")
         else:
             st.caption("Tracker will appear after the first biweekly check-in is saved.")
+
+        st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Previous check-ins (all MAs)")
+        if all_completed_checkins:
+            history_ma_options = sorted({str(item.get("ma_name") or "").strip() for item in all_completed_checkins if str(item.get("ma_name") or "").strip()})
+            selected_history_ma = st.selectbox(
+                "Quick filter by MA",
+                options=["All MAs"] + history_ma_options,
+                key=f"{panel_key}_history_ma_filter",
+            )
+            filtered_history_checkins = all_completed_checkins
+            if selected_history_ma != "All MAs":
+                filtered_history_checkins = [
+                    item
+                    for item in all_completed_checkins
+                    if str(item.get("ma_name") or "").strip() == selected_history_ma
+                ]
+
+            all_history_rows = []
+            for item in sorted(filtered_history_checkins, key=lambda row: row.get("checkin_date") or date.min, reverse=True):
+                all_history_rows.append(
+                    {
+                        "MA": item.get("ma_name") or "",
+                        "Check-in date": item.get("checkin_date").isoformat() if isinstance(item.get("checkin_date"), date) else "",
+                        "Status": str(item.get("status") or "").replace("_", " ").title(),
+                        "Confidence": item.get("confidence_score"),
+                        "Workload": item.get("workload_score"),
+                        "Clinic morale": item.get("morale_snapshot") or "",
+                        "Coaching focus": item.get("coaching_focus") or "",
+                        "Support needed": item.get("support_needed") or "",
+                        "General notes": item.get("public_notes") or "",
+                    }
+                )
+            st.caption(f"Showing {len(all_history_rows)} check-in(s).")
+            st.dataframe(all_history_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No previous check-ins saved yet.")
 
         st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
         st.markdown("#### Leadership summary export")
