@@ -20,15 +20,21 @@ def recurrence_label(rule, interval):
     return "No recurrence"
 
 
-def format_due(task):
-    due_date = task.get("due_date")
+def _extract_field(value, field_name):
+    if isinstance(value, dict):
+        return value.get(field_name)
+    return value
+
+
+def format_due(task_or_due_date):
+    due_date = _extract_field(task_or_due_date, "due_date")
     if not due_date:
         return "No due date"
     return due_date.strftime("%b %d, %Y") if hasattr(due_date, "strftime") else str(due_date)
 
 
-def format_due_badge(task):
-    due_date = task.get("due_date")
+def format_due_badge(task_or_due_date):
+    due_date = _extract_field(task_or_due_date, "due_date")
     if not due_date:
         return "No due"
     if not hasattr(due_date, "strftime"):

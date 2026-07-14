@@ -25,12 +25,14 @@ def test_recurrence_label_values():
 
 def test_format_due_with_date_and_missing():
     assert format_due({"due_date": date(2026, 5, 17)}) == "May 17, 2026"
+    assert format_due(date(2026, 5, 17)) == "May 17, 2026"
     assert format_due({}) == "No due date"
 
 
 def test_format_due_badge_handles_year_logic_and_missing():
     current_year = date.today().year
     assert format_due_badge({"due_date": date(current_year, 5, 17)}) == "May 17"
+    assert format_due_badge(date(current_year, 5, 17)) == "May 17"
     assert format_due_badge({"due_date": date(current_year + 1, 5, 17)}) == f"May 17, {current_year + 1}"
     assert format_due_badge({}) == "No due"
 
