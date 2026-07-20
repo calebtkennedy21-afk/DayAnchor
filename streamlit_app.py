@@ -1,11 +1,12 @@
 import os
+import csv
 import json
 import html
 import re
 import calendar
 import textwrap
 from collections import Counter
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import date, datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -1865,6 +1866,7 @@ def normalize_life_dashboard(raw_data):
             "week_start": week_start,
             "scores": scores,
             "notes": notes,
+            "overall_note": str(raw_entry.get("overall_note") or "").strip(),
             "saved_at": str(raw_entry.get("saved_at") or "").strip(),
         })
 
@@ -11175,6 +11177,7 @@ def render_life_dashboard_panel(panel_key="life_dashboard"):
                         "week_start": e["week_start"].isoformat(),
                         "scores": e["scores"],
                         "notes": e["notes"],
+                        "overall_note": e.get("overall_note") or "",
                         "saved_at": e["saved_at"],
                     }
                     for e in (updated_entries if updated_entries is not None else entries)
@@ -11337,6 +11340,111 @@ def render_life_dashboard_panel(panel_key="life_dashboard"):
                 st.caption(f"This week — {cat['label']}: {recent[0]['notes'][cat['key']]}")
         if recent[0].get("overall_note"):
             st.info(f"**Latest reflection:** {recent[0]['overall_note']}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
+
+    # ── Full history ──────────────────────────────────────────────────────────
+    if entries:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>All Entry History</h3><span>Browse every saved Life Dashboard week</span></div>', unsafe_allow_html=True)
+
+        history_count = len(entries)
+        st.caption(f"Total saved weeks: {history_count}")
+        filter_cols = st.columns(3)
+        min_week = entries[-1]["week_start"]
+        max_week = entries[0]["week_start"]
+        with filter_cols[0]:
+            history_start_date = st.date_input(
+                "Start week",
+                value=min_week,
+                min_value=min_week,
+                max_value=max_week,
+                key=f"{panel_key}_history_start_date",
+            )
+        with filter_cols[1]:
+            history_end_date = st.date_input(
+                "End week",
+                value=max_week,
+                min_value=min_week,
+                max_value=max_week,
+                key=f"{panel_key}_history_end_date",
+            )
+        with filter_cols[2]:
+            history_limit = st.selectbox(
+                "Rows to show",
+                [10, 25, 50, 100, 250],
+                index=1,
+                key=f"{panel_key}_history_limit",
+            )
+
+        if history_start_date > history_end_date:
+            history_start_date, history_end_date = history_end_date, history_start_date
+
+        date_filtered_entries = [
+            entry
+            for entry in entries
+            if history_start_date <= entry["week_start"] <= history_end_date
+        ]
+        visible_entries = date_filtered_entries[: int(history_limit)]
+        st.caption(
+            f"Showing {len(visible_entries)} of {len(date_filtered_entries)} entries in range "
+            f"{history_start_date.strftime('%Y-%m-%d')} to {history_end_date.strftime('%Y-%m-%d')}."
+        )
+
+        history_rows = []
+        for entry in visible_entries:
+            row = {
+                "Week of": entry["week_start"].strftime("%Y-%m-%d"),
+                "Saved at": entry.get("saved_at") or "",
+            }
+            for cat in LIFE_DASHBOARD_CATEGORIES:
+                row[f"{cat['emoji']} {cat['label']}"] = entry.get("scores", {}).get(cat["key"])
+            row["Overall reflection"] = entry.get("overall_note") or ""
+            history_rows.append(row)
+
+        st.dataframe(history_rows, use_container_width=True, hide_index=True)
+
+        csv_buffer = StringIO()
+        csv_writer = csv.writer(csv_buffer)
+        csv_header = ["week_start", "saved_at"]
+        for cat in LIFE_DASHBOARD_CATEGORIES:
+            csv_header.append(f"{cat['key']}_score")
+            csv_header.append(f"{cat['key']}_note")
+        csv_header.append("overall_reflection")
+        csv_writer.writerow(csv_header)
+
+        for entry in visible_entries:
+            csv_row = [entry["week_start"].isoformat(), entry.get("saved_at") or ""]
+            for cat in LIFE_DASHBOARD_CATEGORIES:
+                csv_row.append(entry.get("scores", {}).get(cat["key"]))
+                csv_row.append(entry.get("notes", {}).get(cat["key"]) or "")
+            csv_row.append(entry.get("overall_note") or "")
+            csv_writer.writerow(csv_row)
+
+        st.download_button(
+            "Download history CSV",
+            data=csv_buffer.getvalue(),
+            file_name=f"life_dashboard_history_{history_start_date.isoformat()}_{history_end_date.isoformat()}.csv",
+            mime="text/csv",
+            key=f"{panel_key}_history_csv_download",
+        )
+
+        st.markdown('<div style="height:0.7rem;"></div>', unsafe_allow_html=True)
+        st.markdown("#### Weekly Notes Archive")
+        for entry in visible_entries:
+            week_label = entry["week_start"].strftime("%b %d, %Y")
+            saved_at_label = entry.get("saved_at") or "n/a"
+            with st.expander(f"Week of {week_label} · saved {saved_at_label}", expanded=False):
+                for cat in LIFE_DASHBOARD_CATEGORIES:
+                    score_value = entry.get("scores", {}).get(cat["key"])
+                    note_value = entry.get("notes", {}).get(cat["key"]) or ""
+                    st.markdown(f"- **{cat['emoji']} {cat['label']}**: {score_value if score_value is not None else '—'}")
+                    if note_value:
+                        st.caption(note_value)
+                overall_note = entry.get("overall_note") or ""
+                if overall_note:
+                    st.info(f"Overall reflection: {overall_note}")
+
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
 
