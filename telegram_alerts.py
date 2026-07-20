@@ -98,13 +98,13 @@ def _alert_due(now_value, target_value, window_minutes):
     return 0 <= delta_minutes < max(1, int(window_minutes))
 
 
-def _task_target_datetime(task_item):
+def _task_target_datetime(task_item, tzinfo=None):
     due_date = task_item.get("due_date")
     if not isinstance(due_date, date):
         return None
     if task_item.get("scheduled_date") == due_date and isinstance(task_item.get("scheduled_time"), time):
-        return datetime.combine(due_date, task_item["scheduled_time"])
-    return datetime.combine(due_date, time(17, 0))
+        return datetime.combine(due_date, task_item["scheduled_time"], tzinfo=tzinfo)
+    return datetime.combine(due_date, time(17, 0), tzinfo=tzinfo)
 
 
 def _build_open_button(app_url):
@@ -123,6 +123,7 @@ def collect_due_alerts(
     now_value=None,
 ):
     now_local = now_value or datetime.now(ZoneInfo(config.get("timezone") or "America/Denver"))
+    local_tz = now_local.tzinfo
     window_minutes = int(config.get("alert_window_minutes") or 5)
     app_url = config.get("app_url")
 
@@ -137,7 +138,7 @@ def collect_due_alerts(
         if not isinstance(sched_date, date) or not isinstance(sched_time, time):
             continue
 
-        start_dt = datetime.combine(sched_date, sched_time)
+        start_dt = datetime.combine(sched_date, sched_time, tzinfo=local_tz)
         if start_dt < now_local - timedelta(hours=2):
             continue
 
@@ -170,7 +171,7 @@ def collect_due_alerts(
         if not isinstance(remind_date, date):
             continue
         remind_time = reminder.get("remind_time") if isinstance(reminder.get("remind_time"), time) else time(9, 0)
-        due_dt = datetime.combine(remind_date, remind_time)
+        due_dt = datetime.combine(remind_date, remind_time, tzinfo=local_tz)
         if due_dt < now_local - timedelta(days=2):
             continue
 
@@ -209,7 +210,7 @@ def collect_due_alerts(
     today_key = now_local.date().isoformat()
     morning_key = f"ritual:morning:{today_key}"
     if not sent_history.get(morning_key):
-        morning_due_dt = datetime.combine(now_local.date(), config.get("morning_time") or time(6, 30))
+        morning_due_dt = datetime.combine(now_local.date(), config.get("morning_time") or time(6, 30), tzinfo=local_tz)
         if _alert_due(now_local, morning_due_dt, window_minutes) and not morning_checkins.get(today_key):
             alerts.append(
                 {
@@ -222,7 +223,7 @@ def collect_due_alerts(
 
     review_key = f"ritual:daily_review:{today_key}"
     if not sent_history.get(review_key):
-        review_due_dt = datetime.combine(now_local.date(), config.get("daily_review_time") or time(20, 30))
+        review_due_dt = datetime.combine(now_local.date(), config.get("daily_review_time") or time(20, 30), tzinfo=local_tz)
         if _alert_due(now_local, review_due_dt, window_minutes) and not nightly_reflections.get(today_key):
             alerts.append(
                 {
@@ -238,7 +239,7 @@ def collect_due_alerts(
             continue
         if str(task.get("priority") or "") != "high":
             continue
-        base_dt = _task_target_datetime(task)
+        base_dt = _task_target_datetime(task, tzinfo=local_tz)
         if not base_dt:
             continue
         if now_local < base_dt:
