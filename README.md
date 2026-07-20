@@ -24,6 +24,7 @@ Current capabilities include:
 - Schedule Timeline panel with a configurable day window.
 - AI `Auto-Schedule Tasks` flow with one-click apply for schedule updates.
 - Notifications page with alert-focused task triage (overdue, blocked, unscheduled high priority, due tomorrow).
+- Notifications page now includes Telegram alert controls with test send, manual alert check, and history reset.
 - Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
 - Daily Review page now includes a generic Clinic Day Closeout Checklist with per-day completion tracking (independent from task status).
 - Morning Ritual and Daily Review trend tracking now use Monday-Sunday week buckets (reset each Monday) with saved week-over-week and month-level productivity comparisons.
@@ -51,6 +52,29 @@ streamlit run streamlit_app.py
 - Sidebar now shows detected DB variable names and health state for quick troubleshooting.
 - AI is enabled by setting `OPENAI_API_KEY`.
 - Optional model override: `OPENAI_MODEL` (default: `gpt-4o-mini`).
+- Telegram alerts are enabled with `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (or chat ID can be saved in Settings).
+- Optional app deep-link env var for Telegram buttons: `DAYANCHOR_APP_URL`.
+
+## Telegram Alerts (Phone Notifications)
+
+DayAnchor can send Telegram notifications for:
+
+- Upcoming scheduled tasks (default offsets: 60, 15, and 0 minutes).
+- Quick reminders at due time with follow-up reminder nudges.
+- Morning Ritual and Daily Review prompts at configured times.
+- Critical escalation for high-priority clinic tasks that stay open past due.
+
+Setup:
+
+1. Set `TELEGRAM_BOT_TOKEN` in your deployment environment.
+2. Set `TELEGRAM_CHAT_ID` in env, or save chat ID in **Settings -> Telegram Notification Channel**.
+3. Configure quiet hours, ritual/review times, and check interval in Settings.
+4. Use **Notifications -> Telegram Alerts -> Send test message** to validate delivery.
+
+Notes:
+
+- While the app is open, DayAnchor automatically runs Telegram alert checks at the configured interval.
+- For 24/7 delivery, keep the app process running continuously in your deployed environment.
 
 ## Railway Troubleshooting
 

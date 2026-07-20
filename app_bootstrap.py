@@ -106,6 +106,7 @@ def run_app(context, st_module=st):
     render_full_news_page = context.get("render_full_news_page")
     add_task = context["add_task"]
     capture_task_from_quick_entry = context.get("capture_task_from_quick_entry")
+    dispatch_telegram_alerts = context.get("dispatch_telegram_alerts")
     news_manual_refresh_requested = False
 
     perf_entries = []
@@ -530,6 +531,9 @@ def run_app(context, st_module=st):
     tasks = _timed_call("Load tasks", load_tasks)
     surgical_cases = _timed_call("Load surgical cases", load_surgical_cases)
     protocol_documents = _timed_call("Load protocol documents", load_protocol_documents)
+
+    if dispatch_telegram_alerts:
+        _timed_call("Telegram alert check", lambda: dispatch_telegram_alerts(tasks, app_settings, force=False))
     
     # Fetch and cache news for the day (auto-refresh each morning + manual refresh option)
     import os

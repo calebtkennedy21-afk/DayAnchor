@@ -51,6 +51,7 @@ from overview_core import (
 )
 import page_renderers
 import page_sections
+import telegram_alerts
 from settings_serialization import dumps_json_safe
 from scheduling_core import (
     build_week_rebalance_moves,
@@ -225,6 +226,19 @@ DEFAULT_APP_SETTINGS = {
     "family_notes_updated_at": "",
     "home_routine_checklists": {},
     "quick_reminders": [],
+    "telegram_alerts_enabled": False,
+    "telegram_chat_id": "",
+    "telegram_timezone": "America/Denver",
+    "telegram_quiet_hours_start": "21:30",
+    "telegram_quiet_hours_end": "06:00",
+    "telegram_morning_ritual_time": "06:30",
+    "telegram_daily_review_time": "20:30",
+    "telegram_alert_window_minutes": 5,
+    "telegram_reminder_followup_minutes": 10,
+    "telegram_check_interval_minutes": 5,
+    "notification_app_url": "",
+    "telegram_last_checked_at": "",
+    "telegram_alert_history": {},
     "clinic_day_closeout_template": [
         "Confirm all charting is complete",
         "Review and send pending patient messages",
@@ -3848,6 +3862,76 @@ def feature_flag_enabled(app_settings, flag_key):
     if flag_key not in FEATURE_FLAG_DEFAULTS:
         return False
     return bool(flags.get(flag_key, FEATURE_FLAG_DEFAULTS[flag_key]))
+
+
+def dispatch_telegram_alerts(tasks, app_settings=None, force=False):
+    settings = dict(app_settings or {})
+    config = telegram_alerts.build_telegram_config(settings, os.environ)
+    if not config.get("enabled"):
+        return {"skipped": True, "reason": "Telegram alerts disabled."}
+
+    now_local = datetime.now(MOUNTAIN_TIMEZONE)
+    check_interval_minutes = max(1, safe_int(settings.get("telegram_check_interval_minutes"), 5))
+    if not force:
+        last_checked = None
+        try:
+            last_checked = datetime.fromisoformat(str(settings.get("telegram_last_checked_at") or ""))
+        except ValueError:
+            last_checked = None
+        if last_checked and (now_local - last_checked) < timedelta(minutes=check_interval_minutes):
+            return {"skipped": True, "reason": "Alert check interval has not elapsed yet."}
+
+    reminders = normalize_quick_reminders(settings.get("quick_reminders") or [])
+    morning_checkins = normalize_morning_ritual_checkins(settings.get("morning_ritual_checkins") or {})
+    nightly_reflections = normalize_nightly_reflections(settings.get("nightly_reflections") or {})
+    sent_history = telegram_alerts.prune_alert_history(settings.get("telegram_alert_history") or {}, now_value=now_local)
+
+    alerts = telegram_alerts.collect_due_alerts(
+        tasks,
+        reminders,
+        morning_checkins,
+        nightly_reflections,
+        sent_history,
+        config,
+        now_value=now_local,
+    )
+
+    sent_count = 0
+    failed = []
+    for alert in alerts:
+        quiet_now = telegram_alerts.is_quiet_hours(
+            now_local,
+            config.get("quiet_start") or time(21, 30),
+            config.get("quiet_end") or time(6, 0),
+        )
+        if quiet_now and not alert.get("critical"):
+            continue
+
+        ok, error_text = telegram_alerts.send_telegram_message(
+            config,
+            alert.get("message") or "DayAnchor alert",
+            reply_markup=alert.get("reply_markup"),
+        )
+        if ok:
+            sent_count += 1
+            sent_history[alert.get("key") or uuid4().hex] = now_local.isoformat(timespec="seconds")
+        else:
+            failed.append(error_text or "Unknown Telegram error")
+
+    sent_history = telegram_alerts.prune_alert_history(sent_history, now_value=now_local)
+    updated_settings = {
+        **settings,
+        "telegram_alert_history": sent_history,
+        "telegram_last_checked_at": now_local.isoformat(timespec="seconds"),
+    }
+    save_app_settings(updated_settings)
+
+    return {
+        "skipped": False,
+        "sent_count": sent_count,
+        "queued_count": len(alerts),
+        "failed": failed,
+    }
 
 
 def load_app_settings():
@@ -7643,6 +7727,69 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
     render_metrics_row()
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
+    telegram_config = telegram_alerts.build_telegram_config(app_settings or {}, os.environ)
+    telegram_token_present = bool(telegram_config.get("bot_token"))
+    telegram_chat_present = bool(telegram_config.get("chat_id"))
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>Telegram Alerts</h3><span>Phone notifications for upcoming work, reminders, and rituals</span></div>', unsafe_allow_html=True)
+    telegram_cols = st.columns(4)
+    telegram_cols[0].metric("Channel", "Enabled" if telegram_config.get("enabled") else "Disabled")
+    telegram_cols[1].metric("Bot token", "Detected" if telegram_token_present else "Missing")
+    telegram_cols[2].metric("Chat ID", "Configured" if telegram_chat_present else "Missing")
+    history_count = len((app_settings or {}).get("telegram_alert_history") or {})
+    telegram_cols[3].metric("Alert history", history_count)
+
+    if not telegram_token_present:
+        st.warning("Set TELEGRAM_BOT_TOKEN in environment variables to send Telegram messages.")
+    if not telegram_chat_present:
+        st.info("Set TELEGRAM_CHAT_ID env var or save Telegram chat ID in Settings.")
+
+    action_cols = st.columns(3)
+    if action_cols[0].button("Send test message", key=f"{panel_key}_telegram_test"):
+        if not telegram_token_present or not telegram_chat_present:
+            st.warning("Telegram is missing bot token or chat ID.")
+        else:
+            ok, error_text = telegram_alerts.send_telegram_message(
+                telegram_config,
+                "DayAnchor test alert\nTelegram channel is connected.",
+                reply_markup={
+                    "inline_keyboard": [[{"text": "Open DayAnchor", "url": telegram_config.get("app_url") or "https://"}]]
+                } if telegram_config.get("app_url") else None,
+            )
+            if ok:
+                st.success("Telegram test message sent.")
+            else:
+                st.error(f"Telegram test failed: {error_text}")
+
+    if action_cols[1].button("Run alert check now", key=f"{panel_key}_telegram_run_now"):
+        result = dispatch_telegram_alerts(tasks, app_settings, force=True)
+        if result.get("skipped"):
+            st.info(result.get("reason") or "Alert check skipped.")
+        else:
+            st.success(f"Telegram alert check complete. Sent {int(result.get('sent_count') or 0)} of {int(result.get('queued_count') or 0)} queued alerts.")
+            if result.get("failed"):
+                st.warning("Some Telegram sends failed. Check bot token/chat ID and chat permissions.")
+
+    if action_cols[2].button("Clear alert history", key=f"{panel_key}_telegram_clear_history"):
+        save_app_settings(
+            {
+                **(app_settings or {}),
+                "telegram_alert_history": {},
+                "telegram_last_checked_at": "",
+            }
+        )
+        st.success("Telegram alert history cleared.")
+        st.rerun()
+
+    last_checked_raw = str((app_settings or {}).get("telegram_last_checked_at") or "").strip()
+    if last_checked_raw:
+        st.caption(f"Last Telegram check: {last_checked_raw}")
+    else:
+        st.caption("No Telegram checks have run yet.")
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+
     raw_quick_reminders = list((app_settings or {}).get("quick_reminders") or [])
     quick_reminders = normalize_quick_reminders(raw_quick_reminders)
     active_reminders = [item for item in quick_reminders if item.get("status") == "active"]
@@ -11291,6 +11438,70 @@ def render_settings_panel(app_settings, panel_key="settings"):
         value=max(3, min(30, safe_int(app_settings.get("quick_capture_schedule_horizon_days", 14), 14))),
         step=1,
     )
+    st.markdown("### Telegram Notification Channel")
+    settings_telegram_enabled = st.toggle(
+        "Enable Telegram alerts",
+        value=bool(app_settings.get("telegram_alerts_enabled", False)),
+        help="Requires TELEGRAM_BOT_TOKEN environment variable and a chat ID.",
+    )
+    settings_telegram_chat_id = st.text_input(
+        "Telegram chat ID",
+        value=str(app_settings.get("telegram_chat_id") or ""),
+        placeholder="Example: 123456789",
+    )
+    settings_notification_app_url = st.text_input(
+        "DayAnchor app URL for alert links",
+        value=str(app_settings.get("notification_app_url") or ""),
+        placeholder="https://your-dayanchor-url",
+    )
+    telegram_time_cols = st.columns(2)
+    with telegram_time_cols[0]:
+        settings_telegram_morning_time = st.time_input(
+            "Morning Ritual alert time",
+            value=parse_time_value(app_settings.get("telegram_morning_ritual_time")) or time(6, 30),
+        )
+        settings_telegram_quiet_start = st.time_input(
+            "Quiet hours start",
+            value=parse_time_value(app_settings.get("telegram_quiet_hours_start")) or time(21, 30),
+        )
+    with telegram_time_cols[1]:
+        settings_telegram_daily_review_time = st.time_input(
+            "Daily Review alert time",
+            value=parse_time_value(app_settings.get("telegram_daily_review_time")) or time(20, 30),
+        )
+        settings_telegram_quiet_end = st.time_input(
+            "Quiet hours end",
+            value=parse_time_value(app_settings.get("telegram_quiet_hours_end")) or time(6, 0),
+        )
+    telegram_rule_cols = st.columns(2)
+    with telegram_rule_cols[0]:
+        settings_telegram_alert_window = st.slider(
+            "Alert dispatch window (minutes)",
+            min_value=1,
+            max_value=15,
+            value=max(1, min(15, safe_int(app_settings.get("telegram_alert_window_minutes", 5), 5))),
+            step=1,
+        )
+        settings_telegram_followup = st.slider(
+            "Reminder follow-up delay (minutes)",
+            min_value=5,
+            max_value=60,
+            value=max(5, min(60, safe_int(app_settings.get("telegram_reminder_followup_minutes", 10), 10))),
+            step=5,
+        )
+    with telegram_rule_cols[1]:
+        settings_telegram_check_interval = st.slider(
+            "Auto-check interval while app is open (minutes)",
+            min_value=1,
+            max_value=30,
+            value=max(1, min(30, safe_int(app_settings.get("telegram_check_interval_minutes", 5), 5))),
+            step=1,
+        )
+        settings_telegram_timezone = st.text_input(
+            "Telegram timezone",
+            value=str(app_settings.get("telegram_timezone") or "America/Denver"),
+            placeholder="America/Denver",
+        )
     settings_timeline_days = st.slider(
         "Default timeline window (days)",
         min_value=3,
@@ -11478,6 +11689,17 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "quick_capture_schedule_end_time": settings_auto_schedule_end_time.strftime("%H:%M"),
                 "quick_capture_schedule_weekdays_only": bool(settings_auto_schedule_weekdays_only),
                 "quick_capture_schedule_horizon_days": int(settings_auto_schedule_horizon_days),
+                "telegram_alerts_enabled": bool(settings_telegram_enabled),
+                "telegram_chat_id": settings_telegram_chat_id.strip(),
+                "telegram_timezone": settings_telegram_timezone.strip() or "America/Denver",
+                "telegram_quiet_hours_start": settings_telegram_quiet_start.strftime("%H:%M"),
+                "telegram_quiet_hours_end": settings_telegram_quiet_end.strftime("%H:%M"),
+                "telegram_morning_ritual_time": settings_telegram_morning_time.strftime("%H:%M"),
+                "telegram_daily_review_time": settings_telegram_daily_review_time.strftime("%H:%M"),
+                "telegram_alert_window_minutes": int(settings_telegram_alert_window),
+                "telegram_reminder_followup_minutes": int(settings_telegram_followup),
+                "telegram_check_interval_minutes": int(settings_telegram_check_interval),
+                "notification_app_url": settings_notification_app_url.strip(),
                 "timeline_days": int(settings_timeline_days),
                 "surgeon_clinic_patient_target": int(settings_surgeon_patient_target),
                 "general_clinic_patient_target": int(settings_general_patient_target),
@@ -14296,6 +14518,7 @@ app_bootstrap.run_app(
         "overview_runtime_settings": overview_runtime_settings,
         "add_task": add_task,
         "capture_task_from_quick_entry": capture_task_from_quick_entry,
+        "dispatch_telegram_alerts": dispatch_telegram_alerts,
         "render_overview_control_tower": render_overview_control_tower,
         "render_add_task_panel": render_add_task_panel,
         "render_personal_focus_panel": render_personal_focus_panel,
