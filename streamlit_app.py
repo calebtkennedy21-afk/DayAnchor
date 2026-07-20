@@ -7740,6 +7740,19 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
     history_count = len((app_settings or {}).get("telegram_alert_history") or {})
     telegram_cols[3].metric("Alert history", history_count)
 
+    source_label_lookup = {
+        "settings": "Settings",
+        "env": "ENV",
+        "settings+env": "Settings + ENV",
+        "none": "Not enabled",
+    }
+    source_key = str(telegram_config.get("enabled_source") or "none")
+    st.caption(
+        "Enable source: "
+        f"{source_label_lookup.get(source_key, source_key)} "
+        f"(settings={telegram_config.get('enabled_from_settings')}, env={telegram_config.get('enabled_from_env')})"
+    )
+
     if not telegram_token_present:
         st.warning("Set TELEGRAM_BOT_TOKEN in environment variables to send Telegram messages.")
     if not telegram_chat_present:

@@ -7,6 +7,19 @@ from urllib import error, parse, request
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
 
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
 def _parse_time(raw_value, fallback):
     if isinstance(raw_value, time):
         return raw_value
@@ -40,9 +53,23 @@ def build_telegram_config(app_settings=None, environ=None):
     env = environ or os.environ
     token = str(env.get("TELEGRAM_BOT_TOKEN") or settings.get("telegram_bot_token") or "").strip()
     chat_id = str(settings.get("telegram_chat_id") or env.get("TELEGRAM_CHAT_ID") or "").strip()
+    env_enabled = _as_bool(env.get("TELEGRAM_ALERTS_ENABLED"), default=False)
+    settings_enabled = _as_bool(settings.get("telegram_alerts_enabled"), default=False)
+    enabled = settings_enabled or env_enabled
+    if settings_enabled and env_enabled:
+        enabled_source = "settings+env"
+    elif settings_enabled:
+        enabled_source = "settings"
+    elif env_enabled:
+        enabled_source = "env"
+    else:
+        enabled_source = "none"
 
     return {
-        "enabled": bool(settings.get("telegram_alerts_enabled", False)),
+        "enabled": bool(enabled),
+        "enabled_source": enabled_source,
+        "enabled_from_settings": bool(settings_enabled),
+        "enabled_from_env": bool(env_enabled),
         "bot_token": token,
         "chat_id": chat_id,
         "timezone": str(settings.get("telegram_timezone") or "America/Denver").strip() or "America/Denver",
