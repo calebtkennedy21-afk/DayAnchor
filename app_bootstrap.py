@@ -90,6 +90,7 @@ def run_app(context, st_module=st):
     render_notifications_panel = context["render_notifications_panel"]
     render_ma_lead_panel = context["render_ma_lead_panel"]
     render_life_dashboard_panel = context["render_life_dashboard_panel"]
+    render_intelligence_panel = context["render_intelligence_panel"]
     render_settings_panel = context["render_settings_panel"]
     render_analytics_panel = context["render_analytics_panel"]
     render_daily_review_panel = context["render_daily_review_panel"]
@@ -287,15 +288,30 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        personal_pages = ["Morning Ritual", "Personal", "Life Dashboard", "Schedule", "Daily Review", "Notifications"]
-        family_pages = ["Family Schedule"]
-        clinical_pages = ["Clinic", "Cases", "Anatomy", "Physical Therapy Protocols", "MA Lead"]
-        additional_pages = ["News", "AI", "Analytics", "Settings"]
-        all_pages = ["Overview"] + personal_pages + family_pages + clinical_pages + additional_pages
+        system_pages = ["Planner", "Coach", "Reflection", "Family", "Intelligence"]
+        legacy_pages = [
+            "Overview",
+            "Morning Ritual",
+            "Personal",
+            "Life Dashboard",
+            "Schedule",
+            "Daily Review",
+            "Notifications",
+            "Clinic",
+            "Cases",
+            "Anatomy",
+            "Physical Therapy Protocols",
+            "MA Lead",
+            "Family Schedule",
+            "News",
+            "AI",
+            "Analytics",
+        ]
+        all_pages = system_pages + ["Settings"] + legacy_pages
 
-        current_page = st_module.session_state.get("current_page", "Overview")
+        current_page = st_module.session_state.get("current_page", "Planner")
         if current_page not in all_pages:
-            current_page = "Overview"
+            current_page = "Planner"
             st_module.session_state["current_page"] = current_page
 
         def render_nav_button(label, page_name, key_suffix):
@@ -304,23 +320,15 @@ def run_app(context, st_module=st):
                 st_module.session_state["current_page"] = page_name
                 st_module.rerun()
 
-        render_nav_button("Overview", "Overview", "overview")
+        with st_module.expander("AI Systems", expanded=current_page in system_pages):
+            for page in system_pages:
+                render_nav_button(page, page, f"system_{page.lower().replace(' ', '_')}")
 
-        with st_module.expander("Personal", expanded=current_page in personal_pages):
-            for page in personal_pages:
-                render_nav_button(page, page, page.lower().replace(" ", "_"))
+        render_nav_button("Settings", "Settings", "settings")
 
-        with st_module.expander("Family", expanded=current_page in family_pages):
-            for page in family_pages:
-                render_nav_button(page, page, page.lower().replace(" ", "_"))
-
-        with st_module.expander("Clinical", expanded=current_page in clinical_pages):
-            for page in clinical_pages:
-                render_nav_button(page, page, page.lower().replace(" ", "_"))
-
-        with st_module.expander("More", expanded=current_page in additional_pages):
-            for page in additional_pages:
-                render_nav_button(page, page, page.lower().replace(" ", "_"))
+        with st_module.expander("Advanced Views", expanded=current_page in legacy_pages):
+            for page in legacy_pages:
+                render_nav_button(page, page, f"legacy_{page.lower().replace(' ', '_')}")
 
         current_page = st_module.session_state.get("current_page", "Overview")
 
@@ -761,7 +769,32 @@ def run_app(context, st_module=st):
 
     page_render_started = perf_counter()
 
-    if current_page == "Overview":
+    if current_page == "Planner":
+        render_page_banner("ai", "Planner System", "Create plans, prioritize, schedule work, and apply AI task suggestions.")
+        overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="planner_system_overview")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_ai_panel(tasks, active_tasks, panel_key="planner_system_ai")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_schedule_builder_panel(active_tasks, app_settings, panel_key="planner_system_schedule")
+    elif current_page == "Coach":
+        render_page_banner("clinic", "Coach System", "MA leadership, difficult conversations, work coaching, and accountability.")
+        render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="coach_system_ma_lead")
+    elif current_page == "Reflection":
+        render_page_banner("review", "Reflection System", "Morning, night, weekly trends, and habit analysis.")
+        render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="reflection_system_morning")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_daily_review_panel(tasks, active_tasks, completed_today_all, app_settings, panel_key="reflection_system_review")
+        st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+        render_life_dashboard_panel(panel_key="reflection_system_life")
+    elif current_page == "Family":
+        render_page_banner("personal", "Family System", "Calendar, goals, weekly digest, conflicts, and preparation.")
+        render_family_schedule_panel(active_tasks, app_settings, panel_key="family_system")
+    elif current_page == "Intelligence":
+        render_page_banner("overview", "Intelligence System", "Always-on analysis that detects recurring patterns and predicts pressure points.")
+        render_intelligence_panel(tasks, active_tasks, app_settings, panel_key="intelligence_system")
+    elif current_page == "Overview":
         render_page_banner("overview", "DayAnchor Hub", "Personal, clinical, family, and reminders in one place.")
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
