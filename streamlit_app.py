@@ -170,6 +170,13 @@ DEFAULT_APP_SETTINGS = {
     "default_priority": "medium",
     "default_duration": 60,
     "default_schedule_time": "09:00",
+    "quick_capture_smart_parse_enabled": True,
+    "quick_capture_parser_min_confidence": 0.58,
+    "quick_capture_auto_schedule_high_priority": True,
+    "quick_capture_schedule_start_time": "08:00",
+    "quick_capture_schedule_end_time": "18:00",
+    "quick_capture_schedule_weekdays_only": False,
+    "quick_capture_schedule_horizon_days": 14,
     "timeline_days": 7,
     "surgeon_clinic_patient_target": 25,
     "general_clinic_patient_target": 25,
@@ -585,6 +592,270 @@ def parse_time_value(raw_value):
             return time.fromisoformat(f"{cleaned}:00")
         except ValueError:
             return None
+    return None
+
+
+CAPTURE_WEEKDAY_TO_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _next_weekday_date(weekday_name, reference_day=None):
+    base_day = reference_day or mountain_today()
+    weekday_index = CAPTURE_WEEKDAY_TO_INDEX.get(str(weekday_name or "").lower())
+    if weekday_index is None:
+        return None
+    delta = (weekday_index - base_day.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return base_day + timedelta(days=delta)
+
+
+def _normalize_quick_capture_title(raw_text):
+    text = str(raw_text or "")
+    cleanup_patterns = [
+        r"\b(today|tomorrow|tonight|next\s+week)\b",
+        r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        r"\b(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm|a|p)\b",
+        r"\b([01]?\d|2[0-3]):[0-5]\d\b",
+        r"\b(high|urgent|asap|critical|medium|normal|low|later|someday)\b",
+        r"\b(clinic|personal)\b",
+        r"\bfor\s+\d{1,3}\s*(m|min|mins|minutes)\b",
+        r"\bfor\s+\d{1,2}\s*(h|hr|hrs|hour|hours)\b",
+        r"\b\d{1,3}\s*(m|min|mins|minutes)\b",
+        r"\b\d{1,2}\s*(h|hr|hrs|hour|hours)\b",
+        r"\b(daily|weekly|every\s+day|every\s+week)\b",
+        r"\b\d{4}-\d{2}-\d{2}\b",
+    ]
+    candidate = text
+    for pattern in cleanup_patterns:
+        candidate = re.sub(pattern, " ", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s+", " ", candidate).strip(" -,:;")
+    if not candidate:
+        return text.strip()
+    return candidate
+
+
+def parse_quick_capture_input(raw_text, app_settings=None):
+    text = str(raw_text or "").strip()
+    settings = app_settings or {}
+    default_category = settings.get("default_category", "Personal")
+    default_priority = settings.get("default_priority", "medium")
+    default_duration = safe_int(settings.get("default_duration", 60), 60)
+
+    parsed = {
+        "raw_text": text,
+        "title": text,
+        "description": "",
+        "category": default_category if default_category in ("Personal", "Clinic") else "Personal",
+        "priority": default_priority if default_priority in ("high", "medium", "low") else "medium",
+        "due_date": None,
+        "scheduled_date": None,
+        "scheduled_time": None,
+        "scheduled_minutes": default_duration,
+        "recurrence_rule": None,
+        "recurrence_interval": 1,
+        "confidence": 0.0,
+        "signals": [],
+    }
+
+    if not text:
+        return parsed
+
+    lowered = text.lower()
+    signal_count = 0
+
+    clinic_keywords = ("clinic", "patient", "or", "post-op", "postop", "chart", "referral", "huddle")
+    if re.search(r"\bclinic\b", lowered) or any(keyword in lowered for keyword in clinic_keywords):
+        parsed["category"] = "Clinic"
+        parsed["signals"].append("category")
+        signal_count += 1
+    elif re.search(r"\bpersonal\b", lowered):
+        parsed["category"] = "Personal"
+        parsed["signals"].append("category")
+        signal_count += 1
+
+    if re.search(r"\b(urgent|asap|critical|high)\b", lowered):
+        parsed["priority"] = "high"
+        parsed["signals"].append("priority")
+        signal_count += 1
+    elif re.search(r"\b(low|later|someday)\b", lowered):
+        parsed["priority"] = "low"
+        parsed["signals"].append("priority")
+        signal_count += 1
+    elif re.search(r"\b(medium|normal)\b", lowered):
+        parsed["priority"] = "medium"
+        parsed["signals"].append("priority")
+        signal_count += 1
+
+    if re.search(r"\b(today|now)\b", lowered):
+        parsed["due_date"] = mountain_today()
+        parsed["signals"].append("due")
+        signal_count += 1
+    elif re.search(r"\b(tomorrow|tonight)\b", lowered):
+        parsed["due_date"] = mountain_today() + timedelta(days=1)
+        parsed["signals"].append("due")
+        signal_count += 1
+    elif re.search(r"\bnext\s+week\b", lowered):
+        parsed["due_date"] = mountain_today() + timedelta(days=7)
+        parsed["signals"].append("due")
+        signal_count += 1
+    else:
+        iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", lowered)
+        if iso_match:
+            parsed_iso_date = parse_date_value(iso_match.group(1))
+            if parsed_iso_date:
+                parsed["due_date"] = parsed_iso_date
+                parsed["signals"].append("due")
+                signal_count += 1
+
+    weekday_match = re.search(
+        r"\b(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        lowered,
+    )
+    if weekday_match:
+        target_weekday = weekday_match.group(1)
+        parsed["due_date"] = _next_weekday_date(target_weekday)
+        parsed["signals"].append("due")
+        signal_count += 1
+
+    ampm_match = re.search(r"\b(?:at\s+)?(\d{1,2})(?::([0-5]\d))?\s*(am|pm|a|p)\b", lowered)
+    time_24_match = re.search(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b", lowered)
+    parsed_time = None
+    if ampm_match:
+        hour_value = int(ampm_match.group(1))
+        minute_value = int(ampm_match.group(2) or 0)
+        suffix = ampm_match.group(3)
+        if suffix.startswith("p") and hour_value != 12:
+            hour_value += 12
+        if suffix.startswith("a") and hour_value == 12:
+            hour_value = 0
+        if 0 <= hour_value <= 23:
+            parsed_time = time(hour_value, minute_value)
+    elif time_24_match:
+        parsed_time = parse_time_value(f"{time_24_match.group(1)}:{time_24_match.group(2)}")
+
+    if parsed_time is not None:
+        parsed["scheduled_time"] = parsed_time
+        parsed["scheduled_date"] = parsed.get("due_date") or mountain_today()
+        parsed["signals"].append("time")
+        signal_count += 1
+
+    minute_match = re.search(r"\bfor\s+(\d{1,3})\s*(m|min|mins|minutes)\b", lowered)
+    hour_match = re.search(r"\bfor\s+(\d{1,2})\s*(h|hr|hrs|hour|hours)\b", lowered)
+    compact_minute_match = re.search(r"\b(\d{1,3})\s*(m|min|mins|minutes)\b", lowered)
+    compact_hour_match = re.search(r"\b(\d{1,2})\s*(h|hr|hrs|hour|hours)\b", lowered)
+
+    if minute_match:
+        parsed["scheduled_minutes"] = max(15, min(480, int(minute_match.group(1))))
+        parsed["signals"].append("duration")
+        signal_count += 1
+    elif hour_match:
+        parsed["scheduled_minutes"] = max(15, min(480, int(hour_match.group(1)) * 60))
+        parsed["signals"].append("duration")
+        signal_count += 1
+    elif compact_minute_match:
+        parsed["scheduled_minutes"] = max(15, min(480, int(compact_minute_match.group(1))))
+        parsed["signals"].append("duration")
+        signal_count += 1
+    elif compact_hour_match:
+        parsed["scheduled_minutes"] = max(15, min(480, int(compact_hour_match.group(1)) * 60))
+        parsed["signals"].append("duration")
+        signal_count += 1
+
+    if re.search(r"\b(daily|every\s+day)\b", lowered):
+        parsed["recurrence_rule"] = "daily"
+        parsed["signals"].append("recurrence")
+        signal_count += 1
+    elif re.search(r"\b(weekly|every\s+week)\b", lowered):
+        parsed["recurrence_rule"] = "weekly"
+        parsed["signals"].append("recurrence")
+        signal_count += 1
+
+    parsed_title = _normalize_quick_capture_title(text)
+    parsed["title"] = parsed_title
+    if parsed.get("scheduled_time") and not parsed.get("scheduled_date"):
+        parsed["scheduled_date"] = mountain_today()
+
+    confidence = 0.35 if parsed_title else 0.0
+    confidence += min(0.5, signal_count * 0.1)
+    if parsed.get("scheduled_time") and parsed.get("due_date"):
+        confidence += 0.05
+    if len(parsed_title.split()) >= 3:
+        confidence += 0.05
+    if len(parsed_title) < 3:
+        confidence = min(confidence, 0.45)
+
+    parsed["confidence"] = max(0.0, min(0.95, round(confidence, 2)))
+    return parsed
+
+
+def _round_up_datetime(value, interval_minutes=15):
+    aligned = value.replace(second=0, microsecond=0)
+    remainder = aligned.minute % interval_minutes
+    if remainder == 0:
+        return aligned
+    return aligned + timedelta(minutes=(interval_minutes - remainder))
+
+
+def find_next_schedule_slot(
+    tasks,
+    duration_minutes,
+    start_dt,
+    work_start,
+    work_end,
+    weekdays_only=False,
+    horizon_days=14,
+):
+    if duration_minutes <= 0:
+        return None
+
+    rounded_start = _round_up_datetime(start_dt)
+    for day_offset in range(max(1, int(horizon_days))):
+        target_day = (rounded_start + timedelta(days=day_offset)).date()
+        if weekdays_only and target_day.weekday() >= 5:
+            continue
+
+        day_window_start = datetime.combine(target_day, work_start)
+        day_window_end = datetime.combine(target_day, work_end)
+        if day_window_end <= day_window_start:
+            day_window_end = day_window_start + timedelta(hours=10)
+
+        probe = day_window_start
+        if target_day == rounded_start.date():
+            probe = max(probe, rounded_start)
+
+        day_entries = []
+        for task in tasks:
+            if task.get("scheduled_date") != target_day or not task.get("scheduled_time"):
+                continue
+            minutes = safe_int(task.get("scheduled_minutes"), 60)
+            if minutes <= 0:
+                minutes = 60
+            item_start = datetime.combine(target_day, task["scheduled_time"])
+            item_end = item_start + timedelta(minutes=minutes)
+            day_entries.append((item_start, item_end))
+        day_entries.sort(key=lambda item: item[0])
+
+        for item_start, item_end in day_entries:
+            if probe + timedelta(minutes=duration_minutes) <= item_start:
+                if probe + timedelta(minutes=duration_minutes) <= day_window_end:
+                    return probe.date(), probe.time().replace(second=0, microsecond=0)
+            if probe < item_end:
+                probe = _round_up_datetime(item_end)
+            if probe + timedelta(minutes=duration_minutes) > day_window_end:
+                break
+
+        if probe + timedelta(minutes=duration_minutes) <= day_window_end:
+            return probe.date(), probe.time().replace(second=0, microsecond=0)
+
     return None
 
 
@@ -4190,6 +4461,7 @@ def add_task(
                         completed_date,
                         completed_at
                     ) VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                     """,
                     (
                         title.strip(),
@@ -4208,11 +4480,13 @@ def add_task(
                         None,
                     ),
                 )
-        return
+                inserted = cur.fetchone()
+                return inserted[0] if inserted else None
 
+    task_id = len(st.session_state.tasks) + 1
     st.session_state.tasks.append(
         {
-            "id": len(st.session_state.tasks) + 1,
+            "id": task_id,
             "title": title.strip(),
             "description": description.strip(),
             "category": category,
@@ -4230,6 +4504,129 @@ def add_task(
             "completed_at": None,
         }
     )
+    return task_id
+
+
+def apply_post_capture_autoschedule(task_id, task_payload, app_settings):
+    if not task_id:
+        return ""
+    if not bool((app_settings or {}).get("quick_capture_auto_schedule_high_priority", True)):
+        return ""
+    if str(task_payload.get("priority") or "").lower() != "high":
+        return ""
+    if task_payload.get("scheduled_date") and task_payload.get("scheduled_time"):
+        return ""
+
+    duration_minutes = max(
+        15,
+        safe_int(task_payload.get("scheduled_minutes"), safe_int((app_settings or {}).get("default_duration", 60), 60)),
+    )
+    schedule_start = parse_time_value((app_settings or {}).get("quick_capture_schedule_start_time")) or time(8, 0)
+    schedule_end = parse_time_value((app_settings or {}).get("quick_capture_schedule_end_time")) or time(18, 0)
+    weekdays_only = bool((app_settings or {}).get("quick_capture_schedule_weekdays_only", False))
+    horizon_days = max(1, safe_int((app_settings or {}).get("quick_capture_schedule_horizon_days", 14), 14))
+
+    current_tasks = [
+        item
+        for item in (load_tasks() or [])
+        if item.get("status") != "completed" and item.get("id") != task_id
+    ]
+    slot = find_next_schedule_slot(
+        current_tasks,
+        duration_minutes,
+        datetime.now(MOUNTAIN_TIMEZONE).replace(tzinfo=None),
+        schedule_start,
+        schedule_end,
+        weekdays_only=weekdays_only,
+        horizon_days=horizon_days,
+    )
+    if not slot:
+        return "No open auto-schedule slot found."
+
+    update_task(
+        task_id,
+        scheduled_date=slot[0],
+        scheduled_time=slot[1],
+        scheduled_minutes=duration_minutes,
+    )
+    return f"Auto-scheduled for {slot[0].strftime('%a %b %d')} at {slot[1].strftime('%I:%M %p').lstrip('0')}."
+
+
+def capture_task_from_quick_entry(raw_text, fallback_category, fallback_priority, fallback_due_date, app_settings):
+    settings = app_settings or {}
+    parsed = parse_quick_capture_input(raw_text, settings)
+    min_confidence = float(settings.get("quick_capture_parser_min_confidence", 0.58) or 0.58)
+    smart_enabled = bool(settings.get("quick_capture_smart_parse_enabled", True))
+    use_parser = smart_enabled and parsed.get("confidence", 0.0) >= min_confidence
+
+    fallback_due = fallback_due_date or mountain_today()
+    fallback_cat = fallback_category if fallback_category in ("Personal", "Clinic") else settings.get("default_category", "Personal")
+    fallback_pri = fallback_priority if fallback_priority in ("high", "medium", "low") else settings.get("default_priority", "medium")
+
+    title_value = (parsed.get("title") if use_parser else str(raw_text or "")).strip()
+    if not title_value:
+        return {
+            "created": False,
+            "message": "Add a task title first.",
+            "used_parser": use_parser,
+            "confidence": parsed.get("confidence", 0.0),
+        }
+
+    due_date = parsed.get("due_date") if use_parser else fallback_due
+    if not isinstance(due_date, date):
+        due_date = fallback_due
+
+    category = parsed.get("category") if use_parser else fallback_cat
+    if category not in ("Personal", "Clinic"):
+        category = fallback_cat
+
+    priority = parsed.get("priority") if use_parser else fallback_pri
+    if priority not in ("high", "medium", "low"):
+        priority = fallback_pri
+
+    scheduled_date = parsed.get("scheduled_date") if use_parser else None
+    scheduled_time = parsed.get("scheduled_time") if use_parser else None
+    scheduled_minutes = parsed.get("scheduled_minutes") if use_parser else None
+    recurrence_rule = parsed.get("recurrence_rule") if use_parser else None
+    recurrence_interval = int(parsed.get("recurrence_interval") or 1)
+
+    task_id = add_task(
+        title_value,
+        "",
+        category,
+        priority,
+        due_date,
+        scheduled_date=scheduled_date,
+        scheduled_time=scheduled_time,
+        scheduled_minutes=scheduled_minutes,
+        recurrence_rule=recurrence_rule,
+        recurrence_interval=recurrence_interval,
+    )
+
+    autopilot_note = apply_post_capture_autoschedule(
+        task_id,
+        {
+            "priority": priority,
+            "scheduled_date": scheduled_date,
+            "scheduled_time": scheduled_time,
+            "scheduled_minutes": scheduled_minutes,
+        },
+        settings,
+    )
+
+    return {
+        "created": True,
+        "task_id": task_id,
+        "title": title_value,
+        "category": category,
+        "priority": priority,
+        "due_date": due_date,
+        "used_parser": use_parser,
+        "confidence": float(parsed.get("confidence", 0.0)),
+        "signals": list(parsed.get("signals") or []),
+        "autopilot_note": autopilot_note,
+        "message": "Task captured.",
+    }
 
 
 def update_task(task_id, **fields):
@@ -10855,6 +11252,45 @@ def render_settings_panel(app_settings, panel_key="settings"):
         "Default schedule time",
         value=parse_time_value(app_settings.get("default_schedule_time")) or time(9, 0),
     )
+    st.markdown("### Quick Capture Automation")
+    settings_smart_parse_enabled = st.toggle(
+        "Enable smart parsing for quick capture",
+        value=bool(app_settings.get("quick_capture_smart_parse_enabled", True)),
+        help="Use one-line commands like 'tomorrow 9am high clinic call PT'.",
+    )
+    settings_parser_min_confidence = st.slider(
+        "Parser minimum confidence",
+        min_value=0.40,
+        max_value=0.90,
+        value=float(app_settings.get("quick_capture_parser_min_confidence", 0.58)),
+        step=0.01,
+    )
+    settings_auto_schedule_high_priority = st.toggle(
+        "Auto-schedule unscheduled high-priority captures",
+        value=bool(app_settings.get("quick_capture_auto_schedule_high_priority", True)),
+    )
+    auto_window_cols = st.columns(2)
+    with auto_window_cols[0]:
+        settings_auto_schedule_start_time = st.time_input(
+            "Auto-schedule window start",
+            value=parse_time_value(app_settings.get("quick_capture_schedule_start_time")) or time(8, 0),
+        )
+    with auto_window_cols[1]:
+        settings_auto_schedule_end_time = st.time_input(
+            "Auto-schedule window end",
+            value=parse_time_value(app_settings.get("quick_capture_schedule_end_time")) or time(18, 0),
+        )
+    settings_auto_schedule_weekdays_only = st.toggle(
+        "Auto-schedule weekdays only",
+        value=bool(app_settings.get("quick_capture_schedule_weekdays_only", False)),
+    )
+    settings_auto_schedule_horizon_days = st.slider(
+        "Auto-schedule search horizon (days)",
+        min_value=3,
+        max_value=30,
+        value=max(3, min(30, safe_int(app_settings.get("quick_capture_schedule_horizon_days", 14), 14))),
+        step=1,
+    )
     settings_timeline_days = st.slider(
         "Default timeline window (days)",
         min_value=3,
@@ -11035,6 +11471,13 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "default_priority": settings_priority,
                 "default_duration": int(settings_duration),
                 "default_schedule_time": settings_time.strftime("%H:%M"),
+                "quick_capture_smart_parse_enabled": bool(settings_smart_parse_enabled),
+                "quick_capture_parser_min_confidence": float(settings_parser_min_confidence),
+                "quick_capture_auto_schedule_high_priority": bool(settings_auto_schedule_high_priority),
+                "quick_capture_schedule_start_time": settings_auto_schedule_start_time.strftime("%H:%M"),
+                "quick_capture_schedule_end_time": settings_auto_schedule_end_time.strftime("%H:%M"),
+                "quick_capture_schedule_weekdays_only": bool(settings_auto_schedule_weekdays_only),
+                "quick_capture_schedule_horizon_days": int(settings_auto_schedule_horizon_days),
                 "timeline_days": int(settings_timeline_days),
                 "surgeon_clinic_patient_target": int(settings_surgeon_patient_target),
                 "general_clinic_patient_target": int(settings_general_patient_target),
@@ -13852,6 +14295,7 @@ app_bootstrap.run_app(
         "render_page_banner": render_page_banner,
         "overview_runtime_settings": overview_runtime_settings,
         "add_task": add_task,
+        "capture_task_from_quick_entry": capture_task_from_quick_entry,
         "render_overview_control_tower": render_overview_control_tower,
         "render_add_task_panel": render_add_task_panel,
         "render_personal_focus_panel": render_personal_focus_panel,

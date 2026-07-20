@@ -10,7 +10,9 @@ Current capabilities include:
 
 - Multi-page navigation: Overview, Personal, Clinic, Schedule, AI, Analytics, Notifications, Daily Review, Settings.
 - Task capture with lane, priority, and due date.
+- Smart quick capture now supports natural-language commands (for example: `tomorrow 9am high clinic call PT`) with confidence-based parsing.
 - Optional scheduling with date, time, and estimated duration.
+- Optional quick-capture autopilot can auto-place unscheduled high-priority tasks into the next open planning slot.
 - Upcoming schedule panel for planned work blocks.
 - Sidebar data controls for DB health and one-click sample task seeding.
 - AI Planner panel to generate a prioritized daily plan from your current tasks.
@@ -30,6 +32,7 @@ Current capabilities include:
 - MA Lead page now includes a full Biweekly Check-ins tab with due queue, check-in capture, follow-up action tracking, trend snapshots, and leadership summary export.
 - Settings page with persistent defaults (category, priority, duration, schedule time,\timeline window).
 - Settings now includes a Feature Flags section so optional/experimental surfaces can be enabled or disabled without code changes.
+- Settings now includes Quick Capture Automation controls (smart parse toggle, confidence threshold, and auto-schedule guardrails).
 - Optional diagnostics panel is available via Feature Flags and shows render-time timings for key app sections.
 - MA Lead advanced sections now load one selected advanced section at a time to reduce render overhead.
 

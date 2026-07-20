@@ -105,6 +105,7 @@ def run_app(context, st_module=st):
     render_morning_digest_panel = context.get("render_morning_digest_panel")
     render_full_news_page = context.get("render_full_news_page")
     add_task = context["add_task"]
+    capture_task_from_quick_entry = context.get("capture_task_from_quick_entry")
     news_manual_refresh_requested = False
 
     perf_entries = []
@@ -325,7 +326,7 @@ def run_app(context, st_module=st):
         st_module.markdown("---")
         with st_module.expander("Quick capture", expanded=False):
             with st_module.form("sidebar_quick_capture", clear_on_submit=True):
-                quick_title = st_module.text_input("Task title", placeholder="What needs to get done?")
+                quick_title = st_module.text_input("Task title", placeholder="Try: tomorrow 9am high clinic call PT")
                 quick_category = st_module.selectbox("Category", ["Personal", "Clinic"])
                 quick_priority = st_module.selectbox("Priority", ["high", "medium", "low"], index=1)
                 quick_due = st_module.date_input("Due date", value=mountain_today())
@@ -334,8 +335,27 @@ def run_app(context, st_module=st):
                 if not quick_title.strip():
                     st_module.warning("Add a task title first.")
                 else:
-                    context["add_task"](quick_title.strip(), "", quick_category, quick_priority, quick_due)
-                    st_module.success("Quick task added.")
+                    if capture_task_from_quick_entry:
+                        capture_result = capture_task_from_quick_entry(
+                            quick_title.strip(),
+                            quick_category,
+                            quick_priority,
+                            quick_due,
+                            app_settings,
+                        )
+                        if capture_result.get("created"):
+                            if capture_result.get("used_parser"):
+                                confidence_pct = int(round(float(capture_result.get("confidence", 0.0)) * 100))
+                                st_module.success(f"Smart-captured ({confidence_pct}%): {capture_result.get('title')}")
+                            else:
+                                st_module.success("Quick task added.")
+                            if capture_result.get("autopilot_note"):
+                                st_module.caption(capture_result["autopilot_note"])
+                        else:
+                            st_module.warning(capture_result.get("message") or "Unable to capture task.")
+                    else:
+                        context["add_task"](quick_title.strip(), "", quick_category, quick_priority, quick_due)
+                        st_module.success("Quick task added.")
                     st_module.rerun()
 
         st_module.markdown("---")
@@ -613,8 +633,27 @@ def run_app(context, st_module=st):
             if not command_title.strip():
                 st_module.warning("Add a task title before submitting the command bar.")
             else:
-                add_task(command_title.strip(), "", command_category, command_priority, command_due)
-                st_module.success("Task captured from command bar.")
+                if capture_task_from_quick_entry:
+                    capture_result = capture_task_from_quick_entry(
+                        command_title.strip(),
+                        command_category,
+                        command_priority,
+                        command_due,
+                        app_settings,
+                    )
+                    if capture_result.get("created"):
+                        if capture_result.get("used_parser"):
+                            confidence_pct = int(round(float(capture_result.get("confidence", 0.0)) * 100))
+                            st_module.success(f"Command captured with smart parse ({confidence_pct}%).")
+                        else:
+                            st_module.success("Task captured from command bar.")
+                        if capture_result.get("autopilot_note"):
+                            st_module.caption(capture_result["autopilot_note"])
+                    else:
+                        st_module.warning(capture_result.get("message") or "Unable to capture task.")
+                else:
+                    add_task(command_title.strip(), "", command_category, command_priority, command_due)
+                    st_module.success("Task captured from command bar.")
                 st_module.rerun()
 
     ritual_started_key = "day_ritual_started_on"
