@@ -32,6 +32,7 @@ import ai_workflows
 import app_bootstrap
 import dayanchor_brain
 import data_access
+import scheduling_core as scheduling_core_module
 from family_goals_core import family_goal_dashboard_summary, normalize_family_goals
 from formatting_core import (
     format_due,
@@ -263,6 +264,8 @@ DEFAULT_APP_SETTINGS = {
     "ma_lead_development": {},
     "ma_lead_daily_leadership_log": {},
     "ma_lead_health_thresholds": {},
+    "ma_lead_ordering_items": [],
+    "ma_lead_schedule_requests": [],
     "feature_flags": dict(FEATURE_FLAG_DEFAULTS),
 }
 
@@ -609,6 +612,148 @@ def parse_time_value(raw_value):
         except ValueError:
             return None
     return None
+
+
+def _normalize_order_priority(value):
+    normalized = str(value or "").strip().lower()
+    if normalized in ("critical", "high", "medium", "low"):
+        return normalized
+    if normalized in ("urgent", "asap"):
+        return "critical"
+    return "medium"
+
+
+def _normalize_order_status(value):
+    normalized = str(value or "").strip().lower().replace(" ", "_")
+    status_aliases = {
+        "requested": "requested",
+        "request": "requested",
+        "ordered": "ordered",
+        "order_placed": "ordered",
+        "backordered": "backordered",
+        "back_ordered": "backordered",
+        "received": "received",
+        "complete": "received",
+        "canceled": "canceled",
+        "cancelled": "canceled",
+    }
+    return status_aliases.get(normalized, "requested")
+
+
+def _load_sheet_rows_for_import(file_name, file_bytes):
+    if isinstance(file_bytes, memoryview):
+        file_bytes = bytes(file_bytes)
+    raw_bytes = file_bytes or b""
+    lower_name = str(file_name or "").lower()
+    if lower_name.endswith(".xlsx"):
+        try:
+            return scheduling_core_module._read_xlsx_sheet_rows(raw_bytes)
+        except Exception:
+            return []
+
+    text_value = ""
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text_value = raw_bytes.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if not text_value:
+        text_value = raw_bytes.decode("utf-8", errors="ignore")
+    return scheduling_core_module._split_schedule_text_rows(text_value)
+
+
+def parse_ordering_sheet_document(file_name, file_bytes):
+    rows = _load_sheet_rows_for_import(file_name, file_bytes)
+    non_empty_rows = []
+    for row in rows:
+        cleaned_row = [str(cell or "").strip() for cell in row]
+        if any(cleaned_row):
+            non_empty_rows.append(cleaned_row)
+
+    if not non_empty_rows:
+        return {"items": [], "parsed_count": 0, "skipped_count": 0, "header_detected": False}
+
+    header_aliases = {
+        "item_name": {"item", "item_name", "item name", "supply", "supply_item", "description", "product"},
+        "quantity": {"qty", "quantity", "count", "units", "amount"},
+        "vendor": {"vendor", "source", "supplier", "company"},
+        "needed_by": {"needed_by", "needed by", "date_needed", "need_by", "need by", "date"},
+        "priority": {"priority", "urgency"},
+        "status": {"status", "state"},
+        "notes": {"notes", "comments", "comment", "reason"},
+    }
+
+    def _normalize_header_token(value):
+        token = str(value or "").strip().lower()
+        token = re.sub(r"[^a-z0-9]+", "_", token).strip("_")
+        return token
+
+    header_index = None
+    header_map = {}
+    for idx, row in enumerate(non_empty_rows[:5]):
+        tentative_map = {}
+        for col_index, raw_cell in enumerate(row):
+            token = _normalize_header_token(raw_cell)
+            if not token:
+                continue
+            for target_key, aliases in header_aliases.items():
+                if token in aliases and target_key not in tentative_map:
+                    tentative_map[target_key] = col_index
+        if "item_name" in tentative_map and len(tentative_map) >= 2:
+            header_index = idx
+            header_map = tentative_map
+            break
+
+    if not header_map:
+        header_map = {
+            "item_name": 0,
+            "quantity": 1,
+            "vendor": 2,
+            "needed_by": 3,
+            "priority": 4,
+            "status": 5,
+            "notes": 6,
+        }
+
+    data_rows = non_empty_rows[(header_index + 1) if header_index is not None else 0 :]
+    parsed_items = []
+    skipped_count = 0
+    for row in data_rows:
+        def _cell(col_name):
+            col_index = header_map.get(col_name)
+            if col_index is None or col_index >= len(row):
+                return ""
+            return str(row[col_index] or "").strip()
+
+        item_name = _cell("item_name")
+        if not item_name:
+            skipped_count += 1
+            continue
+
+        quantity_value = safe_int(_cell("quantity"), 1)
+        quantity_value = max(1, int(quantity_value))
+        needed_by_raw = _cell("needed_by")
+        needed_by_value = scheduling_core_module._coerce_schedule_date(needed_by_raw) or parse_date_value(needed_by_raw)
+
+        parsed_items.append(
+            {
+                "item_name": item_name,
+                "quantity": quantity_value,
+                "vendor": _cell("vendor"),
+                "needed_by": needed_by_value,
+                "priority": _normalize_order_priority(_cell("priority")),
+                "status": _normalize_order_status(_cell("status")),
+                "notes": _cell("notes"),
+            }
+        )
+
+    return {
+        "items": parsed_items,
+        "parsed_count": len(parsed_items),
+        "skipped_count": skipped_count,
+        "header_detected": header_index is not None,
+    }
 
 
 CAPTURE_WEEKDAY_TO_INDEX = {
@@ -8150,6 +8295,118 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         for item in list(app_settings.get("ma_lead_weekly_priorities") or [])
         if str(item).strip()
     ][:5]
+    raw_ordering_items = list(app_settings.get("ma_lead_ordering_items") or [])
+    raw_schedule_requests = list(app_settings.get("ma_lead_schedule_requests") or [])
+
+    def _normalize_ordering_items(raw_items):
+        if not isinstance(raw_items, list):
+            return []
+        status_order = {
+            "requested": 0,
+            "ordered": 1,
+            "backordered": 2,
+            "received": 3,
+            "canceled": 4,
+        }
+        valid_priorities = {"critical", "high", "medium", "low"}
+        normalized = []
+        for source_index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                continue
+            item_name = str(raw_item.get("item_name") or "").strip()
+            if not item_name:
+                continue
+            priority_value = str(raw_item.get("priority") or "medium").strip().lower()
+            if priority_value not in valid_priorities:
+                priority_value = "medium"
+            status_value = str(raw_item.get("status") or "requested").strip().lower()
+            if status_value not in status_order:
+                status_value = "requested"
+            normalized.append(
+                {
+                    "order_id": str(raw_item.get("order_id") or f"order_{source_index}_{item_name.lower().replace(' ', '_')}").strip(),
+                    "source_index": source_index,
+                    "item_name": item_name,
+                    "quantity": max(1, safe_int(raw_item.get("quantity"), 1)),
+                    "vendor": str(raw_item.get("vendor") or "").strip(),
+                    "needed_by": parse_date_value(raw_item.get("needed_by")),
+                    "priority": priority_value,
+                    "status": status_value,
+                    "notes": str(raw_item.get("notes") or "").strip(),
+                    "created_at": str(raw_item.get("created_at") or "").strip(),
+                    "updated_at": str(raw_item.get("updated_at") or "").strip(),
+                }
+            )
+        return sorted(
+            normalized,
+            key=lambda item: (
+                status_order.get(item.get("status"), 9),
+                item.get("needed_by") or date.max,
+                str(item.get("item_name") or "").lower(),
+            ),
+        )
+
+    def _normalize_schedule_requests(raw_items):
+        if not isinstance(raw_items, list):
+            return []
+        status_order = {
+            "requested": 0,
+            "reviewed": 1,
+            "approved": 2,
+            "scheduled": 3,
+            "declined": 4,
+            "canceled": 5,
+        }
+        valid_request_types = {
+            "time_off",
+            "shift_swap",
+            "coverage_request",
+            "template_change",
+            "availability_update",
+        }
+        normalized = []
+        for source_index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                continue
+            ma_name = str(raw_item.get("ma_name") or "").strip()
+            if not ma_name:
+                continue
+            request_type = str(raw_item.get("request_type") or "coverage_request").strip().lower()
+            if request_type not in valid_request_types:
+                request_type = "coverage_request"
+            status_value = str(raw_item.get("status") or "requested").strip().lower()
+            if status_value not in status_order:
+                status_value = "requested"
+            start_date = parse_date_value(raw_item.get("start_date"))
+            end_date = parse_date_value(raw_item.get("end_date")) or start_date
+            if start_date and end_date and end_date < start_date:
+                start_date, end_date = end_date, start_date
+            normalized.append(
+                {
+                    "request_id": str(raw_item.get("request_id") or f"request_{source_index}_{ma_name.lower().replace(' ', '_')}").strip(),
+                    "source_index": source_index,
+                    "ma_name": ma_name,
+                    "request_type": request_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "shift_label": str(raw_item.get("shift_label") or "").strip(),
+                    "status": status_value,
+                    "notes": str(raw_item.get("notes") or "").strip(),
+                    "created_at": str(raw_item.get("created_at") or "").strip(),
+                    "updated_at": str(raw_item.get("updated_at") or "").strip(),
+                }
+            )
+        return sorted(
+            normalized,
+            key=lambda item: (
+                status_order.get(item.get("status"), 9),
+                item.get("start_date") or date.max,
+                str(item.get("ma_name") or "").lower(),
+            ),
+        )
+
+    ordering_items = _normalize_ordering_items(raw_ordering_items)
+    schedule_requests = _normalize_schedule_requests(raw_schedule_requests)
 
     def _save_ma_lead_settings(
         updated_weekly_targets=None,
@@ -8166,6 +8423,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         updated_weekly_priorities=None,
         updated_lead_development=None,
         updated_daily_leadership_log=None,
+        updated_ordering_items=None,
+        updated_schedule_requests=None,
     ):
         save_app_settings(
             {
@@ -8192,6 +8451,8 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                 "ma_lead_weekly_priorities": updated_weekly_priorities if updated_weekly_priorities is not None else app_settings.get("ma_lead_weekly_priorities", []),
                 "ma_lead_development": updated_lead_development if updated_lead_development is not None else app_settings.get("ma_lead_development", {}),
                 "ma_lead_daily_leadership_log": updated_daily_leadership_log if updated_daily_leadership_log is not None else app_settings.get("ma_lead_daily_leadership_log", {}),
+                "ma_lead_ordering_items": updated_ordering_items if updated_ordering_items is not None else app_settings.get("ma_lead_ordering_items", []),
+                "ma_lead_schedule_requests": updated_schedule_requests if updated_schedule_requests is not None else app_settings.get("ma_lead_schedule_requests", []),
             }
         )
 
@@ -8653,6 +8914,7 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
         "Command Center",
         "Clinical Triage Queue",
         "MA Assignments",
+        "Ordering & Scheduling",
         "Daily Huddle",
         "SOP Playbook",
         "Biweekly Check-ins",
@@ -9124,6 +9386,400 @@ def render_ma_lead_panel(active_tasks, clinic_tasks_all, panel_key="ma_lead"):
                             st.rerun()
         else:
             st.caption("No MA assignments tracked yet.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab_lookup["Ordering & Scheduling"]:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><h3>Ordering & Scheduling</h3><span>Run MA supply ordering and schedule coordination in one place</span></div>', unsafe_allow_html=True)
+
+        weekday_name = today_value.strftime("%A")
+        today_staffing = []
+        for assignment in ma_assignments:
+            status_value = str(assignment.get("status") or "").strip().lower()
+            if status_value not in ("active", "backup"):
+                continue
+            assigned_days = [day.strip() for day in str(assignment.get("clinic_days") or "").split(",") if day.strip()]
+            if weekday_name in assigned_days:
+                today_staffing.append(assignment)
+
+        today_time_off = []
+        active_coverage_requests = []
+        for request in schedule_requests:
+            status_value = str(request.get("status") or "").strip().lower()
+            start_day = request.get("start_date")
+            end_day = request.get("end_date") or start_day
+            request_type = str(request.get("request_type") or "").strip().lower()
+            if request_type == "time_off" and status_value in ("approved", "scheduled"):
+                if isinstance(start_day, date) and isinstance(end_day, date) and start_day <= today_value <= end_day:
+                    today_time_off.append(request)
+            if request_type in ("coverage_request", "shift_swap") and status_value in ("requested", "reviewed", "approved"):
+                active_coverage_requests.append(request)
+
+        st.markdown("#### Today Staffing Board")
+        staffing_metrics = st.columns(4)
+        staffing_metrics[0].metric("Active today", len([item for item in today_staffing if item.get("status") == "active"]))
+        staffing_metrics[1].metric("Backup today", len([item for item in today_staffing if item.get("status") == "backup"]))
+        staffing_metrics[2].metric("Time off today", len(today_time_off))
+        staffing_metrics[3].metric("Open coverage/swap", len(active_coverage_requests))
+
+        staffing_cols = st.columns(2, gap="large")
+        with staffing_cols[0]:
+            st.markdown("**Roster for today**")
+            if today_staffing:
+                for assignment in sorted(today_staffing, key=lambda item: (0 if item.get("status") == "active" else 1, str(item.get("ma_name") or "").lower())):
+                    st.markdown(
+                        f"- {assignment.get('ma_name') or 'Unnamed MA'} · {assignment.get('provider_name') or 'No provider'} · {assignment.get('status') or 'active'}"
+                    )
+            else:
+                st.caption(f"No MA assignments are mapped to {weekday_name} yet.")
+        with staffing_cols[1]:
+            st.markdown("**Coverage items needing action**")
+            action_items = sorted(
+                active_coverage_requests,
+                key=lambda item: (item.get("start_date") or date.max, str(item.get("ma_name") or "").lower()),
+            )
+            if action_items:
+                for request in action_items[:8]:
+                    start_day = request.get("start_date")
+                    end_day = request.get("end_date") or start_day
+                    date_label = "no date"
+                    if isinstance(start_day, date) and isinstance(end_day, date):
+                        date_label = start_day.strftime("%b %d") if start_day == end_day else f"{start_day.strftime('%b %d')} to {end_day.strftime('%b %d')}"
+                    st.markdown(
+                        f"- {request.get('ma_name') or 'Unknown MA'} · {str(request.get('request_type') or '').replace('_', ' ')} · {request.get('status')} · {date_label}"
+                    )
+            else:
+                st.caption("No open coverage or swap requests.")
+
+        if today_time_off:
+            st.caption(
+                "Time off today: "
+                + ", ".join(sorted({str(item.get("ma_name") or "").strip() for item in today_time_off if str(item.get("ma_name") or "").strip()}))
+            )
+
+        open_order_statuses = {"requested", "ordered", "backordered"}
+        active_request_statuses = {"requested", "reviewed", "approved", "scheduled"}
+        open_orders = [item for item in ordering_items if item.get("status") in open_order_statuses]
+        due_this_week_orders = [
+            item
+            for item in open_orders
+            if isinstance(item.get("needed_by"), date)
+            and item.get("needed_by") <= (today_value + timedelta(days=7))
+        ]
+        active_schedule_requests = [item for item in schedule_requests if item.get("status") in active_request_statuses]
+        coverage_requests = [item for item in active_schedule_requests if item.get("request_type") in ("coverage_request", "shift_swap")]
+
+        metrics = st.columns(4)
+        metrics[0].metric("Open supply orders", len(open_orders))
+        metrics[1].metric("Due this week", len(due_this_week_orders))
+        metrics[2].metric("Active schedule requests", len(active_schedule_requests))
+        metrics[3].metric("Coverage/swap requests", len(coverage_requests))
+
+        orders_col, schedule_col = st.columns(2, gap="large")
+
+        with orders_col:
+            st.markdown("#### Supply Ordering Queue")
+            with st.form(f"{panel_key}_ordering_form", clear_on_submit=True):
+                order_item_name = st.text_input("Item name", placeholder="Suture packs, Sterile gloves, Steri-Strips")
+                order_cols = st.columns(2)
+                with order_cols[0]:
+                    order_quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+                    order_vendor = st.text_input("Vendor/source", placeholder="Medline, Cardinal, Internal stock room")
+                with order_cols[1]:
+                    order_needed_by = st.date_input("Needed by", value=today_value + timedelta(days=3))
+                    order_priority = st.selectbox("Priority", ["critical", "high", "medium", "low"], index=2)
+                order_status = st.selectbox("Status", ["requested", "ordered", "backordered", "received", "canceled"], index=0)
+                order_notes = st.text_area("Notes", placeholder="Reason, case impact, substitution options...", height=90)
+                add_order = st.form_submit_button("Add supply order", type="primary")
+
+            if add_order:
+                if not order_item_name.strip():
+                    st.warning("Item name is required.")
+                else:
+                    updated_orders = list(raw_ordering_items)
+                    now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                    updated_orders.append(
+                        {
+                            "order_id": uuid4().hex,
+                            "item_name": order_item_name.strip(),
+                            "quantity": int(order_quantity),
+                            "vendor": order_vendor.strip(),
+                            "needed_by": order_needed_by,
+                            "priority": order_priority,
+                            "status": order_status,
+                            "notes": order_notes.strip(),
+                            "created_at": now_iso,
+                            "updated_at": now_iso,
+                        }
+                    )
+                    _save_ma_lead_settings(updated_ordering_items=updated_orders)
+                    st.success("Supply order added.")
+                    st.rerun()
+
+            import_state_key = f"{panel_key}_ordering_import_items"
+            import_summary_key = f"{panel_key}_ordering_import_summary"
+            with st.expander("Import existing clinic ordering sheet", expanded=False):
+                st.caption("Upload CSV, TSV, TXT, or XLSX. Expected columns include item, quantity, vendor, needed by, priority, status, and notes.")
+                ordering_sheet_file = st.file_uploader(
+                    "Ordering sheet file",
+                    type=["csv", "tsv", "txt", "xlsx"],
+                    key=f"{panel_key}_ordering_sheet_upload",
+                )
+
+                parse_col, import_col = st.columns(2)
+                if parse_col.button("Parse sheet", key=f"{panel_key}_parse_ordering_sheet"):
+                    if not ordering_sheet_file:
+                        st.warning("Upload a file before parsing.")
+                    else:
+                        parse_result = parse_ordering_sheet_document(
+                            ordering_sheet_file.name,
+                            ordering_sheet_file.getvalue(),
+                        )
+                        st.session_state[import_state_key] = parse_result.get("items") or []
+                        st.session_state[import_summary_key] = {
+                            "parsed_count": int(parse_result.get("parsed_count") or 0),
+                            "skipped_count": int(parse_result.get("skipped_count") or 0),
+                            "header_detected": bool(parse_result.get("header_detected")),
+                        }
+
+                parsed_items = list(st.session_state.get(import_state_key) or [])
+                parsed_summary = st.session_state.get(import_summary_key) or {}
+                if parsed_items:
+                    st.success(
+                        f"Parsed {parsed_summary.get('parsed_count', len(parsed_items))} row(s)"
+                        f"{' with header detected' if parsed_summary.get('header_detected') else ' using fallback column mapping'}"
+                        f". Skipped {parsed_summary.get('skipped_count', 0)} blank row(s)."
+                    )
+                    preview_rows = parsed_items[:10]
+                    for preview in preview_rows:
+                        needed_by = preview.get("needed_by")
+                        needed_by_label = needed_by.isoformat() if isinstance(needed_by, date) else ""
+                        st.markdown(
+                            f"- {preview.get('item_name')} · qty {preview.get('quantity')} · {preview.get('priority')} · {preview.get('status')} · {needed_by_label}"
+                        )
+                    if len(parsed_items) > len(preview_rows):
+                        st.caption(f"Previewing {len(preview_rows)} of {len(parsed_items)} parsed rows.")
+
+                    if import_col.button("Import parsed rows", key=f"{panel_key}_import_ordering_rows", type="secondary"):
+                        now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                        updated_orders = list(raw_ordering_items)
+                        for parsed in parsed_items:
+                            updated_orders.append(
+                                {
+                                    "order_id": uuid4().hex,
+                                    "item_name": str(parsed.get("item_name") or "").strip(),
+                                    "quantity": max(1, safe_int(parsed.get("quantity"), 1)),
+                                    "vendor": str(parsed.get("vendor") or "").strip(),
+                                    "needed_by": parsed.get("needed_by") if isinstance(parsed.get("needed_by"), date) else None,
+                                    "priority": _normalize_order_priority(parsed.get("priority")),
+                                    "status": _normalize_order_status(parsed.get("status")),
+                                    "notes": str(parsed.get("notes") or "").strip(),
+                                    "created_at": now_iso,
+                                    "updated_at": now_iso,
+                                }
+                            )
+                        _save_ma_lead_settings(updated_ordering_items=updated_orders)
+                        st.session_state.pop(import_state_key, None)
+                        st.session_state.pop(import_summary_key, None)
+                        st.success(f"Imported {len(parsed_items)} ordering row(s).")
+                        st.rerun()
+                elif parsed_summary:
+                    st.info("No valid ordering rows were parsed from that file.")
+
+            if ordering_items:
+                for item in ordering_items[:30]:
+                    order_id = item.get("order_id") or "order"
+                    needed_by = item.get("needed_by")
+                    needed_by_label = needed_by.strftime("%b %d") if isinstance(needed_by, date) else "No date"
+                    status_value = item.get("status") or "requested"
+                    with st.expander(f"{item.get('item_name')} · {status_value} · need by {needed_by_label}", expanded=False):
+                        edit_cols = st.columns(2)
+                        with edit_cols[0]:
+                            edit_qty = st.number_input("Quantity", min_value=1, step=1, value=int(item.get("quantity") or 1), key=f"{panel_key}_order_qty_{order_id}")
+                            edit_vendor = st.text_input("Vendor/source", value=item.get("vendor") or "", key=f"{panel_key}_order_vendor_{order_id}")
+                            edit_needed_by = st.date_input(
+                                "Needed by",
+                                value=item.get("needed_by") if isinstance(item.get("needed_by"), date) else today_value,
+                                key=f"{panel_key}_order_needed_by_{order_id}",
+                            )
+                        with edit_cols[1]:
+                            edit_priority = st.selectbox(
+                                "Priority",
+                                ["critical", "high", "medium", "low"],
+                                index=["critical", "high", "medium", "low"].index(item.get("priority") if item.get("priority") in ["critical", "high", "medium", "low"] else "medium"),
+                                key=f"{panel_key}_order_priority_{order_id}",
+                            )
+                            edit_status = st.selectbox(
+                                "Status",
+                                ["requested", "ordered", "backordered", "received", "canceled"],
+                                index=["requested", "ordered", "backordered", "received", "canceled"].index(status_value if status_value in ["requested", "ordered", "backordered", "received", "canceled"] else "requested"),
+                                key=f"{panel_key}_order_status_{order_id}",
+                            )
+                        edit_notes = st.text_area("Notes", value=item.get("notes") or "", key=f"{panel_key}_order_notes_{order_id}", height=80)
+
+                        save_col, delete_col = st.columns(2)
+                        if save_col.button("Save order", key=f"{panel_key}_save_order_{order_id}", type="secondary"):
+                            source_index = item.get("source_index")
+                            if source_index is not None and source_index < len(raw_ordering_items):
+                                updated_orders = list(raw_ordering_items)
+                                now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                                existing = updated_orders[source_index] if isinstance(updated_orders[source_index], dict) else {}
+                                updated_orders[source_index] = {
+                                    **existing,
+                                    "order_id": str(existing.get("order_id") or order_id),
+                                    "item_name": item.get("item_name"),
+                                    "quantity": int(edit_qty),
+                                    "vendor": edit_vendor.strip(),
+                                    "needed_by": edit_needed_by,
+                                    "priority": edit_priority,
+                                    "status": edit_status,
+                                    "notes": edit_notes.strip(),
+                                    "updated_at": now_iso,
+                                    "created_at": str(existing.get("created_at") or now_iso),
+                                }
+                                _save_ma_lead_settings(updated_ordering_items=updated_orders)
+                                st.success("Order updated.")
+                                st.rerun()
+                        if delete_col.button("Delete order", key=f"{panel_key}_delete_order_{order_id}"):
+                            source_index = item.get("source_index")
+                            if source_index is not None and source_index < len(raw_ordering_items):
+                                updated_orders = [entry for idx, entry in enumerate(raw_ordering_items) if idx != source_index]
+                                _save_ma_lead_settings(updated_ordering_items=updated_orders)
+                                st.success("Order deleted.")
+                                st.rerun()
+            else:
+                st.caption("No supply orders yet.")
+
+        with schedule_col:
+            st.markdown("#### MA Schedule Request Queue")
+            with st.form(f"{panel_key}_schedule_request_form", clear_on_submit=True):
+                request_ma_name = st.text_input("MA name", placeholder="Who needs schedule support?")
+                request_cols = st.columns(2)
+                with request_cols[0]:
+                    request_type = st.selectbox(
+                        "Request type",
+                        ["coverage_request", "shift_swap", "time_off", "template_change", "availability_update"],
+                        format_func=lambda value: value.replace("_", " ").title(),
+                    )
+                    request_start_date = st.date_input("Start date", value=today_value)
+                    request_end_date = st.date_input("End date", value=today_value)
+                with request_cols[1]:
+                    request_shift_label = st.text_input("Shift/clinic context", placeholder="AM clinic, PM procedures, Tuesday BB clinic")
+                    request_status = st.selectbox(
+                        "Status",
+                        ["requested", "reviewed", "approved", "scheduled", "declined", "canceled"],
+                        index=0,
+                    )
+                request_notes = st.text_area("Notes", placeholder="Reason, who can cover, constraints, and handoff notes...", height=90)
+                add_request = st.form_submit_button("Add schedule request", type="primary")
+
+            if add_request:
+                if not request_ma_name.strip():
+                    st.warning("MA name is required.")
+                else:
+                    start_day = request_start_date
+                    end_day = request_end_date
+                    if end_day < start_day:
+                        start_day, end_day = end_day, start_day
+                    updated_requests = list(raw_schedule_requests)
+                    now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                    updated_requests.append(
+                        {
+                            "request_id": uuid4().hex,
+                            "ma_name": request_ma_name.strip(),
+                            "request_type": request_type,
+                            "start_date": start_day,
+                            "end_date": end_day,
+                            "shift_label": request_shift_label.strip(),
+                            "status": request_status,
+                            "notes": request_notes.strip(),
+                            "created_at": now_iso,
+                            "updated_at": now_iso,
+                        }
+                    )
+                    _save_ma_lead_settings(updated_schedule_requests=updated_requests)
+                    st.success("Schedule request added.")
+                    st.rerun()
+
+            if schedule_requests:
+                for item in schedule_requests[:30]:
+                    request_id = item.get("request_id") or "request"
+                    start_day = item.get("start_date")
+                    end_day = item.get("end_date")
+                    date_label = "No dates"
+                    if isinstance(start_day, date) and isinstance(end_day, date):
+                        date_label = start_day.strftime("%b %d") if start_day == end_day else f"{start_day.strftime('%b %d')} to {end_day.strftime('%b %d')}"
+                    status_value = item.get("status") or "requested"
+                    with st.expander(
+                        f"{item.get('ma_name')} · {str(item.get('request_type') or '').replace('_', ' ')} · {status_value} · {date_label}",
+                        expanded=False,
+                    ):
+                        edit_cols = st.columns(2)
+                        with edit_cols[0]:
+                            edit_type = st.selectbox(
+                                "Request type",
+                                ["coverage_request", "shift_swap", "time_off", "template_change", "availability_update"],
+                                index=["coverage_request", "shift_swap", "time_off", "template_change", "availability_update"].index(item.get("request_type") if item.get("request_type") in ["coverage_request", "shift_swap", "time_off", "template_change", "availability_update"] else "coverage_request"),
+                                format_func=lambda value: value.replace("_", " ").title(),
+                                key=f"{panel_key}_request_type_{request_id}",
+                            )
+                            edit_start = st.date_input(
+                                "Start date",
+                                value=item.get("start_date") if isinstance(item.get("start_date"), date) else today_value,
+                                key=f"{panel_key}_request_start_{request_id}",
+                            )
+                            edit_end = st.date_input(
+                                "End date",
+                                value=item.get("end_date") if isinstance(item.get("end_date"), date) else (item.get("start_date") if isinstance(item.get("start_date"), date) else today_value),
+                                key=f"{panel_key}_request_end_{request_id}",
+                            )
+                        with edit_cols[1]:
+                            edit_shift = st.text_input("Shift/clinic context", value=item.get("shift_label") or "", key=f"{panel_key}_request_shift_{request_id}")
+                            edit_status = st.selectbox(
+                                "Status",
+                                ["requested", "reviewed", "approved", "scheduled", "declined", "canceled"],
+                                index=["requested", "reviewed", "approved", "scheduled", "declined", "canceled"].index(status_value if status_value in ["requested", "reviewed", "approved", "scheduled", "declined", "canceled"] else "requested"),
+                                key=f"{panel_key}_request_status_{request_id}",
+                            )
+                        edit_notes = st.text_area("Notes", value=item.get("notes") or "", key=f"{panel_key}_request_notes_{request_id}", height=80)
+
+                        save_col, delete_col = st.columns(2)
+                        if save_col.button("Save request", key=f"{panel_key}_save_request_{request_id}", type="secondary"):
+                            start_day = edit_start
+                            end_day = edit_end
+                            if end_day < start_day:
+                                start_day, end_day = end_day, start_day
+                            source_index = item.get("source_index")
+                            if source_index is not None and source_index < len(raw_schedule_requests):
+                                updated_requests = list(raw_schedule_requests)
+                                now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                                existing = updated_requests[source_index] if isinstance(updated_requests[source_index], dict) else {}
+                                updated_requests[source_index] = {
+                                    **existing,
+                                    "request_id": str(existing.get("request_id") or request_id),
+                                    "ma_name": item.get("ma_name"),
+                                    "request_type": edit_type,
+                                    "start_date": start_day,
+                                    "end_date": end_day,
+                                    "shift_label": edit_shift.strip(),
+                                    "status": edit_status,
+                                    "notes": edit_notes.strip(),
+                                    "updated_at": now_iso,
+                                    "created_at": str(existing.get("created_at") or now_iso),
+                                }
+                                _save_ma_lead_settings(updated_schedule_requests=updated_requests)
+                                st.success("Schedule request updated.")
+                                st.rerun()
+                        if delete_col.button("Delete request", key=f"{panel_key}_delete_request_{request_id}"):
+                            source_index = item.get("source_index")
+                            if source_index is not None and source_index < len(raw_schedule_requests):
+                                updated_requests = [entry for idx, entry in enumerate(raw_schedule_requests) if idx != source_index]
+                                _save_ma_lead_settings(updated_schedule_requests=updated_requests)
+                                st.success("Schedule request deleted.")
+                                st.rerun()
+            else:
+                st.caption("No schedule requests yet.")
 
         st.markdown('</div>', unsafe_allow_html=True)
 
