@@ -5361,6 +5361,67 @@ def ai_workbench_summary(tasks, active_tasks):
     }
 
 
+def render_planner_brain_queue(active_tasks, app_settings, panel_key="planner_brain_queue", max_items=3):
+    today_value = mountain_today()
+    morning_checkins = normalize_morning_ritual_checkins((app_settings or {}).get("morning_ritual_checkins") or {})
+    family_items = normalize_family_schedule_items((app_settings or {}).get("family_schedule_items") or [])
+    life_entries = normalize_life_dashboard((app_settings or {}).get("life_dashboard") or {}).get("entries") or []
+    default_duration = max(15, safe_int((app_settings or {}).get("default_duration"), 60))
+    default_time = parse_time_value((app_settings or {}).get("default_schedule_time")) or time(9, 0)
+
+    brain_context = dayanchor_brain.build_brain_context(
+        today_value=today_value,
+        active_tasks=active_tasks,
+        family_items=family_items,
+        morning_checkins=morning_checkins,
+        life_entries=life_entries,
+        default_duration=default_duration,
+        default_time=default_time,
+        life_categories=LIFE_DASHBOARD_CATEGORIES,
+    )
+    brain_result = dayanchor_brain.generate_brain_signals(
+        brain_context,
+        next_weekday_date_fn=_next_weekday_date,
+    )
+    insights = list(brain_result.get("insights") or [])[: max(1, int(max_items))]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><h3>DayAnchor Brain Queue</h3><span>Top cross-pillar moves for your plan today</span></div>', unsafe_allow_html=True)
+
+    if insights:
+        for insight in insights:
+            st.markdown("<div class='task-card'>", unsafe_allow_html=True)
+            st.markdown(f"<div class='task-title'>{insight.get('title')}</div>", unsafe_allow_html=True)
+            st.progress((insight.get("confidence") or 0) / 100)
+            st.caption(f"Confidence: {insight.get('confidence', 0)}%")
+            st.markdown(f"<div style='margin-top:0.2rem;color:var(--muted);'>{insight.get('detail') or ''}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='margin-top:0.5rem;'><strong>Suggested move:</strong> {insight.get('action') or ''}</div>", unsafe_allow_html=True)
+
+            apply_cols = st.columns([1, 5])
+            if apply_cols[0].button("Queue move", key=f"{panel_key}_queue_{insight.get('id')}"):
+                payload = insight.get("task_payload") or {}
+                add_task(
+                    str(payload.get("title") or insight.get("title") or "Brain move").strip(),
+                    str(payload.get("description") or insight.get("detail") or "").strip(),
+                    payload.get("category") if payload.get("category") in ("Personal", "Clinic") else "Personal",
+                    payload.get("priority") if payload.get("priority") in ("high", "medium", "low") else "medium",
+                    payload.get("due_date") if isinstance(payload.get("due_date"), date) else today_value,
+                    scheduled_date=payload.get("scheduled_date") if isinstance(payload.get("scheduled_date"), date) else None,
+                    scheduled_time=payload.get("scheduled_time") if isinstance(payload.get("scheduled_time"), time) else None,
+                    scheduled_minutes=max(15, safe_int(payload.get("scheduled_minutes"), default_duration)),
+                )
+                st.success("Brain move added as a task.")
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="empty-state">Not enough cross-pillar history yet. Keep logging family, rituals, and life signals.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def apply_clinic_visit_template(form_key, template_key, st_module=st):
     templates = clinic_visit_templates()
     template = templates.get(template_key, templates["blank"])
@@ -11987,94 +12048,42 @@ def render_intelligence_panel(tasks, active_tasks, app_settings, panel_key="inte
     except Exception:
         protocol_documents = []
 
-    lookback_start = mountain_today() - timedelta(days=41)
-    recent_cases = [
-        item
-        for item in surgical_cases
-        if item.get("case_date") and item.get("case_date") >= lookback_start
-    ]
-    canceled_recent = [item for item in recent_cases if item.get("status") == "canceled"]
-    cancel_rate = round((len(canceled_recent) / len(recent_cases)) * 100, 1) if recent_cases else 0.0
-
-    coverage_cases = [
-        item
-        for item in surgical_cases
-        if item.get("case_date")
-        and item.get("case_date") >= (mountain_today() - timedelta(days=90))
-        and item.get("status") in ("planned", "completed")
-    ]
-    covered_cases = 0
-    for item in coverage_cases:
-        if ref_suggest_protocols_for_case(item, protocol_documents, max_items=1):
-            covered_cases += 1
-    protocol_coverage = round((covered_cases / len(coverage_cases)) * 100, 1) if coverage_cases else 0.0
-
-    week_starts = []
-    current_week_start = mountain_today() - timedelta(days=mountain_today().weekday())
-    for offset in range(5, -1, -1):
-        week_starts.append(current_week_start - timedelta(days=7 * offset))
-
-    cancel_trend = {}
-    coverage_trend = {}
-    for week_start in week_starts:
-        week_end = week_start + timedelta(days=6)
-        week_label = week_start.strftime("%b %d")
-        week_cases = [
-            item
-            for item in surgical_cases
-            if item.get("case_date") and week_start <= item.get("case_date") <= week_end
-        ]
-        week_canceled = [item for item in week_cases if item.get("status") == "canceled"]
-        week_coverage_candidates = [item for item in week_cases if item.get("status") in ("planned", "completed")]
-        week_covered = 0
-        for item in week_coverage_candidates:
-            if ref_suggest_protocols_for_case(item, protocol_documents, max_items=1):
-                week_covered += 1
-
-        cancel_trend[week_label] = len(week_canceled)
-        coverage_trend[week_label] = round((week_covered / len(week_coverage_candidates)) * 100, 1) if week_coverage_candidates else 0.0
+    case_signals = dayanchor_brain.build_case_signal_snapshot(
+        today_value=today_value,
+        surgical_cases=surgical_cases,
+        protocol_documents=protocol_documents,
+        protocol_match_fn=ref_suggest_protocols_for_case,
+    )
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Case Signal Snapshot</h3><span>Cancellation trend and protocol usage coverage</span></div>', unsafe_allow_html=True)
 
     case_signal_cols = st.columns(4)
-    case_signal_cols[0].metric("Recent cases (6w)", len(recent_cases))
-    case_signal_cols[1].metric("Canceled (6w)", len(canceled_recent))
-    case_signal_cols[2].metric("Cancel rate", f"{cancel_rate}%")
-    case_signal_cols[3].metric("Protocol coverage (90d)", f"{protocol_coverage}%")
+    case_signal_cols[0].metric("Recent cases (6w)", case_signals["recent_cases_count"])
+    case_signal_cols[1].metric("Canceled (6w)", case_signals["canceled_recent_count"])
+    case_signal_cols[2].metric("Cancel rate", f"{case_signals['cancel_rate']}%")
+    case_signal_cols[3].metric("Protocol coverage (90d)", f"{case_signals['protocol_coverage']}%")
 
     signal_left, signal_right = st.columns(2)
     with signal_left:
         st.subheader("Weekly cancellation trend")
-        st.line_chart(cancel_trend)
+        st.line_chart(case_signals["cancel_trend"])
     with signal_right:
         st.subheader("Weekly protocol coverage (%)")
-        st.line_chart(coverage_trend)
+        st.line_chart(case_signals["coverage_trend"])
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    performed_cases = [
-        item for item in surgical_cases if item.get("status") == "completed"
-    ]
-    surgery_type_counts = {}
-    for item in performed_cases:
-        procedure_name = str(item.get("procedure_name") or "").strip() or "Unspecified procedure"
-        surgery_type_counts[procedure_name] = surgery_type_counts.get(procedure_name, 0) + 1
-
-    sorted_surgery_counts = sorted(
-        surgery_type_counts.items(),
-        key=lambda entry: entry[1],
-        reverse=True,
-    )
+    sorted_surgery_counts = case_signals["sorted_surgery_counts"]
 
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><h3>Surgery Type Counts</h3><span>Completed case count by procedure</span></div>', unsafe_allow_html=True)
 
     surgery_cols = st.columns(2)
-    surgery_cols[0].metric("Completed cases", len(performed_cases))
-    surgery_cols[1].metric("Unique surgery types", len(sorted_surgery_counts))
+    surgery_cols[0].metric("Completed cases", case_signals["completed_cases_count"])
+    surgery_cols[1].metric("Unique surgery types", case_signals["unique_surgery_type_count"])
 
     if sorted_surgery_counts:
         st.bar_chart({name: count for name, count in sorted_surgery_counts})
@@ -14742,6 +14751,7 @@ app_bootstrap.run_app(
         "render_family_schedule_panel": render_family_schedule_panel,
         "render_task_list_panel": render_task_list_panel,
         "render_ai_panel": render_ai_panel,
+        "render_planner_brain_queue": render_planner_brain_queue,
         "render_review_command_panel": render_review_command_panel,
         "render_notifications_panel": render_notifications_panel,
         "render_ma_lead_panel": render_ma_lead_panel,

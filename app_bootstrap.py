@@ -86,6 +86,7 @@ def run_app(context, st_module=st):
     render_family_schedule_panel = context["render_family_schedule_panel"]
     render_task_list_panel = context["render_task_list_panel"]
     render_ai_panel = context["render_ai_panel"]
+    render_planner_brain_queue = context.get("render_planner_brain_queue")
     render_review_command_panel = context["render_review_command_panel"]
     render_notifications_panel = context["render_notifications_panel"]
     render_ma_lead_panel = context["render_ma_lead_panel"]
@@ -774,6 +775,9 @@ def run_app(context, st_module=st):
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="planner_system_overview")
+        if render_planner_brain_queue:
+            st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
+            render_planner_brain_queue(active_tasks, app_settings, panel_key="planner_system_brain_queue")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
         render_ai_panel(tasks, active_tasks, panel_key="planner_system_ai")
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)

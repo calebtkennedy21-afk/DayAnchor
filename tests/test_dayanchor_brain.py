@@ -1,6 +1,6 @@
 from datetime import date, time, timedelta
 
-from dayanchor_brain import build_brain_context, generate_brain_signals
+from dayanchor_brain import build_brain_context, build_case_signal_snapshot, generate_brain_signals
 
 
 LIFE_CATEGORIES = [
@@ -102,3 +102,34 @@ def test_generate_brain_signals_includes_family_ritual_and_life_signals():
     assert "life_directional_trend" in ids
     assert result["metrics"]["morning_checkin_count"] == 4
     assert result["metrics"]["family_item_count"] == 4
+
+
+def test_build_case_signal_snapshot_computes_metrics_and_trends():
+    today_value = date(2026, 8, 10)
+    surgical_cases = [
+        {"case_date": date(2026, 8, 9), "status": "completed", "procedure_name": "TenJet"},
+        {"case_date": date(2026, 8, 8), "status": "planned", "procedure_name": "Ankle Scope"},
+        {"case_date": date(2026, 8, 7), "status": "canceled", "procedure_name": "TenJet"},
+        {"case_date": date(2026, 7, 15), "status": "completed", "procedure_name": "TenJet"},
+    ]
+    protocol_documents = [{"id": 1, "protocol_name": "PT protocol"}]
+
+    def protocol_match_fn(case_item, docs, max_items=1):
+        del docs, max_items
+        return [1] if case_item.get("status") in ("planned", "completed") else []
+
+    snapshot = build_case_signal_snapshot(
+        today_value=today_value,
+        surgical_cases=surgical_cases,
+        protocol_documents=protocol_documents,
+        protocol_match_fn=protocol_match_fn,
+    )
+
+    assert snapshot["recent_cases_count"] == 4
+    assert snapshot["canceled_recent_count"] == 1
+    assert snapshot["protocol_coverage"] == 100.0
+    assert snapshot["completed_cases_count"] == 2
+    assert snapshot["unique_surgery_type_count"] == 1
+    assert "TenJet" in dict(snapshot["sorted_surgery_counts"])
+    assert len(snapshot["cancel_trend"]) == 6
+    assert len(snapshot["coverage_trend"]) == 6

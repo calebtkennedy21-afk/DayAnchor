@@ -14,6 +14,17 @@ def _parse_date(value):
         return value
     if not value:
         return None
+
+
+def _coerce_date(value):
+    if isinstance(value, date):
+        return value
+    if hasattr(value, "date"):
+        try:
+            return value.date()
+        except Exception:
+            return None
+    return None
     try:
         return date.fromisoformat(str(value).strip())
     except ValueError:
@@ -348,4 +359,86 @@ def generate_brain_signals(context, next_weekday_date_fn=None):
             "morning_checkin_count": len(ritual_rows),
             "family_item_count": len(family_items),
         },
+    }
+
+
+def build_case_signal_snapshot(today_value, surgical_cases, protocol_documents, protocol_match_fn):
+    cases = list(surgical_cases or [])
+    docs = list(protocol_documents or [])
+
+    lookback_start = today_value - timedelta(days=41)
+    recent_cases = []
+    for item in cases:
+        case_day = _coerce_date(item.get("case_date"))
+        if case_day and case_day >= lookback_start:
+            recent_cases.append(item)
+
+    canceled_recent = [item for item in recent_cases if item.get("status") == "canceled"]
+    cancel_rate = round((len(canceled_recent) / len(recent_cases)) * 100, 1) if recent_cases else 0.0
+
+    coverage_cases = []
+    for item in cases:
+        case_day = _coerce_date(item.get("case_date"))
+        if not case_day:
+            continue
+        if case_day < (today_value - timedelta(days=90)):
+            continue
+        if item.get("status") not in ("planned", "completed"):
+            continue
+        coverage_cases.append(item)
+
+    covered_cases = 0
+    for item in coverage_cases:
+        if protocol_match_fn(item, docs, max_items=1):
+            covered_cases += 1
+    protocol_coverage = round((covered_cases / len(coverage_cases)) * 100, 1) if coverage_cases else 0.0
+
+    week_starts = []
+    current_week_start = today_value - timedelta(days=today_value.weekday())
+    for offset in range(5, -1, -1):
+        week_starts.append(current_week_start - timedelta(days=7 * offset))
+
+    cancel_trend = {}
+    coverage_trend = {}
+    for week_start in week_starts:
+        week_end = week_start + timedelta(days=6)
+        week_label = week_start.strftime("%b %d")
+        week_cases = []
+        for item in cases:
+            case_day = _coerce_date(item.get("case_date"))
+            if case_day and week_start <= case_day <= week_end:
+                week_cases.append(item)
+
+        week_canceled = [item for item in week_cases if item.get("status") == "canceled"]
+        week_coverage_candidates = [item for item in week_cases if item.get("status") in ("planned", "completed")]
+        week_covered = 0
+        for item in week_coverage_candidates:
+            if protocol_match_fn(item, docs, max_items=1):
+                week_covered += 1
+
+        cancel_trend[week_label] = len(week_canceled)
+        coverage_trend[week_label] = round((week_covered / len(week_coverage_candidates)) * 100, 1) if week_coverage_candidates else 0.0
+
+    performed_cases = [item for item in cases if item.get("status") == "completed"]
+    surgery_type_counts = {}
+    for item in performed_cases:
+        procedure_name = str(item.get("procedure_name") or "").strip() or "Unspecified procedure"
+        surgery_type_counts[procedure_name] = surgery_type_counts.get(procedure_name, 0) + 1
+
+    sorted_surgery_counts = sorted(
+        surgery_type_counts.items(),
+        key=lambda entry: entry[1],
+        reverse=True,
+    )
+
+    return {
+        "recent_cases_count": len(recent_cases),
+        "canceled_recent_count": len(canceled_recent),
+        "cancel_rate": cancel_rate,
+        "protocol_coverage": protocol_coverage,
+        "cancel_trend": cancel_trend,
+        "coverage_trend": coverage_trend,
+        "completed_cases_count": len(performed_cases),
+        "unique_surgery_type_count": len(sorted_surgery_counts),
+        "sorted_surgery_counts": sorted_surgery_counts,
     }
