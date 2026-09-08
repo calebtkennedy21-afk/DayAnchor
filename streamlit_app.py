@@ -55,6 +55,7 @@ from overview_core import (
 import page_renderers
 import page_sections
 import telegram_alerts
+from brain_dump_core import parse_brain_dump
 from settings_serialization import dumps_json_safe
 from scheduling_core import (
     build_week_rebalance_moves,
@@ -229,6 +230,7 @@ DEFAULT_APP_SETTINGS = {
     "family_notes_updated_at": "",
     "home_routine_checklists": {},
     "quick_reminders": [],
+    "brain_dump_entries": [],
     "telegram_alerts_enabled": False,
     "telegram_chat_id": "",
     "telegram_timezone": "America/Denver",
@@ -5752,6 +5754,120 @@ def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, pane
                 )
         else:
             st.markdown('<div class="empty-state">No personal task is ready to pull into a sprint.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
+    entries = [item for item in (app_settings.get("brain_dump_entries") or []) if isinstance(item, dict)]
+    active_entries = [item for item in entries if str(item.get("status") or "new") == "new"]
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-title"><h3>Brain Dump</h3><span>Unload everything first, then decide what it becomes</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("One thought per line. Tasks, reminders, notes, and ideas stay here until you process them.")
+    with st.form(f"{panel_key}_capture", clear_on_submit=True):
+        dump_text = st.text_area(
+            "Brain dump",
+            height=180,
+            placeholder="Call PT tomorrow 9am high clinic\nremind me to buy batteries Friday\nnote: ask about summer camp",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Capture brain dump", type="primary")
+
+    if submitted:
+        parsed_entries = parse_brain_dump(
+            dump_text,
+            today=mountain_today(),
+            defaults=app_settings,
+        )
+        if not parsed_entries:
+            st.warning("Add at least one thought before capturing.")
+        else:
+            now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+            next_index = len(entries)
+            for offset, item in enumerate(parsed_entries):
+                item["dump_id"] = f"dump_{datetime.now(MOUNTAIN_TIMEZONE).strftime('%Y%m%d%H%M%S%f')}_{next_index + offset}"
+                item["created_at"] = now_iso
+                entries.append(item)
+            app_settings = save_app_settings({**app_settings, "brain_dump_entries": entries})
+            st.success(f"Captured {len(parsed_entries)} thought(s) for review.")
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="panel-title"><h3>Inbox</h3><span>{len(active_entries)} unprocessed thought(s)</span></div>',
+        unsafe_allow_html=True,
+    )
+    if not active_entries:
+        st.markdown('<div class="empty-state">Your brain dump inbox is clear.</div>', unsafe_allow_html=True)
+    for entry in active_entries:
+        dump_id = str(entry.get("dump_id") or entry.get("created_at") or "entry")
+        st.markdown('<div class="panel" style="margin:0.75rem 0;">', unsafe_allow_html=True)
+        st.markdown(
+            f"<strong>{entry.get('title') or entry.get('raw_text') or 'Untitled thought'}</strong> · "
+            f"{entry.get('item_type', 'task').title()} · {entry.get('category', 'Personal')} · "
+            f"{entry.get('priority', 'medium').title()}",
+            unsafe_allow_html=True,
+        )
+        if entry.get("raw_text") and entry.get("raw_text") != entry.get("title"):
+            st.caption(entry["raw_text"])
+        action_cols = st.columns(4)
+        with action_cols[0]:
+            if st.button("Task", key=f"{panel_key}_task_{dump_id}"):
+                add_task(
+                    entry.get("title") or entry.get("raw_text") or "Untitled thought",
+                    entry.get("raw_text") or "",
+                    entry.get("category") if entry.get("category") in ("Personal", "Clinic") else "Personal",
+                    entry.get("priority") if entry.get("priority") in ("high", "medium", "low") else "medium",
+                    entry.get("due_date") or mountain_today(),
+                    scheduled_date=entry.get("scheduled_date"),
+                    scheduled_time=entry.get("scheduled_time"),
+                )
+                entry["status"] = "converted_task"
+                app_settings = save_app_settings({**app_settings, "brain_dump_entries": entries})
+                st.success("Converted to task.")
+                st.rerun()
+        with action_cols[1]:
+            if st.button("Reminder", key=f"{panel_key}_reminder_{dump_id}"):
+                reminders = list(app_settings.get("quick_reminders") or [])
+                reminders.append(
+                    {
+                        "reminder_id": dump_id,
+                        "text": entry.get("title") or entry.get("raw_text") or "Untitled reminder",
+                        "category": entry.get("category") or "General",
+                        "remind_date": entry.get("due_date"),
+                        "remind_time": entry.get("scheduled_time"),
+                        "status": "active",
+                        "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                    }
+                )
+                entry["status"] = "converted_reminder"
+                app_settings = save_app_settings({**app_settings, "quick_reminders": reminders, "brain_dump_entries": entries})
+                st.success("Converted to reminder.")
+                st.rerun()
+        with action_cols[2]:
+            if st.button("Keep as note", key=f"{panel_key}_note_{dump_id}"):
+                note_key = {
+                    "Clinic": "clinical_notes",
+                    "Family": "family_notes",
+                }.get(entry.get("category"), "personal_notes")
+                existing_note = str(app_settings.get(note_key) or "").strip()
+                note_text = entry.get("raw_text") or entry.get("title") or ""
+                updated_note = f"{existing_note}\n- {note_text}".strip()
+                entry["status"] = "converted_note"
+                app_settings = save_app_settings({**app_settings, note_key: updated_note, "brain_dump_entries": entries})
+                st.success("Added to notes.")
+                st.rerun()
+        with action_cols[3]:
+            if st.button("Dismiss", key=f"{panel_key}_dismiss_{dump_id}"):
+                entry["status"] = "dismissed"
+                app_settings = save_app_settings({**app_settings, "brain_dump_entries": entries})
+                st.success("Dismissed.")
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -15440,6 +15556,7 @@ app_bootstrap.run_app(
         "render_page_footer": render_page_footer,
         "render_msk_anatomy_panel": render_msk_anatomy_panel,
         "render_personal_quick_capture": render_personal_quick_capture,
+        "render_brain_dump_panel": render_brain_dump_panel,
         "render_personal_one_thing": render_personal_one_thing,
         "fetch_health_news": fetch_health_news,
         "summarize_news_with_ai": summarize_news_with_ai,

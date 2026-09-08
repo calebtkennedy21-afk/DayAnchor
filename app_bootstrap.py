@@ -102,6 +102,7 @@ def run_app(context, st_module=st):
     render_personal_overview_panel = context.get("render_personal_overview_panel")
     render_personal_quick_capture = context["render_personal_quick_capture"]
     render_personal_one_thing = context["render_personal_one_thing"]
+    render_brain_dump_panel = context.get("render_brain_dump_panel")
     fetch_health_news = context.get("fetch_health_news")
     summarize_news_with_ai = context.get("summarize_news_with_ai")
     render_morning_digest_panel = context.get("render_morning_digest_panel")
@@ -292,6 +293,7 @@ def run_app(context, st_module=st):
         system_pages = ["Planner", "Coach", "Reflection", "Family", "Intelligence"]
         legacy_pages = [
             "Overview",
+            "Brain Dump",
             "Morning Ritual",
             "Personal",
             "Life Dashboard",
@@ -863,6 +865,12 @@ def run_app(context, st_module=st):
                         render_morning_digest_panel(news_articles, news_summary, news_takeaways, panel_key="overview_news")
                     elif render_morning_digest_panel:
                         st_module.info("No news digest is available right now.")
+    elif current_page == "Brain Dump":
+        render_page_banner("review", "Brain Dump", "Capture the noise, then turn each thought into the right next action.")
+        if render_brain_dump_panel:
+            render_brain_dump_panel(app_settings, panel_key="brain_dump_page")
+        else:
+            st_module.warning("Brain Dump is not available in this build.")
     elif current_page == "Morning Ritual":
         render_page_banner("personal", "Morning Ritual", "Start intentionally before the day gets noisy.")
         render_morning_ritual_panel(tasks, active_tasks, app_settings, panel_key="morning_ritual_page")
