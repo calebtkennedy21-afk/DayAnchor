@@ -78,6 +78,7 @@ def build_telegram_config(app_settings=None, environ=None):
         "morning_time": _parse_time(settings.get("telegram_morning_ritual_time"), time(6, 30)),
         "daily_review_time": _parse_time(settings.get("telegram_daily_review_time"), time(20, 30)),
         "alert_window_minutes": max(1, int(settings.get("telegram_alert_window_minutes") or 5)),
+        "alert_lateness_minutes": max(0, int(settings.get("telegram_alert_lateness_minutes") or 60)),
         "reminder_followup_minutes": max(1, int(settings.get("telegram_reminder_followup_minutes") or 10)),
         "app_url": str(settings.get("notification_app_url") or env.get("DAYANCHOR_APP_URL") or "").strip(),
         "offset_minutes": [60, 15, 0],
@@ -93,9 +94,11 @@ def is_quiet_hours(now_value, quiet_start, quiet_end):
     return now_time >= quiet_start or now_time < quiet_end
 
 
-def _alert_due(now_value, target_value, window_minutes):
+def _alert_due(now_value, target_value, window_minutes, lateness_minutes=0):
     delta_minutes = (now_value - target_value).total_seconds() / 60.0
-    return 0 <= delta_minutes < max(1, int(window_minutes))
+    alert_window = max(1, int(window_minutes))
+    alert_lateness = max(0, int(lateness_minutes))
+    return -alert_window <= delta_minutes <= alert_lateness
 
 
 def _task_target_datetime(task_item, tzinfo=None):
@@ -120,11 +123,13 @@ def collect_due_alerts(
     nightly_reflections,
     history,
     config,
+    family_items=None,
     now_value=None,
 ):
     now_local = now_value or datetime.now(ZoneInfo(config.get("timezone") or "America/Denver"))
     local_tz = now_local.tzinfo
     window_minutes = int(config.get("alert_window_minutes") or 5)
+    lateness_minutes = int(config.get("alert_lateness_minutes") or 0)
     app_url = config.get("app_url")
 
     sent_history = dict(history or {})
@@ -147,7 +152,7 @@ def collect_due_alerts(
             alert_key = f"task:{task.get('id')}:{sched_date.isoformat()}:{_time_label(sched_time)}:{int(offset)}"
             if sent_history.get(alert_key):
                 continue
-            if _alert_due(now_local, trigger_dt, window_minutes):
+            if _alert_due(now_local, trigger_dt, window_minutes, lateness_minutes):
                 offset_label = "starting now" if int(offset) == 0 else f"starts in {int(offset)} min"
                 alerts.append(
                     {
@@ -158,6 +163,39 @@ def collect_due_alerts(
                             f"{task.get('title') or 'Untitled task'}\n"
                             f"When: {sched_date.strftime('%a %b %d')} at {_time_label(sched_time)}\n"
                             f"Priority: {str(task.get('priority') or 'medium').title()}\n"
+                            f"Status: {offset_label}"
+                        ),
+                        "reply_markup": _build_open_button(app_url),
+                    }
+                )
+
+    for event in family_items or []:
+        if str(event.get("status") or "planned").lower() in ("canceled", "cancelled", "completed"):
+            continue
+        event_date = event.get("start_date")
+        if not isinstance(event_date, date):
+            continue
+        event_time = event.get("start_time") if isinstance(event.get("start_time"), time) else time(9, 0)
+        start_dt = datetime.combine(event_date, event_time, tzinfo=local_tz)
+        if start_dt < now_local - timedelta(hours=2):
+            continue
+
+        for offset in config.get("offset_minutes") or [60, 15, 0]:
+            trigger_dt = start_dt - timedelta(minutes=int(offset))
+            event_key = f"event:{event.get('item_id')}:{event_date.isoformat()}:{_time_label(event_time)}:{int(offset)}"
+            if sent_history.get(event_key):
+                continue
+            if _alert_due(now_local, trigger_dt, window_minutes, lateness_minutes):
+                offset_label = "starting now" if int(offset) == 0 else f"starts in {int(offset)} min"
+                alerts.append(
+                    {
+                        "key": event_key,
+                        "critical": False,
+                        "message": (
+                            f"DayAnchor family event alert\n"
+                            f"{event.get('title') or 'Family event'}\n"
+                            f"When: {event_date.strftime('%a %b %d')} at {_time_label(event_time)}\n"
+                            f"Type: {event.get('item_type') or 'Event'}\n"
                             f"Status: {offset_label}"
                         ),
                         "reply_markup": _build_open_button(app_url),
@@ -176,7 +214,7 @@ def collect_due_alerts(
             continue
 
         primary_key = f"reminder:{reminder.get('reminder_id')}:{remind_date.isoformat()}:primary"
-        if (not sent_history.get(primary_key)) and _alert_due(now_local, due_dt, window_minutes):
+        if (not sent_history.get(primary_key)) and _alert_due(now_local, due_dt, window_minutes, lateness_minutes):
             alerts.append(
                 {
                     "key": primary_key,
@@ -193,7 +231,7 @@ def collect_due_alerts(
 
         followup_key = f"reminder:{reminder.get('reminder_id')}:{remind_date.isoformat()}:followup"
         followup_dt = due_dt + timedelta(minutes=int(config.get("reminder_followup_minutes") or 10))
-        if (not sent_history.get(followup_key)) and _alert_due(now_local, followup_dt, window_minutes):
+        if (not sent_history.get(followup_key)) and _alert_due(now_local, followup_dt, window_minutes, lateness_minutes):
             alerts.append(
                 {
                     "key": followup_key,
@@ -211,7 +249,7 @@ def collect_due_alerts(
     morning_key = f"ritual:morning:{today_key}"
     if not sent_history.get(morning_key):
         morning_due_dt = datetime.combine(now_local.date(), config.get("morning_time") or time(6, 30), tzinfo=local_tz)
-        if _alert_due(now_local, morning_due_dt, window_minutes) and not morning_checkins.get(today_key):
+        if _alert_due(now_local, morning_due_dt, window_minutes, lateness_minutes) and not morning_checkins.get(today_key):
             alerts.append(
                 {
                     "key": morning_key,
@@ -224,7 +262,7 @@ def collect_due_alerts(
     review_key = f"ritual:daily_review:{today_key}"
     if not sent_history.get(review_key):
         review_due_dt = datetime.combine(now_local.date(), config.get("daily_review_time") or time(20, 30), tzinfo=local_tz)
-        if _alert_due(now_local, review_due_dt, window_minutes) and not nightly_reflections.get(today_key):
+        if _alert_due(now_local, review_due_dt, window_minutes, lateness_minutes) and not nightly_reflections.get(today_key):
             alerts.append(
                 {
                     "key": review_key,
@@ -250,7 +288,7 @@ def collect_due_alerts(
             if sent_history.get(stage_key):
                 continue
             stage_dt = base_dt + timedelta(minutes=stage_minutes)
-            if _alert_due(now_local, stage_dt, window_minutes):
+            if _alert_due(now_local, stage_dt, window_minutes, lateness_minutes):
                 alerts.append(
                     {
                         "key": stage_key,

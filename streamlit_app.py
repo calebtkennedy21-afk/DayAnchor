@@ -237,6 +237,7 @@ DEFAULT_APP_SETTINGS = {
     "telegram_morning_ritual_time": "06:30",
     "telegram_daily_review_time": "20:30",
     "telegram_alert_window_minutes": 5,
+    "telegram_alert_lateness_minutes": 60,
     "telegram_reminder_followup_minutes": 10,
     "telegram_check_interval_minutes": 5,
     "notification_app_url": "",
@@ -4018,7 +4019,11 @@ def dispatch_telegram_alerts(tasks, app_settings=None, force=False):
     if not config.get("enabled"):
         return {"skipped": True, "reason": "Telegram alerts disabled."}
 
-    now_local = datetime.now(MOUNTAIN_TIMEZONE)
+    try:
+        alert_timezone = ZoneInfo(config.get("timezone") or "America/Denver")
+    except (KeyError, TypeError, ValueError):
+        alert_timezone = MOUNTAIN_TIMEZONE
+    now_local = datetime.now(alert_timezone)
     check_interval_minutes = max(1, safe_int(settings.get("telegram_check_interval_minutes"), 5))
     if not force:
         last_checked = None
@@ -4032,6 +4037,11 @@ def dispatch_telegram_alerts(tasks, app_settings=None, force=False):
     reminders = normalize_quick_reminders(settings.get("quick_reminders") or [])
     morning_checkins = normalize_morning_ritual_checkins(settings.get("morning_ritual_checkins") or {})
     nightly_reflections = normalize_nightly_reflections(settings.get("nightly_reflections") or {})
+    family_items = expand_family_schedule_items(
+        normalize_family_schedule_items(settings.get("family_schedule_items") or []),
+        end_day=now_local.date(),
+        window_days=3,
+    )
     sent_history = telegram_alerts.prune_alert_history(settings.get("telegram_alert_history") or {}, now_value=now_local)
 
     alerts = telegram_alerts.collect_due_alerts(
@@ -4041,6 +4051,7 @@ def dispatch_telegram_alerts(tasks, app_settings=None, force=False):
         nightly_reflections,
         sent_history,
         config,
+        family_items=family_items,
         now_value=now_local,
     )
 
@@ -12321,6 +12332,14 @@ def render_settings_panel(app_settings, panel_key="settings"):
             value=max(1, min(15, safe_int(app_settings.get("telegram_alert_window_minutes", 5), 5))),
             step=1,
         )
+        settings_telegram_alert_lateness = st.slider(
+            "Late alert catch-up window (minutes)",
+            min_value=0,
+            max_value=180,
+            value=max(0, min(180, safe_int(app_settings.get("telegram_alert_lateness_minutes", 60), 60))),
+            step=5,
+            help="Deliver alerts missed while the app was idle, without replaying older alerts.",
+        )
         settings_telegram_followup = st.slider(
             "Reminder follow-up delay (minutes)",
             min_value=5,
@@ -12536,6 +12555,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "telegram_morning_ritual_time": settings_telegram_morning_time.strftime("%H:%M"),
                 "telegram_daily_review_time": settings_telegram_daily_review_time.strftime("%H:%M"),
                 "telegram_alert_window_minutes": int(settings_telegram_alert_window),
+                "telegram_alert_lateness_minutes": int(settings_telegram_alert_lateness),
                 "telegram_reminder_followup_minutes": int(settings_telegram_followup),
                 "telegram_check_interval_minutes": int(settings_telegram_check_interval),
                 "notification_app_url": settings_notification_app_url.strip(),
