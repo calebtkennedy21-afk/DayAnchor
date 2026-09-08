@@ -74,7 +74,9 @@ Setup:
 Notes:
 
 - While the app is open, DayAnchor automatically runs Telegram alert checks at the configured interval.
-- For 24/7 delivery, keep the app process running continuously in your deployed environment.
+- The container also runs a separate alert scheduler by default, so alerts continue while nobody is viewing the Streamlit app.
+- Set `ALERT_SCHEDULER_ENABLED=false` to disable it, or adjust `ALERT_SCHEDULER_INTERVAL_SECONDS` (default: 60).
+- The scheduler requires the same Postgres `DATABASE_URL` or `DATABASE_PUBLIC_URL` and Telegram variables as the app.
 
 ## Railway Troubleshooting
 
