@@ -14,6 +14,10 @@ def _parse_date(value):
         return value
     if not value:
         return None
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError:
+        return None
 
 
 def _coerce_date(value):
@@ -25,10 +29,6 @@ def _coerce_date(value):
         except Exception:
             return None
     return None
-    try:
-        return date.fromisoformat(str(value).strip())
-    except ValueError:
-        return None
 
 
 def _build_insight(insight_id, title, detail, evidence, action, confidence, task_payload):
