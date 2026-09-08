@@ -5796,6 +5796,79 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
+    triage_key = f"{panel_key}_ai_triage"
+    triage_error_key = f"{panel_key}_ai_triage_error"
+    ai_triage = st.session_state.get(triage_key) or []
+    ai_triage_error = st.session_state.get(triage_error_key) or ""
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-title"><h3>AI Triage</h3><span>Suggest the best destination for each thought before you apply anything</span></div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Analyze inbox with AI", key=f"{panel_key}_analyze", type="secondary", disabled=not active_entries):
+        ai_triage, ai_triage_error = generate_brain_dump_triage(active_entries)
+        st.session_state[triage_key] = ai_triage
+        st.session_state[triage_error_key] = ai_triage_error
+        st.rerun()
+    if ai_triage_error:
+        st.warning(ai_triage_error)
+    if ai_triage:
+        st.caption(f"{len(ai_triage)} proposed decision(s) ready for review.")
+        for proposal in ai_triage:
+            st.markdown(
+                f"- **{proposal.get('title') or 'Untitled thought'}** -> "
+                f"{proposal.get('item_type', 'task').title()} · {proposal.get('category', 'Personal')} · "
+                f"{proposal.get('priority', 'medium').title()} · {proposal.get('reason') or 'No reason provided.'}"
+            )
+        if st.button("Apply AI triage", key=f"{panel_key}_apply_ai", type="primary"):
+            entry_by_id = {str(item.get("dump_id")): item for item in entries}
+            reminders = list(app_settings.get("quick_reminders") or [])
+            for proposal in ai_triage:
+                entry = entry_by_id.get(str(proposal.get("dump_id")))
+                if not entry or str(entry.get("status") or "new") != "new":
+                    continue
+                item_type = proposal.get("item_type") or "task"
+                title = proposal.get("title") or entry.get("title") or entry.get("raw_text") or "Untitled thought"
+                category = proposal.get("category") or entry.get("category") or "Personal"
+                priority = proposal.get("priority") if proposal.get("priority") in ("high", "medium", "low") else "medium"
+                if item_type == "task":
+                    add_task(
+                        title,
+                        proposal.get("description") or entry.get("raw_text") or "",
+                        category if category in ("Personal", "Clinic") else "Personal",
+                        priority,
+                        proposal.get("due_date") or mountain_today(),
+                        scheduled_date=proposal.get("scheduled_date"),
+                        scheduled_time=proposal.get("scheduled_time"),
+                    )
+                    entry["status"] = "ai_converted_task"
+                elif item_type == "reminder":
+                    reminders.append(
+                        {
+                            "reminder_id": str(entry.get("dump_id")),
+                            "text": title,
+                            "category": category,
+                            "remind_date": proposal.get("due_date"),
+                            "remind_time": proposal.get("scheduled_time"),
+                            "status": "active",
+                            "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                        }
+                    )
+                    entry["status"] = "ai_converted_reminder"
+                elif item_type in ("note", "idea"):
+                    note_key = {"Clinic": "clinical_notes", "Family": "family_notes"}.get(category, "personal_notes")
+                    existing_note = str(app_settings.get(note_key) or "").strip()
+                    app_settings[note_key] = f"{existing_note}\n- {entry.get('raw_text') or title}".strip()
+                    entry["status"] = f"ai_converted_{item_type}"
+            app_settings = save_app_settings({**app_settings, "quick_reminders": reminders, "brain_dump_entries": entries})
+            st.session_state[triage_key] = []
+            st.session_state[triage_error_key] = ""
+            st.success("AI triage applied.")
+            st.rerun()
+    elif not ai_triage_error:
+        st.caption("Run AI triage to classify the inbox into tasks, reminders, notes, or ideas.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown(
         f'<div class="panel-title"><h3>Inbox</h3><span>{len(active_entries)} unprocessed thought(s)</span></div>',
@@ -15437,8 +15510,10 @@ delete_lead_document = partial(data_access.delete_lead_document, db_enabled_fn=d
 
 parse_ai_suggestions = ai_workflows.parse_ai_suggestions
 parse_ai_schedule_updates = ai_workflows.parse_ai_schedule_updates
+parse_brain_dump_triage = ai_workflows.parse_brain_dump_triage
 task_snapshot_for_ai = ai_workflows.task_snapshot_for_ai
 generate_ai_plan = partial(ai_workflows.generate_ai_plan, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+generate_brain_dump_triage = partial(ai_workflows.generate_brain_dump_triage, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_schedule = partial(ai_workflows.generate_ai_schedule, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_daily_review = partial(ai_workflows.generate_daily_review, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_daily_summary = partial(ai_workflows.generate_ai_daily_summary, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)

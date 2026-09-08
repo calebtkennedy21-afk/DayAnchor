@@ -142,6 +142,141 @@ def parse_ai_schedule_updates(text):
     return cleaned[:20]
 
 
+def parse_brain_dump_triage(text, entries=None):
+    if not text:
+        return []
+    blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    json_blob = blocks[-1] if blocks else None
+    if not json_blob:
+        match = re.search(r"(\{\s*\"triage\"\s*:\s*\[.*?\]\s*\})", text, flags=re.DOTALL)
+        json_blob = match.group(1) if match else None
+    if not json_blob:
+        return []
+    try:
+        payload = json.loads(json_blob)
+    except json.JSONDecodeError:
+        return []
+
+    entry_by_id = {str(item.get("dump_id")): item for item in (entries or []) if isinstance(item, dict)}
+    allowed_types = {"task", "reminder", "note", "idea"}
+    cleaned = []
+    for item in payload.get("triage", []) if isinstance(payload, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        dump_id = str(item.get("dump_id") or "").strip()
+        if not dump_id or dump_id not in entry_by_id:
+            continue
+        item_type = str(item.get("item_type") or "task").strip().lower()
+        if item_type not in allowed_types:
+            item_type = "task"
+        category = str(item.get("category") or entry_by_id[dump_id].get("category") or "Personal").strip().title()
+        if category not in ("Personal", "Clinic", "Family"):
+            category = "Personal"
+        priority = str(item.get("priority") or "medium").strip().lower()
+        if priority not in ("high", "medium", "low"):
+            priority = "medium"
+        due_date = parse_date_value(item.get("due_date"))
+        scheduled_time = parse_time_value(item.get("scheduled_time"))
+        cleaned.append(
+            {
+                "dump_id": dump_id,
+                "item_type": item_type,
+                "title": str(item.get("title") or entry_by_id[dump_id].get("title") or "Untitled thought").strip(),
+                "description": str(item.get("description") or "").strip(),
+                "category": category,
+                "priority": priority,
+                "due_date": due_date,
+                "scheduled_date": due_date if scheduled_time else None,
+                "scheduled_time": scheduled_time,
+                "reason": str(item.get("reason") or "AI triage based on the captured thought.").strip(),
+            }
+        )
+    return cleaned[:30]
+
+
+def generate_brain_dump_triage(
+    entries,
+    ai_enabled_fn,
+    ai_api_key_fn,
+    ai_model_name_fn,
+    openai_cls=OpenAI,
+):
+    active_entries = [item for item in (entries or []) if isinstance(item, dict) and str(item.get("status") or "new") == "new"]
+    if not active_entries:
+        return [], ""
+
+    if not ai_enabled_fn():
+        return [
+            {
+                "dump_id": str(item.get("dump_id")),
+                "item_type": str(item.get("item_type") or "task"),
+                "title": str(item.get("title") or item.get("raw_text") or "Untitled thought"),
+                "description": str(item.get("raw_text") or ""),
+                "category": str(item.get("category") or "Personal"),
+                "priority": str(item.get("priority") or "medium"),
+                "due_date": item.get("due_date"),
+                "scheduled_date": item.get("scheduled_date"),
+                "scheduled_time": item.get("scheduled_time"),
+                "reason": "Deterministic parser suggestion; AI is not configured.",
+            }
+            for item in active_entries
+        ], ""
+
+    lines = []
+    for item in active_entries[:30]:
+        lines.append(
+            " | ".join(
+                [
+                    f"dump_id={item.get('dump_id')}",
+                    f"raw={item.get('raw_text', '')}",
+                    f"current_type={item.get('item_type', 'task')}",
+                    f"category={item.get('category', 'Personal')}",
+                    f"priority={item.get('priority', 'medium')}",
+                    f"due_date={item.get('due_date') or 'none'}",
+                    f"scheduled_time={item.get('scheduled_time') or 'none'}",
+                ]
+            )
+        )
+    try:
+        client = openai_cls(api_key=ai_api_key_fn())
+        response = client.chat.completions.create(
+            model=ai_model_name_fn(),
+            temperature=0.2,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are DayAnchor's inbox triage assistant. Convert messy thoughts into the smallest useful next action. "
+                        "Do not invent commitments or dates that are not supported by the text."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Triage each captured thought exactly once. Choose task, reminder, note, or idea. "
+                        "Use category Personal, Clinic, or Family and priority high, medium, or low. "
+                        "Only set due_date or scheduled_time when supported by the captured text.\n\n"
+                        f"Captured thoughts:\n{chr(10).join(lines)}\n\n"
+                        "Return only this JSON shape inside a json code block:\n"
+                        "{\n  \"triage\": [\n"
+                        "    {\"dump_id\": \"...\", \"item_type\": \"task|reminder|note|idea\", "
+                        "\"title\": \"...\", \"description\": \"...\", \"category\": \"Personal|Clinic|Family\", "
+                        "\"priority\": \"high|medium|low\", \"due_date\": \"YYYY-MM-DD or null\", "
+                        "\"scheduled_time\": \"HH:MM or null\", \"reason\": \"short reason\"}\n"
+                        "  ]\n}"
+                    ),
+                },
+            ],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        triage = parse_brain_dump_triage(text, active_entries)
+        if not triage:
+            return [], "AI returned no valid triage decisions."
+        return triage, ""
+    except Exception as exc:
+        return [], f"Brain dump AI triage failed: {exc}"
+
+
 def task_snapshot_for_ai(tasks, max_items=20):
     if not tasks:
         return "No tasks available."
