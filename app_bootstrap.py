@@ -84,6 +84,7 @@ def run_app(context, st_module=st):
     render_task_calendar_panel = context["render_task_calendar_panel"]
     render_schedule_builder_panel = context["render_schedule_builder_panel"]
     render_family_schedule_panel = context["render_family_schedule_panel"]
+    render_workout_panel = context["render_workout_panel"]
     render_task_list_panel = context["render_task_list_panel"]
     render_ai_panel = context["render_ai_panel"]
     render_planner_brain_queue = context.get("render_planner_brain_queue")
@@ -290,7 +291,7 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### Navigation")
-        system_pages = ["Planner", "Coach", "Reflection", "Family", "Intelligence"]
+        system_pages = ["Planner", "Coach", "Reflection", "Family", "Workouts", "Intelligence"]
         legacy_pages = [
             "Overview",
             "Brain Dump",
@@ -963,6 +964,9 @@ def run_app(context, st_module=st):
         if not focus_mode:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_task_calendar_panel(tasks, "schedule_tasks", "Schedule Calendar", "Mixed load across tasks, due dates, and completions", app_settings=app_settings)
+    elif current_page == "Workouts":
+        render_page_banner("personal", "Workouts", "Upload plans, log sessions, and track progress over time.")
+        render_workout_panel(app_settings, panel_key="workouts_page")
     elif current_page == "Family Schedule":
         render_page_banner("personal", "Family Schedule", "Dedicated planning space for family events, travel, camps, and appointments.")
         render_family_schedule_panel(active_tasks, app_settings, panel_key="family_schedule_page")

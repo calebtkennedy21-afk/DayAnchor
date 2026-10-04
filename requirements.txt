@@ -3,3 +3,4 @@ psycopg[binary]>=3.2.0
 openai>=1.40.0
 pytest>=8.0.0
 pypdfium2>=4.30.0
+pandas>=2.0.0

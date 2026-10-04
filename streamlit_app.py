@@ -55,6 +55,8 @@ from overview_core import (
 import page_renderers
 import page_sections
 import telegram_alerts
+import workout_core
+import workout_page
 from brain_dump_core import parse_brain_dump
 from settings_serialization import dumps_json_safe
 from scheduling_core import (
@@ -225,6 +227,8 @@ DEFAULT_APP_SETTINGS = {
     "morning_ritual_checkins": {},
     "family_schedule_items": [],
     "family_goals": [],
+    "workout_plans": [],
+    "workout_logs": [],
     "family_weekly_notes": [],
     "family_notes": "",
     "family_notes_updated_at": "",
@@ -15523,6 +15527,13 @@ generate_weekly_morning_ritual_insight = partial(ai_workflows.generate_weekly_mo
 generate_family_schedule_insight = partial(ai_workflows.generate_family_schedule_insight, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_family_weekly_briefing = partial(ai_workflows.generate_family_weekly_briefing, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_family_goal_coaching = partial(ai_workflows.generate_family_goal_coaching, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+parse_workout_plan = partial(workout_core.generate_workout_plan_parse, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+
+
+def render_workout_panel(app_settings, panel_key="workouts"):
+    workout_page.render_workout_panel(app_settings, save_app_settings, parse_workout_plan, today=mountain_today(), panel_key=panel_key)
+
+
 generate_family_weekly_digest = partial(ai_workflows.generate_family_weekly_digest, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
@@ -15616,6 +15627,7 @@ app_bootstrap.run_app(
         "render_task_calendar_panel": render_task_calendar_panel,
         "render_schedule_builder_panel": render_schedule_builder_panel,
         "render_family_schedule_panel": render_family_schedule_panel,
+        "render_workout_panel": render_workout_panel,
         "render_task_list_panel": render_task_list_panel,
         "render_ai_panel": render_ai_panel,
         "render_planner_brain_queue": render_planner_brain_queue,
