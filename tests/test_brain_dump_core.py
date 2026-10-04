@@ -27,3 +27,9 @@ def test_parse_brain_dump_supports_notes_reminders_and_ideas():
     assert results[0]["due_date"] == date(2026, 9, 9)
     assert results[1]["title"] == "ask about summer camp"
     assert results[2]["due_date"] is None
+
+
+def test_bare_weekday_matches_today_but_next_weekday_does_not():
+    today = date(2026, 9, 7)  # Monday
+    assert parse_brain_dump("call PT monday", today=today)[0]["due_date"] == today
+    assert parse_brain_dump("call PT next monday", today=today)[0]["due_date"] == date(2026, 9, 14)

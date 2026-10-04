@@ -188,6 +188,7 @@ def parse_brain_dump_triage(text, entries=None):
                 "due_date": due_date,
                 "scheduled_date": due_date if scheduled_time else None,
                 "scheduled_time": scheduled_time,
+                "duplicate": bool(item.get("duplicate")),
                 "reason": str(item.get("reason") or "AI triage based on the captured thought.").strip(),
             }
         )
@@ -200,6 +201,8 @@ def generate_brain_dump_triage(
     ai_api_key_fn,
     ai_model_name_fn,
     openai_cls=OpenAI,
+    existing_tasks=None,
+    today=None,
 ):
     active_entries = [item for item in (entries or []) if isinstance(item, dict) and str(item.get("status") or "new") == "new"]
     if not active_entries:
@@ -220,7 +223,7 @@ def generate_brain_dump_triage(
                 "reason": "Deterministic parser suggestion; AI is not configured.",
             }
             for item in active_entries
-        ], ""
+        ], "AI is not configured; showing basic parser suggestions instead."
 
     lines = []
     for item in active_entries[:30]:
@@ -237,6 +240,8 @@ def generate_brain_dump_triage(
                 ]
             )
         )
+    today = today or date.today()
+    task_lines = "\n".join(f"- {title}" for title in (existing_tasks or []) if title) or "none"
     try:
         client = openai_cls(api_key=ai_api_key_fn())
         response = client.chat.completions.create(
@@ -255,14 +260,17 @@ def generate_brain_dump_triage(
                     "content": (
                         "Triage each captured thought exactly once. Choose task, reminder, note, or idea. "
                         "Use category Personal, Clinic, or Family and priority high, medium, or low. "
-                        "Only set due_date or scheduled_time when supported by the captured text.\n\n"
+                        "Only set due_date or scheduled_time when supported by the captured text. "
+                        f"Today is {today.isoformat()} ({today.strftime('%A')}); resolve relative dates against it. "
+                        "Set duplicate to true when a thought restates an existing open task.\n\n"
+                        f"Existing open tasks:\n{task_lines}\n\n"
                         f"Captured thoughts:\n{chr(10).join(lines)}\n\n"
                         "Return only this JSON shape inside a json code block:\n"
                         "{\n  \"triage\": [\n"
                         "    {\"dump_id\": \"...\", \"item_type\": \"task|reminder|note|idea\", "
                         "\"title\": \"...\", \"description\": \"...\", \"category\": \"Personal|Clinic|Family\", "
                         "\"priority\": \"high|medium|low\", \"due_date\": \"YYYY-MM-DD or null\", "
-                        "\"scheduled_time\": \"HH:MM or null\", \"reason\": \"short reason\"}\n"
+                        "\"scheduled_time\": \"HH:MM or null\", \"duplicate\": false, \"reason\": \"short reason\"}\n"
                         "  ]\n}"
                     ),
                 },

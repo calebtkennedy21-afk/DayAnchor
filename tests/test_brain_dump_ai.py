@@ -24,7 +24,7 @@ def test_brain_dump_triage_fallback_preserves_deterministic_parse():
         lambda: "gpt-4o-mini",
     )
 
-    assert error == ""
+    assert error == "AI is not configured; showing basic parser suggestions instead."
     assert triage[0]["dump_id"] == "dump_1"
     assert triage[0]["item_type"] == "task"
     assert "AI is not configured" in triage[0]["reason"]

@@ -5761,6 +5761,54 @@ def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, pane
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+_BRAIN_DUMP_NOTE_KEYS = {
+    "Clinic": ("clinical_notes", "clinical_notes_updated_at"),
+    "Family": ("family_notes", "family_notes_updated_at"),
+}
+
+
+def apply_brain_dump_decision(entry, decision, app_settings, updates, status_prefix=""):
+    """Converts one inbox entry; settings changes accumulate in `updates` for a single save."""
+    item_type = decision.get("item_type") or "task"
+    category = decision.get("category") or entry.get("category") or "Personal"
+    title = decision.get("title") or entry.get("title") or entry.get("raw_text") or "Untitled thought"
+    priority = decision.get("priority") if decision.get("priority") in ("high", "medium", "low") else "medium"
+    now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+    if item_type == "task":
+        description = decision.get("description") or entry.get("raw_text") or ""
+        if category == "Family":
+            # Tasks only support Personal/Clinic, so keep the Family origin in the description.
+            description = f"[Family] {description}".strip()
+        add_task(
+            title,
+            description,
+            "Clinic" if category == "Clinic" else "Personal",
+            priority,
+            decision.get("due_date") or mountain_today(),
+            scheduled_date=decision.get("scheduled_date"),
+            scheduled_time=decision.get("scheduled_time"),
+        )
+    elif item_type == "reminder":
+        reminders = updates.setdefault("quick_reminders", list(app_settings.get("quick_reminders") or []))
+        reminders.append(
+            {
+                "reminder_id": str(entry.get("dump_id")),
+                "text": title,
+                "category": category,
+                "remind_date": decision.get("due_date"),
+                "remind_time": decision.get("scheduled_time"),
+                "status": "active",
+                "created_at": now_iso,
+            }
+        )
+    else:
+        note_key, stamp_key = _BRAIN_DUMP_NOTE_KEYS.get(category, ("personal_notes", "personal_notes_updated_at"))
+        existing_note = str(updates.get(note_key, app_settings.get(note_key)) or "").strip()
+        updates[note_key] = f"{existing_note}\n- {entry.get('raw_text') or title}".strip()
+        updates[stamp_key] = now_iso
+    entry["status"] = f"{status_prefix}converted_{item_type}"
+
+
 def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
     entries = [item for item in (app_settings.get("brain_dump_entries") or []) if isinstance(item, dict)]
     active_entries = [item for item in entries if str(item.get("status") or "new") == "new"]
@@ -5810,64 +5858,63 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
         unsafe_allow_html=True,
     )
     if st.button("Analyze inbox with AI", key=f"{panel_key}_analyze", type="secondary", disabled=not active_entries):
-        ai_triage, ai_triage_error = generate_brain_dump_triage(active_entries)
+        ai_triage, ai_triage_error = generate_brain_dump_triage(
+            active_entries,
+            existing_tasks=[t.get("title") for t in load_tasks() if t.get("status") != "completed"][:60],
+            today=mountain_today(),
+        )
         st.session_state[triage_key] = ai_triage
         st.session_state[triage_error_key] = ai_triage_error
         st.rerun()
     if ai_triage_error:
         st.warning(ai_triage_error)
     if ai_triage:
-        st.caption(f"{len(ai_triage)} proposed decision(s) ready for review.")
+        st.caption(f"{len(ai_triage)} proposed decision(s). Uncheck, retype, or edit any before applying.")
+        type_options = ["task", "reminder", "note", "idea"]
         for proposal in ai_triage:
-            st.markdown(
-                f"- **{proposal.get('title') or 'Untitled thought'}** -> "
-                f"{proposal.get('item_type', 'task').title()} · {proposal.get('category', 'Personal')} · "
-                f"{proposal.get('priority', 'medium').title()} · {proposal.get('reason') or 'No reason provided.'}"
+            pid = str(proposal.get("dump_id"))
+            check_col, type_col, title_col = st.columns([0.12, 0.2, 0.68])
+            check_col.checkbox("Apply", value=not proposal.get("duplicate"), key=f"{panel_key}_ai_apply_{pid}")
+            type_col.selectbox(
+                "Type",
+                type_options,
+                index=type_options.index(proposal.get("item_type")) if proposal.get("item_type") in type_options else 0,
+                key=f"{panel_key}_ai_type_{pid}",
+                label_visibility="collapsed",
             )
-        if st.button("Apply AI triage", key=f"{panel_key}_apply_ai", type="primary"):
+            title_col.text_input(
+                "Title",
+                value=proposal.get("title") or "Untitled thought",
+                key=f"{panel_key}_ai_title_{pid}",
+                label_visibility="collapsed",
+            )
+            duplicate_note = " Possible duplicate of an existing task." if proposal.get("duplicate") else ""
+            st.caption(
+                f"{proposal.get('category', 'Personal')} · {str(proposal.get('priority', 'medium')).title()} · "
+                f"{proposal.get('reason') or 'No reason provided.'}{duplicate_note}"
+            )
+        if st.button("Apply selected", key=f"{panel_key}_apply_ai", type="primary"):
             entry_by_id = {str(item.get("dump_id")): item for item in entries}
-            reminders = list(app_settings.get("quick_reminders") or [])
+            updates = {}
+            applied = 0
             for proposal in ai_triage:
-                entry = entry_by_id.get(str(proposal.get("dump_id")))
+                pid = str(proposal.get("dump_id"))
+                entry = entry_by_id.get(pid)
                 if not entry or str(entry.get("status") or "new") != "new":
                     continue
-                item_type = proposal.get("item_type") or "task"
-                title = proposal.get("title") or entry.get("title") or entry.get("raw_text") or "Untitled thought"
-                category = proposal.get("category") or entry.get("category") or "Personal"
-                priority = proposal.get("priority") if proposal.get("priority") in ("high", "medium", "low") else "medium"
-                if item_type == "task":
-                    add_task(
-                        title,
-                        proposal.get("description") or entry.get("raw_text") or "",
-                        category if category in ("Personal", "Clinic") else "Personal",
-                        priority,
-                        proposal.get("due_date") or mountain_today(),
-                        scheduled_date=proposal.get("scheduled_date"),
-                        scheduled_time=proposal.get("scheduled_time"),
-                    )
-                    entry["status"] = "ai_converted_task"
-                elif item_type == "reminder":
-                    reminders.append(
-                        {
-                            "reminder_id": str(entry.get("dump_id")),
-                            "text": title,
-                            "category": category,
-                            "remind_date": proposal.get("due_date"),
-                            "remind_time": proposal.get("scheduled_time"),
-                            "status": "active",
-                            "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
-                        }
-                    )
-                    entry["status"] = "ai_converted_reminder"
-                elif item_type in ("note", "idea"):
-                    note_key = {"Clinic": "clinical_notes", "Family": "family_notes"}.get(category, "personal_notes")
-                    existing_note = str(app_settings.get(note_key) or "").strip()
-                    app_settings[note_key] = f"{existing_note}\n- {entry.get('raw_text') or title}".strip()
-                    entry["status"] = f"ai_converted_{item_type}"
-            app_settings = save_app_settings({**app_settings, "quick_reminders": reminders, "brain_dump_entries": entries})
+                if not st.session_state.get(f"{panel_key}_ai_apply_{pid}", True):
+                    continue
+                decision = {
+                    **proposal,
+                    "item_type": st.session_state.get(f"{panel_key}_ai_type_{pid}") or proposal.get("item_type"),
+                    "title": st.session_state.get(f"{panel_key}_ai_title_{pid}") or proposal.get("title"),
+                }
+                apply_brain_dump_decision(entry, decision, app_settings, updates, status_prefix="ai_")
+                applied += 1
+            app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
             st.session_state[triage_key] = []
             st.session_state[triage_error_key] = ""
-            st.success("AI triage applied.")
+            st.success(f"Applied {applied} decision(s).")
             st.rerun()
     elif not ai_triage_error:
         st.caption("Run AI triage to classify the inbox into tasks, reminders, notes, or ideas.")
@@ -5884,60 +5931,27 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
         dump_id = str(entry.get("dump_id") or entry.get("created_at") or "entry")
         st.markdown('<div class="panel" style="margin:0.75rem 0;">', unsafe_allow_html=True)
         st.markdown(
-            f"<strong>{entry.get('title') or entry.get('raw_text') or 'Untitled thought'}</strong> · "
-            f"{entry.get('item_type', 'task').title()} · {entry.get('category', 'Personal')} · "
-            f"{entry.get('priority', 'medium').title()}",
+            f"<strong>{html.escape(str(entry.get('title') or entry.get('raw_text') or 'Untitled thought'))}</strong> · "
+            f"{html.escape(str(entry.get('item_type', 'task')).title())} · {html.escape(str(entry.get('category', 'Personal')))} · "
+            f"{html.escape(str(entry.get('priority', 'medium')).title())}",
             unsafe_allow_html=True,
         )
         if entry.get("raw_text") and entry.get("raw_text") != entry.get("title"):
             st.caption(entry["raw_text"])
         action_cols = st.columns(4)
-        with action_cols[0]:
-            if st.button("Task", key=f"{panel_key}_task_{dump_id}"):
-                add_task(
-                    entry.get("title") or entry.get("raw_text") or "Untitled thought",
-                    entry.get("raw_text") or "",
-                    entry.get("category") if entry.get("category") in ("Personal", "Clinic") else "Personal",
-                    entry.get("priority") if entry.get("priority") in ("high", "medium", "low") else "medium",
-                    entry.get("due_date") or mountain_today(),
-                    scheduled_date=entry.get("scheduled_date"),
-                    scheduled_time=entry.get("scheduled_time"),
-                )
-                entry["status"] = "converted_task"
-                app_settings = save_app_settings({**app_settings, "brain_dump_entries": entries})
-                st.success("Converted to task.")
-                st.rerun()
-        with action_cols[1]:
-            if st.button("Reminder", key=f"{panel_key}_reminder_{dump_id}"):
-                reminders = list(app_settings.get("quick_reminders") or [])
-                reminders.append(
-                    {
-                        "reminder_id": dump_id,
-                        "text": entry.get("title") or entry.get("raw_text") or "Untitled reminder",
-                        "category": entry.get("category") or "General",
-                        "remind_date": entry.get("due_date"),
-                        "remind_time": entry.get("scheduled_time"),
-                        "status": "active",
-                        "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
-                    }
-                )
-                entry["status"] = "converted_reminder"
-                app_settings = save_app_settings({**app_settings, "quick_reminders": reminders, "brain_dump_entries": entries})
-                st.success("Converted to reminder.")
-                st.rerun()
-        with action_cols[2]:
-            if st.button("Keep as note", key=f"{panel_key}_note_{dump_id}"):
-                note_key = {
-                    "Clinic": "clinical_notes",
-                    "Family": "family_notes",
-                }.get(entry.get("category"), "personal_notes")
-                existing_note = str(app_settings.get(note_key) or "").strip()
-                note_text = entry.get("raw_text") or entry.get("title") or ""
-                updated_note = f"{existing_note}\n- {note_text}".strip()
-                entry["status"] = "converted_note"
-                app_settings = save_app_settings({**app_settings, note_key: updated_note, "brain_dump_entries": entries})
-                st.success("Added to notes.")
-                st.rerun()
+        manual_actions = (
+            (0, "Task", "task", "task", "Converted to task."),
+            (1, "Reminder", "reminder", "reminder", "Converted to reminder."),
+            (2, "Keep as note", "note", "note", "Added to notes."),
+        )
+        for col_index, label, action_key, item_type, success_text in manual_actions:
+            with action_cols[col_index]:
+                if st.button(label, key=f"{panel_key}_{action_key}_{dump_id}"):
+                    updates = {}
+                    apply_brain_dump_decision(entry, {**entry, "item_type": item_type}, app_settings, updates)
+                    app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
+                    st.success(success_text)
+                    st.rerun()
         with action_cols[3]:
             if st.button("Dismiss", key=f"{panel_key}_dismiss_{dump_id}"):
                 entry["status"] = "dismissed"

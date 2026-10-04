@@ -13,12 +13,12 @@ _WEEKDAYS = {
 }
 
 
-def _next_weekday(day_name, today):
+def _next_weekday(day_name, today, include_today=False):
     target = _WEEKDAYS.get(day_name.lower())
     if target is None:
         return None
     delta = (target - today.weekday()) % 7
-    return today + timedelta(days=delta or 7)
+    return today + timedelta(days=delta if include_today else delta or 7)
 
 
 def _parse_time(text):
@@ -44,9 +44,9 @@ def _parse_date(text, today):
         return today
     if re.search(r"\b(tomorrow|tonight)\b", lowered):
         return today + timedelta(days=1)
-    weekday_match = re.search(r"\b(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
+    weekday_match = re.search(r"\b(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
     if weekday_match:
-        return _next_weekday(weekday_match.group(1), today)
+        return _next_weekday(weekday_match.group(2), today, include_today=not weekday_match.group(1))
     iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", lowered)
     if iso_match:
         try:
