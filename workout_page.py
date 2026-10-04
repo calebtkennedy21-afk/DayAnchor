@@ -12,6 +12,7 @@ def _days_to_rows(days):
         for ex in day["exercises"] or [None]:
             rows.append(
                 {
+                    "Week": day.get("week", ""),
                     "Day": day["name"],
                     "Focus": day["focus"],
                     "Exercise": ex["name"] if ex else "",
@@ -27,7 +28,8 @@ def _rows_to_days(rows):
     days = {}
     for row in rows:
         day_name = str(row.get("Day") or "").strip() or "Day 1"
-        day = days.setdefault(day_name, {"name": day_name, "focus": "", "exercises": [], "notes": ""})
+        week = str(row.get("Week") or "").strip()
+        day = days.setdefault((week, day_name), {"name": day_name, "week": week, "focus": "", "exercises": [], "notes": ""})
         day["focus"] = day["focus"] or str(row.get("Focus") or "").strip()
         exercise_name = str(row.get("Exercise") or "").strip()
         if exercise_name:
@@ -126,7 +128,7 @@ def _render_plans_tab(st_module, plans, save, parse_plan_fn, today, panel_key):
         with st_module.expander(label, expanded=plan["active"]):
             st_module.caption(f"Source: {plan['source_file'] or 'manual'} | Added {plan['created_date']}")
             for day in plan["days"]:
-                st_module.markdown(f"**{day['name']}**{' - ' + day['focus'] if day['focus'] else ''}")
+                st_module.markdown(f"**{wc.day_label(day)}**{' - ' + day['focus'] if day['focus'] else ''}")
                 for ex in day["exercises"]:
                     sets_reps = f"{ex['sets']} x {ex['reps']}" if ex["sets"] else ex["reps"]
                     note = f" _{ex['notes']}_" if ex["notes"] else ""
@@ -145,7 +147,7 @@ def _render_log_tab(st_module, plans, logs, save, today, panel_key):
     plan_days = active["days"] if active else []
 
     log_date = st_module.date_input("Date", value=today, key=f"{panel_key}_log_date")
-    day_options = [day["name"] for day in plan_days] + ["Freestyle"]
+    day_options = [wc.day_label(day) for day in plan_days] + ["Freestyle"]
     if active:
         done_this_week = {
             log["day_name"]
@@ -159,7 +161,7 @@ def _render_log_tab(st_module, plans, logs, save, today, panel_key):
         st_module.caption("No active plan; logging a freestyle workout.")
     day_name = st_module.selectbox("Workout day", day_options, key=f"{panel_key}_log_day")
 
-    selected = next((day for day in plan_days if day["name"] == day_name), None)
+    selected = next((day for day in plan_days if wc.day_label(day) == day_name), None)
     seed = [
         {"Exercise": ex["name"], "Sets": ex["sets"], "Reps": ex["reps"], "Weight": 0.0, "Done": True}
         for ex in (selected["exercises"] if selected else [])

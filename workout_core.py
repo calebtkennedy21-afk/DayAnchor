@@ -11,9 +11,15 @@ except ImportError:
 
 DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 _DAY_HEADER_RE = re.compile(
-    r"^\s*(?:#+\s*)?((?:day|workout|session)\s*\d+|" + "|".join(DAY_NAMES) + r")\b\s*[:\-–—]?\s*(.*)$",
+    r"^\s*(?:#+\s*)?((?:day|workout|session)\s*\d+|" + "|".join(DAY_NAMES) + r"|mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)\b\.?\s*[:\-–—]?\s*(.*)$",
     re.IGNORECASE,
 )
+_WEEK_HEADER_RE = re.compile(r"^\s*(?:#+\s*)?(week\s*\d+)\b\s*[:\-–—]?\s*(.*)$", re.IGNORECASE)
+
+
+def day_label(day):
+    week = day.get("week") or ""
+    return f"{week} - {day['name']}" if week else day["name"]
 _SETS_REPS_RE = re.compile(
     r"(\d+)\s*(?:x|×|sets?\s*(?:of|x)?)\s*(\d+(?:\s*[-–]\s*\d+)?(?:\s*(?:sec|secs|seconds|s|min|mins|reps?))?)",
     re.IGNORECASE,
@@ -42,16 +48,23 @@ def parse_workout_text(text):
     days = []
     current = None
     last_exercise = None
+    week = ""
 
     def start_day(name, focus=""):
         nonlocal current, last_exercise
-        current = {"name": name, "focus": focus, "exercises": [], "notes": ""}
+        current = {"name": name, "week": week, "focus": focus, "exercises": [], "notes": ""}
         days.append(current)
         last_exercise = None
 
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        week_header = _WEEK_HEADER_RE.match(line)
+        if week_header:
+            week = week_header.group(1).title()
+            current = None
+            last_exercise = None
             continue
         header = _DAY_HEADER_RE.match(line)
         if header and not _SETS_REPS_RE.search(line):
@@ -68,6 +81,11 @@ def parse_workout_text(text):
                 "reps": re.sub(r"\s+", "", match.group(2)),
                 "notes": "",
             }
+            current["exercises"].append(last_exercise)
+        elif current is not None and (_BULLET_RE.match(line) or ":" in line):
+            # Cardio/rest style entries ("Easy run: 3 miles") have no sets x reps.
+            name, _, detail = _clean_name(line).partition(":")
+            last_exercise = {"name": name.strip() or "Activity", "sets": 0, "reps": detail.strip(), "notes": ""}
             current["exercises"].append(last_exercise)
         elif current is not None:
             note = _clean_name(line)
@@ -116,6 +134,7 @@ def normalize_plan_days(raw_days):
         days.append(
             {
                 "name": name,
+                "week": str(raw_day.get("week") or "").strip(),
                 "focus": str(raw_day.get("focus") or "").strip(),
                 "exercises": exercises,
                 "notes": str(raw_day.get("notes") or "").strip(),
@@ -327,11 +346,14 @@ def generate_workout_plan_parse(text, ai_enabled_fn, ai_api_key_fn, ai_model_nam
                 {
                     "role": "user",
                     "content": (
-                        "Extract every training day with its exercises. Keep sets as an integer (0 if unspecified), "
-                        "reps as a string (e.g. '8-10', '30 sec'), and put coaching cues in notes.\n\n"
+                        "Extract every training day with its exercises, as one entry per calendar day. If the plan spans multiple "
+                        "weeks, emit a separate entry for each day of each week and set week (e.g. 'Week 2'); never merge the same "
+                        "weekday across weeks. Keep sets as an integer (0 if unspecified, e.g. runs, rides, rest), "
+                        "reps as a string holding the volume (e.g. '8-10', '30 sec', '3 miles', '20-30 min'), "
+                        "and put coaching cues in notes.\n\n"
                         f"Plan text:\n{text[:24000]}\n\n"
                         "Return only this JSON in a json code block:\n"
-                        "{\"days\": [{\"name\": \"Day 1\", \"focus\": \"Upper body\", \"notes\": \"\", "
+                        "{\"days\": [{\"name\": \"Monday\", \"week\": \"Week 1\", \"focus\": \"Upper body\", \"notes\": \"\", "
                         "\"exercises\": [{\"name\": \"...\", \"sets\": 3, \"reps\": \"8-10\", \"notes\": \"...\"}]}]}"
                     ),
                 },
