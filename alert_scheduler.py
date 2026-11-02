@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.rows import dict_row
 
+import autopilot
 import telegram_alerts
 
 
@@ -77,7 +78,7 @@ def _normalize_tasks(rows):
     tasks = []
     for row in rows:
         item = dict(row)
-        for key in ("due_date", "scheduled_date"):
+        for key in ("due_date", "scheduled_date", "scheduled_end_date"):
             item[key] = _parse_date(item.get(key))
         item["scheduled_time"] = _parse_time(item.get("scheduled_time"))
         tasks.append(item)
@@ -154,7 +155,8 @@ def load_state(connection):
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT id, title, category, priority, status, due_date, scheduled_date, scheduled_time
+            SELECT id, title, category, priority, status, due_date, scheduled_date,
+                   scheduled_end_date, scheduled_time
             FROM tasks
             WHERE status <> 'completed'
             """
@@ -180,6 +182,34 @@ def save_alert_state(connection, settings):
         )
 
 
+def run_autopilot_rollover(connection, tasks, settings, now_local):
+    """Roll undone scheduled tasks to today and log it. Never raises; returns the count moved."""
+    config = autopilot.autopilot_config(settings)
+    if not config["rollover_enabled"]:
+        return 0
+    try:
+        changes = autopilot.plan_rollover(tasks, now_local, config)
+        if not changes:
+            return 0
+        autopilot.ensure_ai_events_table(connection)
+        applied = autopilot.apply_rollover(connection, changes)
+        autopilot.log_rollover(connection, now_local.date(), applied)
+        connection.commit()
+    except psycopg.Error as exc:
+        connection.rollback()
+        print(f"Autopilot rollover failed: {exc}", flush=True)
+        return 0
+
+    applied_by_id = {change["task_id"]: change for change in applied}
+    for task in tasks:
+        change = applied_by_id.get(task.get("id"))
+        if change:
+            task["scheduled_date"] = change["after"]["scheduled_date"]
+            task["scheduled_time"] = change["after"]["scheduled_time"]
+            task["scheduled_end_date"] = None
+    return len(applied)
+
+
 def run_once(connection=None):
     owns_connection = connection is None
     if owns_connection:
@@ -191,14 +221,18 @@ def run_once(connection=None):
     try:
         tasks, settings = load_state(connection)
         config = telegram_alerts.build_telegram_config(settings, os.environ)
-        if not config.get("enabled"):
-            return {"skipped": True, "reason": "Telegram alerts disabled."}
 
         try:
             timezone = ZoneInfo(config.get("timezone") or "America/Denver")
         except (KeyError, TypeError, ValueError):
             timezone = ZoneInfo("America/Denver")
         now_local = datetime.now(timezone)
+
+        rolled_over = run_autopilot_rollover(connection, tasks, settings, now_local)
+
+        if not config.get("enabled"):
+            return {"skipped": True, "reason": "Telegram alerts disabled.", "rolled_over": rolled_over}
+
         history = telegram_alerts.prune_alert_history(settings.get("telegram_alert_history") or {}, now_value=now_local)
         family_items = _expand_family_items(settings.get("family_schedule_items") or [], now_local.date())
         alerts = telegram_alerts.collect_due_alerts(
@@ -210,6 +244,7 @@ def run_once(connection=None):
             config,
             family_items=family_items,
             now_value=now_local,
+            app_settings=settings,
         )
 
         sent_count = 0
@@ -221,6 +256,11 @@ def run_once(connection=None):
             if ok:
                 history[alert["key"]] = now_local.isoformat(timespec="seconds")
                 sent_count += 1
+                if alert.get("autopilot_kind"):
+                    autopilot.log_event(
+                        connection, now_local.date(), "autopilot", "insight", "info",
+                        f"Sent {alert['autopilot_kind'].replace('_', ' ')} via Telegram",
+                    )
             else:
                 failed.append(error_text or "Unknown Telegram error")
 
@@ -228,7 +268,13 @@ def run_once(connection=None):
         settings["telegram_last_checked_at"] = now_local.isoformat(timespec="seconds")
         save_alert_state(connection, settings)
         connection.commit()
-        return {"skipped": False, "sent_count": sent_count, "queued_count": len(alerts), "failed": failed}
+        return {
+            "skipped": False,
+            "sent_count": sent_count,
+            "queued_count": len(alerts),
+            "failed": failed,
+            "rolled_over": rolled_over,
+        }
     finally:
         if owns_connection:
             connection.close()

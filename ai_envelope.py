@@ -15,13 +15,39 @@ MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
 PILLARS = {
     "capture", "planning", "scheduling", "summary", "review",
-    "reflection", "morning", "coaching", "family", "signals",
+    "reflection", "morning", "coaching", "family", "signals", "autopilot",
 }
 KINDS = {"suggestion", "decision", "schedule_change", "insight", "warning"}
-STATUSES = {"proposed", "accepted", "rejected", "expired", "applied", "info"}
+STATUSES = {"proposed", "accepted", "rejected", "expired", "applied", "undone", "info"}
 SOURCES = {"ai", "fallback", "rules"}
 
 SUMMARY_MAX_CHARS = 280
+
+AI_EVENTS_SCHEMA_SQL = (
+    """
+    CREATE TABLE IF NOT EXISTS ai_events (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        day DATE NOT NULL,
+        pillar TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'info',
+        source TEXT NOT NULL DEFAULT 'ai',
+        summary TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        task_ids BIGINT[] NOT NULL DEFAULT '{}',
+        context_refs BIGINT[] NOT NULL DEFAULT '{}',
+        expires_at TIMESTAMPTZ,
+        resolved_at TIMESTAMPTZ,
+        outcome TEXT,
+        outcome_note TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ai_events_day_pillar ON ai_events (day DESC, pillar)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_events_open ON ai_events (status) WHERE status = 'proposed'",
+    "CREATE INDEX IF NOT EXISTS idx_ai_events_task_ids ON ai_events USING GIN (task_ids)",
+)
 
 
 @dataclass

@@ -187,3 +187,36 @@ def test_wrapper_survives_context_failure():
     )
     assert wrapped() == ("t", "")
     assert seen == [""]
+
+
+def test_expire_stale_events_only_touches_past_due_proposals():
+    from datetime import timedelta
+
+    st_module = DummyStreamlit()
+    day = data_access.mountain_today()
+    env = envelope_from_schedule(("t", "", [{"task_id": 1, "scheduled_minutes": 30}]))
+    now = datetime.now(data_access.MOUNTAIN_TIMEZONE)
+    env.expires_at = now - timedelta(hours=1)
+    stale_id = data_access.log_ai_event(env, day, st_module=st_module)
+    env.expires_at = now + timedelta(hours=1)
+    fresh_id = data_access.log_ai_event(env, day, st_module=st_module)
+
+    assert data_access.expire_stale_ai_events(now=now, st_module=st_module) == 1
+    by_id = {e["id"]: e for e in st_module.session_state.ai_events}
+    assert by_id[stale_id]["status"] == "expired" and by_id[stale_id]["outcome"] == "ignored"
+    assert by_id[fresh_id]["status"] == "proposed"
+
+
+def test_record_task_outcome_upgrades_only_accepted_applied_events():
+    st_module = DummyStreamlit()
+    day = data_access.mountain_today()
+    env = envelope_from_schedule(("t", "", [{"task_id": 5, "scheduled_minutes": 30}]))
+    applied_id = data_access.log_ai_event(env, day, st_module=st_module)
+    open_id = data_access.log_ai_event(env, day, st_module=st_module)
+    data_access.resolve_ai_event(applied_id, "applied", "accepted", st_module=st_module)
+
+    assert data_access.record_task_outcome(5, "completed", st_module=st_module) == 1
+    by_id = {e["id"]: e for e in st_module.session_state.ai_events}
+    assert by_id[applied_id]["outcome"] == "completed"
+    assert by_id[open_id]["outcome"] is None
+    assert data_access.record_task_outcome(99, "completed", st_module=st_module) == 0

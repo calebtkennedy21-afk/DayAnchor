@@ -1782,3 +1782,57 @@ def shared_context_block(events, max_chars=1200):
         lines.append(line)
         used += len(line) + 1
     return "\n".join(lines)
+
+
+def expire_stale_ai_events(now=None, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Mark proposals past their expires_at as expired/ignored. Returns the count."""
+    now = now or datetime.now(MOUNTAIN_TIMEZONE)
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE ai_events
+                        SET status = 'expired', outcome = 'ignored', resolved_at = NOW()
+                        WHERE status = 'proposed' AND expires_at IS NOT NULL AND expires_at < %s
+                        """,
+                        (now,),
+                    )
+                    return cur.rowcount
+        except psycopg.Error:
+            return 0
+
+    count = 0
+    for event in st_module.session_state.get("ai_events", []):
+        if event["status"] == "proposed" and event.get("expires_at") and event["expires_at"] < now:
+            event.update(status="expired", outcome="ignored", resolved_at=now)
+            count += 1
+    return count
+
+
+def record_task_outcome(task_id, outcome, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Upgrade the outcome of applied AI events that touched a task (e.g. to 'completed')."""
+    task_id = int(task_id)
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE ai_events
+                        SET outcome = %s
+                        WHERE status = 'applied' AND outcome IN ('accepted', 'auto_applied') AND task_ids @> %s::bigint[]
+                        """,
+                        (outcome, [task_id]),
+                    )
+                    return cur.rowcount
+        except psycopg.Error:
+            return 0
+
+    count = 0
+    for event in st_module.session_state.get("ai_events", []):
+        if event["status"] == "applied" and event["outcome"] in ("accepted", "auto_applied") and task_id in event["task_ids"]:
+            event["outcome"] = outcome
+            count += 1
+    return count

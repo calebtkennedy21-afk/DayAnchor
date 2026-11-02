@@ -31,6 +31,7 @@ from cpt_reference import CPT_REFERENCE
 import ai_envelope
 import ai_workflows
 import app_bootstrap
+import autopilot
 import dayanchor_brain
 import data_access
 import scheduling_core as scheduling_core_module
@@ -250,6 +251,11 @@ DEFAULT_APP_SETTINGS = {
     "notification_app_url": "",
     "telegram_last_checked_at": "",
     "telegram_alert_history": {},
+    "autopilot_rollover_enabled": True,
+    "autopilot_reminders_enabled": True,
+    "autopilot_rollover_max_age_days": 14,
+    "autopilot_closeout_reminder_time": "16:30",
+    "autopilot_high_priority_time": "08:00",
     "clinic_day_closeout_template": [
         "Confirm all charting is complete",
         "Review and send pending patient messages",
@@ -2684,31 +2690,8 @@ def initialize_database():
                         )
                         """
                     )
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS ai_events (
-                            id BIGSERIAL PRIMARY KEY,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                            day DATE NOT NULL,
-                            pillar TEXT NOT NULL,
-                            kind TEXT NOT NULL,
-                            status TEXT NOT NULL DEFAULT 'info',
-                            source TEXT NOT NULL DEFAULT 'ai',
-                            summary TEXT NOT NULL,
-                            text TEXT NOT NULL DEFAULT '',
-                            payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-                            task_ids BIGINT[] NOT NULL DEFAULT '{}',
-                            context_refs BIGINT[] NOT NULL DEFAULT '{}',
-                            expires_at TIMESTAMPTZ,
-                            resolved_at TIMESTAMPTZ,
-                            outcome TEXT,
-                            outcome_note TEXT NOT NULL DEFAULT ''
-                        )
-                        """
-                    )
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_day_pillar ON ai_events (day DESC, pillar)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_open ON ai_events (status) WHERE status = 'proposed'")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_task_ids ON ai_events USING GIN (task_ids)")
+                    for ai_events_statement in ai_envelope.AI_EVENTS_SCHEMA_SQL:
+                        cur.execute(ai_events_statement)
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS surgical_cases (
@@ -4085,6 +4068,7 @@ def dispatch_telegram_alerts(tasks, app_settings=None, force=False):
         config,
         family_items=family_items,
         now_value=now_local,
+        app_settings=settings,
     )
 
     sent_count = 0
@@ -5299,6 +5283,10 @@ def complete_task(task_id):
         return
 
     update_task(task_id, status="completed", completed_date=mountain_today(), completed_at=datetime.utcnow())
+    try:
+        data_access.record_task_outcome(task_id, "completed", **_ai_db_kwargs())
+    except Exception:
+        pass
 
     recurrence_rule = task.get("recurrence_rule")
     recurrence_interval = max(1, int(task.get("recurrence_interval") or 1))
@@ -5938,9 +5926,20 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
                 apply_brain_dump_decision(entry, decision, app_settings, updates, status_prefix="ai_")
                 applied += 1
             app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
+            if applied == 0:
+                _resolve_open_proposal("capture", "rejected", "rejected", "nothing selected")
+            elif applied < len(ai_triage):
+                _resolve_open_proposal("capture", "applied", "accepted", f"{applied} of {len(ai_triage)} applied")
+            else:
+                _resolve_open_proposal("capture", "applied", "accepted", f"{applied} applied")
             st.session_state[triage_key] = []
             st.session_state[triage_error_key] = ""
             st.success(f"Applied {applied} decision(s).")
+            st.rerun()
+        if st.button("Discard proposals", key=f"{panel_key}_discard_ai"):
+            _resolve_open_proposal("capture", "rejected", "rejected")
+            st.session_state[triage_key] = []
+            st.session_state[triage_error_key] = ""
             st.rerun()
     elif not ai_triage_error:
         st.caption("Run AI triage to classify the inbox into tasks, reminders, notes, or ideas.")
@@ -12593,6 +12592,24 @@ def render_settings_panel(app_settings, panel_key="settings"):
             value=str(app_settings.get("telegram_timezone") or "America/Denver"),
             placeholder="America/Denver",
         )
+    settings_autopilot_rollover = st.toggle(
+        "Autopilot: roll undone scheduled tasks forward to today",
+        value=bool(app_settings.get("autopilot_rollover_enabled", True)),
+        help="Runs in the background scheduler. Due dates are never changed; every move can be undone from AI > Activity.",
+    )
+    settings_autopilot_reminders = st.toggle(
+        "Autopilot: clinic closeout and high-priority reminders (Telegram)",
+        value=bool(app_settings.get("autopilot_reminders_enabled", True)),
+    )
+    autopilot_time_cols = st.columns(2)
+    settings_autopilot_closeout_time = autopilot_time_cols[0].time_input(
+        "Closeout reminder time (weekdays)",
+        value=datetime.strptime(str(app_settings.get("autopilot_closeout_reminder_time") or "16:30"), "%H:%M").time(),
+    )
+    settings_autopilot_priority_time = autopilot_time_cols[1].time_input(
+        "High-priority digest time",
+        value=datetime.strptime(str(app_settings.get("autopilot_high_priority_time") or "08:00"), "%H:%M").time(),
+    )
     settings_timeline_days = st.slider(
         "Default timeline window (days)",
         min_value=3,
@@ -12791,6 +12808,10 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "telegram_alert_lateness_minutes": int(settings_telegram_alert_lateness),
                 "telegram_reminder_followup_minutes": int(settings_telegram_followup),
                 "telegram_check_interval_minutes": int(settings_telegram_check_interval),
+                "autopilot_rollover_enabled": bool(settings_autopilot_rollover),
+                "autopilot_reminders_enabled": bool(settings_autopilot_reminders),
+                "autopilot_closeout_reminder_time": settings_autopilot_closeout_time.strftime("%H:%M"),
+                "autopilot_high_priority_time": settings_autopilot_priority_time.strftime("%H:%M"),
                 "notification_app_url": settings_notification_app_url.strip(),
                 "timeline_days": int(settings_timeline_days),
                 "surgeon_clinic_patient_target": int(settings_surgeon_patient_target),
@@ -15327,6 +15348,52 @@ def render_add_task_panel(form_key, defaults, default_category=None):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def undo_ai_event(event):
+    """Restore the tasks an autonomous event changed. Returns (restored, skipped)."""
+    payload = event.get("payload_json") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload or "{}")
+    task_ids = {
+        change.get("task_id")
+        for change in (item.get("data") or {} for item in payload.get("items", []))
+    }
+    current = {task_id: get_task_by_id(task_id) for task_id in task_ids if task_id is not None}
+    restores = autopilot.plan_undo(payload, current)
+    for task_id, fields in restores:
+        update_task(task_id, **fields)
+    data_access.resolve_ai_event(
+        event["id"], "undone", "undone", f"{len(restores)} of {len(task_ids)} task(s) restored", **_ai_db_kwargs()
+    )
+    return len(restores), len(task_ids) - len(restores)
+
+
+def render_ai_activity_panel(panel_key):
+    st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-title"><h3>AI Activity</h3><span>What the assistants proposed or did on their own, last 7 days</span></div>',
+        unsafe_allow_html=True,
+    )
+    events = data_access.load_recent_ai_events(days=7, limit=60, **_ai_db_kwargs())
+    if not events:
+        st.markdown('<div class="empty-state">No AI activity recorded yet.</div>', unsafe_allow_html=True)
+    for event in events:
+        state = event.get("outcome") or event.get("status")
+        created = event.get("created_at")
+        stamp = created.strftime("%a %I:%M %p") if hasattr(created, "strftime") else ""
+        info_col, action_col = st.columns([0.82, 0.18])
+        info_col.markdown(f"**{event.get('pillar')}** · {state} · {stamp}  \n{event.get('summary')}")
+        undoable = (
+            event.get("pillar") == "autopilot"
+            and event.get("status") == "applied"
+            and event.get("outcome") == "auto_applied"
+        )
+        if undoable and action_col.button("Undo", key=f"{panel_key}_undo_{event['id']}"):
+            restored, skipped = undo_ai_event(event)
+            st.success(f"Restored {restored} task(s)." + (f" {skipped} changed since and were left alone." if skipped else ""))
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_ai_panel(tasks, active_tasks, panel_key="main"):
     summary = ai_workbench_summary(tasks, active_tasks)
     prompt_key = f"{panel_key}_ai_prompt"
@@ -15406,7 +15473,7 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
                 unsafe_allow_html=True,
             )
 
-    planner_tab, scheduler_tab, review_tab = st.tabs(["Planner", "Scheduler", "Review"])
+    planner_tab, scheduler_tab, review_tab, activity_tab = st.tabs(["Planner", "Scheduler", "Review", "Activity"])
 
     with planner_tab:
         st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
@@ -15425,8 +15492,13 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
             if st.button("Add Suggested Tasks", type="primary", key=f"{panel_key}_apply_suggested"):
                 apply_ai_suggestions(st.session_state.ai_suggestions)
                 added_count = len(st.session_state.ai_suggestions)
+                _resolve_open_proposal("planning", "applied", "accepted", f"{added_count} task(s) added")
                 st.session_state.ai_suggestions = []
                 st.success(f"Added {added_count} suggested task(s).")
+                st.rerun()
+            if st.button("Dismiss suggestions", key=f"{panel_key}_dismiss_suggested"):
+                _resolve_open_proposal("planning", "rejected", "rejected")
+                st.session_state.ai_suggestions = []
                 st.rerun()
         if not st.session_state.ai_response and not st.session_state.ai_error:
             st.markdown('<div class="empty-state">Generate a plan to turn the task board into a sequence of actions.</div>', unsafe_allow_html=True)
@@ -15450,8 +15522,13 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
             if st.button("Apply Auto-Schedule", type="secondary", key=f"{panel_key}_apply_schedule"):
                 apply_ai_schedule_updates(st.session_state.ai_schedule_updates)
                 applied_count = len(st.session_state.ai_schedule_updates)
+                _resolve_open_proposal("scheduling", "applied", "accepted", f"{applied_count} update(s) applied")
                 st.session_state.ai_schedule_updates = []
                 st.success(f"Applied {applied_count} schedule update(s).")
+                st.rerun()
+            if st.button("Dismiss schedule", key=f"{panel_key}_dismiss_schedule"):
+                _resolve_open_proposal("scheduling", "rejected", "rejected")
+                st.session_state.ai_schedule_updates = []
                 st.rerun()
         if st.session_state.ai_schedule_updates:
             st.markdown("<div class='empty-state' style='text-align:left;'>AI generated schedule updates are ready to apply.</div>", unsafe_allow_html=True)
@@ -15483,6 +15560,9 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
         if not st.session_state.daily_review_text and not st.session_state.daily_review_error:
             st.markdown('<div class="empty-state">Use the review tab to close out the day and draft tomorrow.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+
+    with activity_tab:
+        render_ai_activity_panel(panel_key)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -15577,10 +15657,32 @@ def render_workout_panel(app_settings, panel_key="workouts"):
 generate_family_weekly_digest = partial(ai_workflows.generate_family_weekly_digest, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 
+def _ai_db_kwargs():
+    return {"db_enabled_fn": db_enabled, "get_connection_fn": get_connection, "st_module": st}
+
+
+def _resolve_open_proposal(pillar, status, outcome, note=""):
+    """Resolve the open proposal for a pillar; never raises into the UI."""
+    try:
+        open_ids = st.session_state.setdefault("ai_open_event_ids", {})
+        event_id = open_ids.pop(pillar, None)
+        if event_id is not None:
+            data_access.resolve_ai_event(event_id, status, outcome, note, **_ai_db_kwargs())
+    except Exception:
+        pass
+
+
 def _log_ai_event(envelope, day):
-    return data_access.log_ai_event(
-        envelope, day, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st
-    )
+    try:
+        data_access.expire_stale_ai_events(**_ai_db_kwargs())
+    except Exception:
+        pass
+    # A new proposal supersedes any earlier one that was never acted on.
+    _resolve_open_proposal(envelope.pillar, "expired", "ignored", "superseded by a newer run")
+    event_id = data_access.log_ai_event(envelope, day, **_ai_db_kwargs())
+    if event_id is not None and envelope.status == "proposed":
+        st.session_state.setdefault("ai_open_event_ids", {})[envelope.pillar] = event_id
+    return event_id
 
 
 def _shared_context_for(pillars, days=1):
@@ -15607,15 +15709,15 @@ def _logged(generator, adapter, read_pillars=None, days=1):
 
 _ALL_PILLARS = sorted(ai_envelope.PILLARS)
 
-generate_ai_plan = _logged(generate_ai_plan, ai_envelope.envelope_from_plan, ["capture", "planning", "scheduling", "review", "family", "signals"])
-generate_ai_schedule = _logged(generate_ai_schedule, ai_envelope.envelope_from_schedule, ["capture", "planning", "scheduling", "family", "signals"])
+generate_ai_plan = _logged(generate_ai_plan, ai_envelope.envelope_from_plan, ["capture", "planning", "scheduling", "review", "family", "signals", "autopilot"])
+generate_ai_schedule = _logged(generate_ai_schedule, ai_envelope.envelope_from_schedule, ["capture", "planning", "scheduling", "family", "signals", "autopilot"])
 generate_brain_dump_triage = _logged(generate_brain_dump_triage, ai_envelope.envelope_from_triage, ["capture", "planning", "scheduling", "family", "signals"])
 generate_daily_review = _logged(generate_daily_review, ai_envelope.envelope_from_review, _ALL_PILLARS)
 generate_ai_daily_summary = _logged(generate_ai_daily_summary, ai_envelope.text_adapter("summary"), _ALL_PILLARS)
 generate_ma_lead_coaching = _logged(generate_ma_lead_coaching, ai_envelope.text_adapter("coaching"))
 generate_weekly_nightly_insight = _logged(generate_weekly_nightly_insight, ai_envelope.text_adapter("reflection"))
 generate_weekly_morning_ritual_insight = _logged(generate_weekly_morning_ritual_insight, ai_envelope.text_adapter("morning"))
-generate_ai_morning_ritual_brief = _logged(generate_ai_morning_ritual_brief, ai_envelope.text_adapter("morning"), ["review", "capture", "planning", "scheduling", "family", "signals"], days=2)
+generate_ai_morning_ritual_brief = _logged(generate_ai_morning_ritual_brief, ai_envelope.text_adapter("morning"), ["review", "capture", "planning", "scheduling", "family", "signals", "autopilot"], days=2)
 generate_family_schedule_insight = _logged(generate_family_schedule_insight, ai_envelope.text_adapter("family"))
 generate_family_weekly_briefing = _logged(generate_family_weekly_briefing, ai_envelope.text_adapter("family"))
 generate_family_goal_coaching = _logged(generate_family_goal_coaching, ai_envelope.text_adapter("family"))

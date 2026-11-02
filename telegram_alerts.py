@@ -4,6 +4,8 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from urllib import error, parse, request
 
+import autopilot
+
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
 
@@ -125,6 +127,7 @@ def collect_due_alerts(
     config,
     family_items=None,
     now_value=None,
+    app_settings=None,
 ):
     now_local = now_value or datetime.now(ZoneInfo(config.get("timezone") or "America/Denver"))
     local_tz = now_local.tzinfo
@@ -301,6 +304,9 @@ def collect_due_alerts(
                         "reply_markup": _build_open_button(app_url),
                     }
                 )
+
+    if app_settings is not None:
+        alerts.extend(autopilot.collect_reminder_alerts(tasks, app_settings, sent_history, config, now_local))
 
     return alerts
 
