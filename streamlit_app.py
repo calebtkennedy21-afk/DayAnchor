@@ -57,6 +57,7 @@ from overview_core import (
 import page_renderers
 import page_sections
 import telegram_alerts
+import telegram_inbox
 import workout_core
 import workout_page
 from brain_dump_core import parse_brain_dump
@@ -253,6 +254,9 @@ DEFAULT_APP_SETTINGS = {
     "telegram_alert_history": {},
     "autopilot_rollover_enabled": True,
     "autopilot_reminders_enabled": True,
+    "telegram_send_proposals": False,
+    "telegram_update_offset": 0,
+    "autopilot_pending_notify": [],
     "autopilot_rollover_max_age_days": 14,
     "autopilot_closeout_reminder_time": "16:30",
     "autopilot_high_priority_time": "08:00",
@@ -12601,6 +12605,11 @@ def render_settings_panel(app_settings, panel_key="settings"):
         "Autopilot: clinic closeout and high-priority reminders (Telegram)",
         value=bool(app_settings.get("autopilot_reminders_enabled", True)),
     )
+    settings_send_proposals = st.toggle(
+        "Telegram: send AI schedule proposals with Apply / Dismiss buttons",
+        value=bool(app_settings.get("telegram_send_proposals", False)),
+        help="Replies are read by the background scheduler, so the database and scheduler must be running.",
+    )
     autopilot_time_cols = st.columns(2)
     settings_autopilot_closeout_time = autopilot_time_cols[0].time_input(
         "Closeout reminder time (weekdays)",
@@ -12810,6 +12819,7 @@ def render_settings_panel(app_settings, panel_key="settings"):
                 "telegram_check_interval_minutes": int(settings_telegram_check_interval),
                 "autopilot_rollover_enabled": bool(settings_autopilot_rollover),
                 "autopilot_reminders_enabled": bool(settings_autopilot_reminders),
+                "telegram_send_proposals": bool(settings_send_proposals),
                 "autopilot_closeout_reminder_time": settings_autopilot_closeout_time.strftime("%H:%M"),
                 "autopilot_high_priority_time": settings_autopilot_priority_time.strftime("%H:%M"),
                 "notification_app_url": settings_notification_app_url.strip(),
@@ -15672,6 +15682,23 @@ def _resolve_open_proposal(pillar, status, outcome, note=""):
         pass
 
 
+def _maybe_send_proposal_to_telegram(envelope, event_id):
+    """Opt-in: push schedule proposals to Telegram. Needs the DB, since the scheduler applies replies."""
+    try:
+        if event_id is None or not db_enabled():
+            return
+        if envelope.pillar != "scheduling" or envelope.status != "proposed":
+            return
+        settings = load_app_settings()
+        if not settings.get("telegram_send_proposals"):
+            return
+        config = telegram_alerts.build_telegram_config(settings, os.environ)
+        if config.get("enabled"):
+            telegram_inbox.send_proposal_to_telegram(config, event_id, envelope.summary)
+    except Exception:
+        pass
+
+
 def _log_ai_event(envelope, day):
     try:
         data_access.expire_stale_ai_events(**_ai_db_kwargs())
@@ -15682,6 +15709,7 @@ def _log_ai_event(envelope, day):
     event_id = data_access.log_ai_event(envelope, day, **_ai_db_kwargs())
     if event_id is not None and envelope.status == "proposed":
         st.session_state.setdefault("ai_open_event_ids", {})[envelope.pillar] = event_id
+    _maybe_send_proposal_to_telegram(envelope, event_id)
     return event_id
 
 

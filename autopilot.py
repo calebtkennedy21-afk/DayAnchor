@@ -10,7 +10,7 @@ import json
 from datetime import date, datetime, time, timedelta
 
 import psycopg
-
+from psycopg.rows import dict_row
 from ai_envelope import AI_EVENTS_SCHEMA_SQL
 
 ROLLOVER_MAX_PER_RUN = 25
@@ -146,7 +146,10 @@ def apply_rollover(connection, changes):
 
 
 def log_event(connection, day, pillar, kind, status, summary, outcome=None, task_ids=None, payload=None, text=""):
-    """Insert an ai_events row inside a savepoint so a failure never poisons the caller's transaction."""
+    """Insert an ai_events row inside a savepoint so a failure never poisons the caller's transaction.
+
+    Returns the new event id, or None on failure.
+    """
     try:
         with connection.transaction():
             with connection.cursor() as cursor:
@@ -156,6 +159,7 @@ def log_event(connection, day, pillar, kind, status, summary, outcome=None, task
                                            payload_json, task_ids, outcome, resolved_at)
                     VALUES (%s, %s, %s, %s, 'rules', %s, %s, %s::jsonb, %s, %s,
                             CASE WHEN %s::text IS NULL THEN NULL ELSE NOW() END)
+                    RETURNING id
                     """,
                     (
                         day, pillar, kind, status, summary, text,
@@ -163,14 +167,14 @@ def log_event(connection, day, pillar, kind, status, summary, outcome=None, task
                         [int(t) for t in (task_ids or [])], outcome, outcome,
                     ),
                 )
-        return True
+                return cursor.fetchone()[0]
     except psycopg.Error:
-        return False
+        return None
 
 
 def log_rollover(connection, day, applied):
     if not applied:
-        return False
+        return None
     items = [{"type": "rollover", "data": change, "task_ids": [change["task_id"]]} for change in applied]
     return log_event(
         connection, day, "autopilot", "schedule_change", "applied",
@@ -179,6 +183,128 @@ def log_rollover(connection, day, applied):
         task_ids=[change["task_id"] for change in applied],
         payload={"items": items},
     )
+
+
+def _fetch_event(cursor, event_id):
+    cursor.execute(
+        "SELECT id, pillar, kind, status, outcome, expires_at, payload_json FROM ai_events WHERE id = %s FOR UPDATE",
+        (event_id,),
+    )
+    return cursor.fetchone()
+
+
+def _event_payload(event):
+    payload = event.get("payload_json") or {}
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def _resolve(cursor, event_id, status, outcome, note=""):
+    cursor.execute(
+        "UPDATE ai_events SET status = %s, outcome = %s, outcome_note = %s, resolved_at = NOW() WHERE id = %s",
+        (status, outcome, note, event_id),
+    )
+
+
+def undo_event(connection, event_id):
+    """Undo an autonomous rollover. Returns (state, restored, skipped)."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        event = _fetch_event(cursor, event_id)
+        if not event:
+            return "missing", 0, 0
+        if event["status"] == "undone":
+            return "already_handled", 0, 0
+        if event["pillar"] != "autopilot" or event["status"] != "applied" or event["outcome"] != "auto_applied":
+            return "not_undoable", 0, 0
+        payload = _event_payload(event)
+        task_ids = sorted(
+            {(item.get("data") or {}).get("task_id") for item in payload.get("items", [])} - {None}
+        )
+        cursor.execute("SELECT id, status, scheduled_date FROM tasks WHERE id = ANY(%s)", (task_ids,))
+        current = {row["id"]: row for row in cursor.fetchall()}
+        restored = 0
+        for task_id, fields in plan_undo(payload, current):
+            cursor.execute(
+                """
+                UPDATE tasks SET scheduled_date = %s, scheduled_time = %s, scheduled_end_date = %s
+                WHERE id = %s AND status <> 'completed'
+                """,
+                (fields["scheduled_date"], fields["scheduled_time"], fields["scheduled_end_date"], task_id),
+            )
+            restored += cursor.rowcount
+        skipped = len(task_ids) - restored
+        _resolve(cursor, event_id, "undone", "undone", f"{restored} of {len(task_ids)} task(s) restored")
+    return "undone", restored, skipped
+
+
+def apply_proposal(connection, event_id, now_local):
+    """Apply a proposed schedule change. Returns (state, applied_count)."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        event = _fetch_event(cursor, event_id)
+        if not event:
+            return "missing", 0
+        if event["status"] != "proposed":
+            return "already_handled", 0
+        if event["expires_at"] is not None and event["expires_at"] < now_local:
+            _resolve(cursor, event_id, "expired", "ignored", "expired before reply")
+            return "expired", 0
+        updates = [
+            item.get("data") or {}
+            for item in _event_payload(event).get("items", [])
+            if item.get("type") == "schedule_update"
+        ]
+        if event["kind"] != "schedule_change" or not updates:
+            return "unsupported", 0
+        applied = 0
+        for data in updates:
+            scheduled_date = _parse_date(data.get("scheduled_date"))
+            if data.get("task_id") is None or scheduled_date is None:
+                continue
+            try:
+                minutes = int(data.get("scheduled_minutes") or 30)
+            except (TypeError, ValueError):
+                minutes = 30
+            cursor.execute(
+                """
+                UPDATE tasks SET scheduled_date = %s, scheduled_time = %s, scheduled_minutes = %s
+                WHERE id = %s AND status <> 'completed'
+                """,
+                (scheduled_date, _parse_time(data.get("scheduled_time"), None), minutes, int(data["task_id"])),
+            )
+            applied += cursor.rowcount
+        _resolve(cursor, event_id, "applied", "accepted", f"{applied} update(s) applied via Telegram")
+    return "applied", applied
+
+
+def dismiss_proposal(connection, event_id):
+    with connection.cursor(row_factory=dict_row) as cursor:
+        event = _fetch_event(cursor, event_id)
+        if not event:
+            return "missing"
+        if event["status"] != "proposed":
+            return "already_handled"
+        _resolve(cursor, event_id, "rejected", "rejected", "dismissed via Telegram")
+    return "dismissed"
+
+
+def latest_undoable_event_id(connection, days=7):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id FROM ai_events
+            WHERE pillar = 'autopilot' AND status = 'applied' AND outcome = 'auto_applied'
+              AND day >= CURRENT_DATE - %s::int
+            ORDER BY created_at DESC, id DESC LIMIT 1
+            """,
+            (int(days),),
+        )
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def load_event_summary(connection, event_id):
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT id, status, outcome, summary, payload_json FROM ai_events WHERE id = %s", (event_id,))
+        return cursor.fetchone()
 
 
 def _due(now_local, target, window_minutes, lateness_minutes):

@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 
 import autopilot
 import telegram_alerts
+import telegram_inbox
 
 
 STOP_REQUESTED = False
@@ -182,8 +183,11 @@ def save_alert_state(connection, settings):
         )
 
 
-def run_autopilot_rollover(connection, tasks, settings, now_local):
-    """Roll undone scheduled tasks to today and log it. Never raises; returns the count moved."""
+def run_autopilot_rollover(connection, tasks, settings, now_local, notify=False):
+    """Roll undone scheduled tasks to today and log it. Never raises; returns the count moved.
+
+    With notify=True the event is queued in settings for a Telegram message with an Undo button.
+    """
     config = autopilot.autopilot_config(settings)
     if not config["rollover_enabled"]:
         return 0
@@ -193,13 +197,15 @@ def run_autopilot_rollover(connection, tasks, settings, now_local):
             return 0
         autopilot.ensure_ai_events_table(connection)
         applied = autopilot.apply_rollover(connection, changes)
-        autopilot.log_rollover(connection, now_local.date(), applied)
+        event_id = autopilot.log_rollover(connection, now_local.date(), applied)
         connection.commit()
     except psycopg.Error as exc:
         connection.rollback()
         print(f"Autopilot rollover failed: {exc}", flush=True)
         return 0
 
+    if notify and event_id is not None:
+        settings["autopilot_pending_notify"] = list(settings.get("autopilot_pending_notify") or []) + [event_id]
     applied_by_id = {change["task_id"]: change for change in applied}
     for task in tasks:
         change = applied_by_id.get(task.get("id"))
@@ -228,10 +234,19 @@ def run_once(connection=None):
             timezone = ZoneInfo("America/Denver")
         now_local = datetime.now(timezone)
 
-        rolled_over = run_autopilot_rollover(connection, tasks, settings, now_local)
+        rolled_over = run_autopilot_rollover(connection, tasks, settings, now_local, notify=bool(config.get("enabled")))
 
         if not config.get("enabled"):
             return {"skipped": True, "reason": "Telegram alerts disabled.", "rolled_over": rolled_over}
+
+        inbox_result = {"handled": 0, "ignored": 0, "error": ""}
+        if config.get("bot_token") and config.get("chat_id"):
+            inbox_result = telegram_inbox.process_updates(connection, config, settings, now_local)
+            if inbox_result["error"]:
+                print(f"Telegram inbox: {inbox_result['error']}", flush=True)
+            telegram_inbox.flush_pending_notifications(connection, config, settings, now_local)
+            # Replies may have moved tasks, so alerts should see current data.
+            tasks, _ = load_state(connection)
 
         history = telegram_alerts.prune_alert_history(settings.get("telegram_alert_history") or {}, now_value=now_local)
         family_items = _expand_family_items(settings.get("family_schedule_items") or [], now_local.date())
@@ -274,6 +289,7 @@ def run_once(connection=None):
             "queued_count": len(alerts),
             "failed": failed,
             "rolled_over": rolled_over,
+            "replies_handled": inbox_result["handled"],
         }
     finally:
         if owns_connection:

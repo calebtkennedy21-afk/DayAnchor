@@ -327,6 +327,30 @@ def prune_alert_history(history, now_value=None, max_entries=2000, max_age_days=
     return {key: value.isoformat(timespec="seconds") for key, value in trimmed}
 
 
+def call_api(config, method, payload, timeout=10):
+    """Generic Telegram Bot API call. Returns (ok, result_or_error_text)."""
+    token = str(config.get("bot_token") or "").strip()
+    if not token:
+        return False, "Missing TELEGRAM_BOT_TOKEN."
+    req = request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8", errors="replace"))
+        if not body.get("ok"):
+            return False, f"Telegram API error: {str(body)[:220]}"
+        return True, body.get("result")
+    except error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+        return False, f"HTTP {exc.code}: {text[:220]}"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def send_telegram_message(config, message, reply_markup=None):
     token = str(config.get("bot_token") or "").strip()
     chat_id = str(config.get("chat_id") or "").strip()
