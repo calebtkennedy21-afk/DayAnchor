@@ -203,6 +203,7 @@ def generate_brain_dump_triage(
     openai_cls=OpenAI,
     existing_tasks=None,
     today=None,
+    shared_context="",
 ):
     active_entries = [item for item in (entries or []) if isinstance(item, dict) and str(item.get("status") or "new") == "new"]
     if not active_entries:
@@ -263,7 +264,8 @@ def generate_brain_dump_triage(
                         "Only set due_date or scheduled_time when supported by the captured text. "
                         f"Today is {today.isoformat()} ({today.strftime('%A')}); resolve relative dates against it. "
                         "Set duplicate to true when a thought restates an existing open task.\n\n"
-                        f"Existing open tasks:\n{task_lines}\n\n"
+                        f"Existing open tasks:\n{task_lines}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         f"Captured thoughts:\n{chr(10).join(lines)}\n\n"
                         "Return only this JSON shape inside a json code block:\n"
                         "{\n  \"triage\": [\n"
@@ -312,7 +314,19 @@ def task_snapshot_for_ai(tasks, max_items=20):
     return "\n".join(lines)
 
 
-def generate_ai_plan(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI):
+def shared_context_section(shared_context):
+    text = str(shared_context or "").strip()
+    if not text:
+        return ""
+    return (
+        "\n\nRecent activity from other DayAnchor assistants (background only; do not repeat it, "
+        "do not contradict accepted items, and do not re-suggest rejected ones; "
+        "'proposed' items are not yet confirmed):\n"
+        f"{text}\n"
+    )
+
+
+def generate_ai_plan(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI, shared_context=""):
     if not ai_enabled_fn():
         return "", "AI is not configured. Add OPENAI_API_KEY to enable it.", []
 
@@ -335,7 +349,8 @@ def generate_ai_plan(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_
                     "content": (
                         f"User request: {user_prompt}\n\n"
                         "Current tasks:\n"
-                        f"{task_snapshot}\n\n"
+                        f"{task_snapshot}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         "Return a structured response with these sections exactly:\n"
                         "## Executive Summary\n"
                         "## Focus Blocks for Today\n"
@@ -373,7 +388,7 @@ def generate_ai_plan(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_
         return "", f"AI request failed: {exc}", []
 
 
-def generate_ai_schedule(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI):
+def generate_ai_schedule(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI, shared_context=""):
     if not ai_enabled_fn():
         return "", "AI is not configured. Add OPENAI_API_KEY to enable it.", []
 
@@ -400,7 +415,8 @@ def generate_ai_schedule(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_mo
                     "content": (
                         f"Scheduling context: {user_prompt}\n\n"
                         "Tasks:\n"
-                        f"{task_snapshot}\n\n"
+                        f"{task_snapshot}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         "Return a short rationale plus a JSON block with this exact shape:\n"
                         "```json\n"
                         "{\n"
@@ -430,7 +446,7 @@ def generate_ai_schedule(tasks, user_prompt, ai_enabled_fn, ai_api_key_fn, ai_mo
         return "", f"AI auto-schedule failed: {exc}", []
 
 
-def generate_daily_review(active_tasks, completed_today, user_notes, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI):
+def generate_daily_review(active_tasks, completed_today, user_notes, ai_enabled_fn, ai_api_key_fn, ai_model_name_fn, openai_cls=OpenAI, shared_context=""):
     completed_lines = [f"- {task.get('title')}" for task in completed_today]
     active_lines = [
         f"- {task.get('title')} ({task.get('priority')}, due={task.get('due_date') or 'none'}, status={task.get('status')})"
@@ -468,7 +484,8 @@ def generate_daily_review(active_tasks, completed_today, user_notes, ai_enabled_
                         "Completed today:\n"
                         f"{completed_text}\n\n"
                         "Active remaining:\n"
-                        f"{active_text}\n\n"
+                        f"{active_text}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         "Return markdown with two sections exactly:\n"
                         "## End-of-Day Review\n"
                         "## Tomorrow Draft Plan"
@@ -513,6 +530,7 @@ def generate_ai_daily_summary(
     ai_api_key_fn,
     ai_model_name_fn,
     openai_cls=OpenAI,
+    shared_context="",
 ):
     top_urgent = _fallback_top_urgent_task(active_tasks)
     top_urgent_line = "No urgent active task detected."
@@ -563,7 +581,8 @@ def generate_ai_daily_summary(
                         "Completed today:\n"
                         f"{completed_text}\n\n"
                         "Active tasks snapshot:\n"
-                        f"{active_snapshot}\n\n"
+                        f"{active_snapshot}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         "Return markdown with exactly these sections:\n"
                         "## Added Tasks Today\n"
                         "## Completed Tasks Today\n"
@@ -1254,6 +1273,7 @@ def generate_ai_morning_ritual_brief(
     ai_api_key_fn,
     ai_model_name_fn,
     openai_cls=OpenAI,
+    shared_context="",
 ):
     top_urgent = _fallback_top_urgent_task(active_tasks or [])
     if top_urgent:
@@ -1303,7 +1323,8 @@ def generate_ai_morning_ritual_brief(
                         f"morning_goals_planned={morning_goals_planned}, grounding_selected={grounding_selected}\n"
                         f"Top intention: {top_intention or 'none'}\n"
                         f"Highest urgency task candidate: {top_urgent_line}\n"
-                        f"Last night improvement note: {improvement_note}\n\n"
+                        f"Last night improvement note: {improvement_note}"
+                        f"{shared_context_section(shared_context)}\n\n"
                         "Return markdown with exactly these sections:\n"
                         "## Morning Priority\n"
                         "## Behavior Adjustment From Last Night\n"

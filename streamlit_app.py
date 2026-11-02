@@ -28,6 +28,7 @@ from clinical_reference import (
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
 from cpt_reference import CPT_REFERENCE
+import ai_envelope
 import ai_workflows
 import app_bootstrap
 import dayanchor_brain
@@ -2683,6 +2684,31 @@ def initialize_database():
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ai_events (
+                            id BIGSERIAL PRIMARY KEY,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            day DATE NOT NULL,
+                            pillar TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'info',
+                            source TEXT NOT NULL DEFAULT 'ai',
+                            summary TEXT NOT NULL,
+                            text TEXT NOT NULL DEFAULT '',
+                            payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                            task_ids BIGINT[] NOT NULL DEFAULT '{}',
+                            context_refs BIGINT[] NOT NULL DEFAULT '{}',
+                            expires_at TIMESTAMPTZ,
+                            resolved_at TIMESTAMPTZ,
+                            outcome TEXT,
+                            outcome_note TEXT NOT NULL DEFAULT ''
+                        )
+                        """
+                    )
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_day_pillar ON ai_events (day DESC, pillar)")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_open ON ai_events (status) WHERE status = 'proposed'")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_events_task_ids ON ai_events USING GIN (task_ids)")
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS surgical_cases (
@@ -15550,6 +15576,50 @@ def render_workout_panel(app_settings, panel_key="workouts"):
 
 generate_family_weekly_digest = partial(ai_workflows.generate_family_weekly_digest, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
 generate_ai_morning_ritual_brief = partial(ai_workflows.generate_ai_morning_ritual_brief, ai_enabled_fn=ai_enabled, ai_api_key_fn=ai_api_key, ai_model_name_fn=ai_model_name, openai_cls=OpenAI)
+
+def _log_ai_event(envelope, day):
+    return data_access.log_ai_event(
+        envelope, day, db_enabled_fn=db_enabled, get_connection_fn=get_connection, st_module=st
+    )
+
+
+def _shared_context_for(pillars, days=1):
+    def build():
+        events = data_access.load_recent_ai_events(
+            days=days,
+            pillars=pillars,
+            limit=20,
+            db_enabled_fn=db_enabled,
+            get_connection_fn=get_connection,
+            st_module=st,
+        )
+        return data_access.shared_context_block(events)
+
+    return build
+
+
+def _logged(generator, adapter, read_pillars=None, days=1):
+    context_fn = _shared_context_for(read_pillars, days) if read_pillars is not None else None
+    return ai_envelope.with_event_logging(
+        generator, adapter, _log_ai_event, ai_enabled, mountain_today, ai_model_name, context_fn
+    )
+
+
+_ALL_PILLARS = sorted(ai_envelope.PILLARS)
+
+generate_ai_plan = _logged(generate_ai_plan, ai_envelope.envelope_from_plan, ["capture", "planning", "scheduling", "review", "family", "signals"])
+generate_ai_schedule = _logged(generate_ai_schedule, ai_envelope.envelope_from_schedule, ["capture", "planning", "scheduling", "family", "signals"])
+generate_brain_dump_triage = _logged(generate_brain_dump_triage, ai_envelope.envelope_from_triage, ["capture", "planning", "scheduling", "family", "signals"])
+generate_daily_review = _logged(generate_daily_review, ai_envelope.envelope_from_review, _ALL_PILLARS)
+generate_ai_daily_summary = _logged(generate_ai_daily_summary, ai_envelope.text_adapter("summary"), _ALL_PILLARS)
+generate_ma_lead_coaching = _logged(generate_ma_lead_coaching, ai_envelope.text_adapter("coaching"))
+generate_weekly_nightly_insight = _logged(generate_weekly_nightly_insight, ai_envelope.text_adapter("reflection"))
+generate_weekly_morning_ritual_insight = _logged(generate_weekly_morning_ritual_insight, ai_envelope.text_adapter("morning"))
+generate_ai_morning_ritual_brief = _logged(generate_ai_morning_ritual_brief, ai_envelope.text_adapter("morning"), ["review", "capture", "planning", "scheduling", "family", "signals"], days=2)
+generate_family_schedule_insight = _logged(generate_family_schedule_insight, ai_envelope.text_adapter("family"))
+generate_family_weekly_briefing = _logged(generate_family_weekly_briefing, ai_envelope.text_adapter("family"))
+generate_family_goal_coaching = _logged(generate_family_goal_coaching, ai_envelope.text_adapter("family"))
+generate_family_weekly_digest = _logged(generate_family_weekly_digest, ai_envelope.text_adapter("family"))
 
 render_task_list_panel = partial(page_renderers.render_task_list_panel, render_task_card_fn=render_task_card, st_module=st)
 render_task_calendar_panel = partial(

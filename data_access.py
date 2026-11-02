@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1610,3 +1611,174 @@ def delete_lead_document(document_id, db_enabled_fn=None, get_connection_fn=None
     st_module.session_state["lead_documents"] = [
         item for item in docs if item.get("id") != document_id
     ]
+
+
+def log_ai_event(envelope, day, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Persist an AIEnvelope to ai_events. Returns the event id, or None on failure."""
+    task_ids = [int(t) for t in envelope.task_ids()]
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO ai_events (
+                            day, pillar, kind, status, source, summary, text,
+                            payload_json, task_ids, context_refs, expires_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            day,
+                            envelope.pillar,
+                            envelope.kind,
+                            envelope.status,
+                            envelope.source,
+                            envelope.summary,
+                            envelope.text,
+                            json.dumps(envelope.payload(), default=str),
+                            task_ids,
+                            list(envelope.context_refs),
+                            envelope.expires_at,
+                        ),
+                    )
+                    return cur.fetchone()[0]
+        except psycopg.Error:
+            return None
+
+    events = st_module.session_state.setdefault("ai_events", [])
+    event_id = max([e["id"] for e in events], default=0) + 1
+    events.append(
+        {
+            "id": event_id,
+            "created_at": datetime.now(MOUNTAIN_TIMEZONE),
+            "day": day,
+            "pillar": envelope.pillar,
+            "kind": envelope.kind,
+            "status": envelope.status,
+            "source": envelope.source,
+            "summary": envelope.summary,
+            "text": envelope.text,
+            "payload_json": envelope.payload(),
+            "task_ids": task_ids,
+            "context_refs": list(envelope.context_refs),
+            "expires_at": envelope.expires_at,
+            "resolved_at": None,
+            "outcome": None,
+            "outcome_note": "",
+        }
+    )
+    return event_id
+
+
+def load_recent_ai_events(days=1, pillars=None, limit=30, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Newest-first events from the last `days` app-local days."""
+    cutoff = mountain_today() - timedelta(days=max(int(days), 1) - 1)
+    pillar_list = list(pillars) if pillars else None
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, created_at, day, pillar, kind, status, source, summary,
+                               payload_json, task_ids, context_refs, expires_at,
+                               resolved_at, outcome, outcome_note
+                        FROM ai_events
+                        WHERE day >= %s AND (%s::text[] IS NULL OR pillar = ANY(%s))
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT %s
+                        """,
+                        (cutoff, pillar_list, pillar_list, limit),
+                    )
+                    return cur.fetchall()
+        except psycopg.Error:
+            return []
+
+    events = st_module.session_state.get("ai_events", [])
+    matches = [
+        e for e in events
+        if e["day"] >= cutoff and (pillar_list is None or e["pillar"] in pillar_list)
+    ]
+    return sorted(matches, key=lambda e: e["id"], reverse=True)[:limit]
+
+
+def resolve_ai_event(event_id, status, outcome=None, note="", db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Record a lifecycle status and optional outcome for an event."""
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE ai_events
+                        SET status = %s, outcome = %s, outcome_note = %s, resolved_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, outcome, note, event_id),
+                    )
+                    return cur.rowcount > 0
+        except psycopg.Error:
+            return False
+
+    for event in st_module.session_state.get("ai_events", []):
+        if event["id"] == event_id:
+            event.update(
+                status=status,
+                outcome=outcome,
+                outcome_note=note,
+                resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+            )
+            return True
+    return False
+
+
+def find_conflicting_events(task_ids, day, exclude_id=None, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Open (proposed) events for the day that touch any of the given task ids."""
+    wanted = [int(t) for t in (task_ids or [])]
+    if not wanted:
+        return []
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, pillar, kind, summary, task_ids
+                        FROM ai_events
+                        WHERE day = %s AND status = 'proposed' AND task_ids && %s
+                          AND (%s::bigint IS NULL OR id <> %s)
+                        ORDER BY id DESC
+                        """,
+                        (day, wanted, exclude_id, exclude_id),
+                    )
+                    return cur.fetchall()
+        except psycopg.Error:
+            return []
+
+    return [
+        e for e in st_module.session_state.get("ai_events", [])
+        if e["day"] == day
+        and e["status"] == "proposed"
+        and e["id"] != exclude_id
+        and set(e["task_ids"]) & set(wanted)
+    ]
+
+
+def shared_context_block(events, max_chars=1200):
+    """Compact newest-first digest of events, safe to inject into other prompts."""
+    lines = []
+    used = 0
+    for event in events or []:
+        if event.get("source") == "fallback":
+            continue
+        stamp = event.get("created_at")
+        stamp_text = stamp.strftime("%H:%M") if hasattr(stamp, "strftime") else ""
+        state = event.get("outcome") or event.get("status")
+        line = f"- [{event.get('pillar')}/{state} {stamp_text}] {event.get('summary')}".replace("  ", " ")
+        if used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines)
