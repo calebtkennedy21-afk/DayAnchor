@@ -4269,9 +4269,35 @@ def inject_styles():
             color: var(--ink) !important;
         }
 
+        .stMain [data-baseweb="input"] input,
+        .stMain [data-baseweb="textarea"] textarea,
+        .stMain [data-baseweb="select"] input,
+        .stMain [data-baseweb="base-input"],
+        .stMain [data-baseweb="base-input"] input,
+        .stMain [data-testid="stDateInput"] input,
+        .stMain [data-testid="stTimeInput"] input,
+        .stMain [data-testid="stNumberInput"] input {
+            background-color: transparent !important;
+            -webkit-text-fill-color: var(--ink) !important;
+            caret-color: var(--ink) !important;
+        }
+
+        [data-baseweb="popover"] [role="listbox"],
+        [data-baseweb="popover"] ul,
+        [data-baseweb="calendar"] {
+            background: #0f172a !important;
+            color: var(--ink) !important;
+        }
+
+        [data-baseweb="popover"] li,
+        [data-baseweb="calendar"] * {
+            color: var(--ink) !important;
+        }
+
         .stMain [data-baseweb="input"] input::placeholder,
         .stMain [data-baseweb="textarea"] textarea::placeholder {
             color: rgba(203, 213, 225, 0.68) !important;
+            -webkit-text-fill-color: rgba(203, 213, 225, 0.68) !important;
             opacity: 1 !important;
         }
 
@@ -4304,6 +4330,8 @@ def inject_styles():
         section[data-testid="stSidebar"] [data-baseweb="select"] span,
         section[data-testid="stSidebar"] [data-baseweb="tag"] span {
             color: #f8fafc !important;
+            -webkit-text-fill-color: #f8fafc !important;
+            background-color: transparent !important;
             opacity: 1 !important;
         }
 
@@ -6050,7 +6078,7 @@ def render_personal_one_thing(personal_tasks, panel_key):
             else "No due date"
         )
         st.markdown(
-            f"<div class='task-card' style='background: rgba(255,255,255,0.9); border: 1.5px solid rgba(15,118,110,0.3);'>"
+            f"<div class='task-card'>"
             f"<div class='task-title' style='font-size: 1.18rem;'>{pinned_task['title']}</div>"
             f"<div class='task-meta'>"
             f"<span class='pill pill-priority-{pinned_task['priority']}'>{pinned_task['priority'].title()}</span>"
