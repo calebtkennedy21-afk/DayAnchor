@@ -42,9 +42,83 @@ Current capabilities include:
 
 ## Run
 
-```bash
-streamlit run streamlit_app.py
-```
+The application requires the owner-only Google OIDC configuration described below.
+For an isolated development environment, set `ALERT_SCHEDULER_ENABLED=false` and
+start the container with `sh ./start.sh`. The launcher creates a private temporary
+Streamlit secrets file from environment variables and deletes it on exit. Running
+`streamlit run streamlit_app.py` directly does not consume those OIDC environment
+variables; it requires an equivalent protected Streamlit secrets file.
+Existing Streamlit secrets sources remain available; the generated `[auth]`
+section takes precedence over any existing `[auth]` section. The scheduler does
+not receive the browser authentication variables.
+
+## Owner authentication: staging setup
+
+This branch is a foundation for staging, not authorization to deploy to production.
+The app denies access when its auth configuration or owner's subject is missing.
+The scheduler is independent of browser authentication and its existing default
+is unchanged; explicitly disable it in staging.
+
+1. Create a separate staging Railway project and database with synthetic data.
+   Do not copy production database variables or external integration credentials.
+   Set `ALERT_SCHEDULER_ENABLED=false`.
+2. In Google Cloud, configure the OAuth consent screen and create a **Web
+   application** OAuth client for staging. If the consent screen is in testing
+   mode, add the owner as an approved test user. Register the staging origin as
+   appropriate and register exactly
+   `https://<STAGING_RAILWAY_HOST>/oauth2callback` as an authorized redirect URI,
+   replacing the placeholder with the actual staging hostname. The matching
+   Railway variable below must contain that same complete URI. Use a separate
+   OAuth client and callback for production.
+3. Configure these protected staging Railway variables without checking their
+   values into source or sharing them in logs:
+
+   - `DAYANCHOR_GOOGLE_CLIENT_ID`
+   - `DAYANCHOR_GOOGLE_CLIENT_SECRET`
+   - `DAYANCHOR_GOOGLE_REDIRECT_URI`
+   - `DAYANCHOR_AUTH_COOKIE_SECRET` (a randomly generated secret of at least
+     32 characters)
+   - `DAYANCHOR_OWNER_GOOGLE_SUB` (the single approved Google subject)
+
+   Keep Streamlit's `server.trustedUserHeaders` unset: trusted headers can
+   override verified identity claims, so this application rejects them.
+4. Obtain the owner's `sub` through Google's own OAuth 2.0 Playground or another
+   trusted, owner-controlled Google OIDC client, using the `openid` scope and
+   Google's authenticated userinfo endpoint. The owner should verify the Google
+   account in the consent screen, privately copy only its `sub`, and set the
+   staging owner variable. Do not copy tokens or full identity responses into
+   tickets, chat, logs, or source. Confirm the subject belongs to the intended
+   owner before approving it for production.
+
+Staging acceptance before rollout:
+
+- Confirm anonymous sessions cannot reach navigation or initialize the database.
+  The approved owner can sign in; a different Google account is denied.
+- Remove or corrupt each auth setting in staging and confirm the application
+  fails closed. Check reruns, sign-out, expiration, and a fresh browser session.
+- Verify the exact deployed commit, the staging callback, and that no public
+  alternate hostname or proxy bypass exposes protected functionality.
+- Confirm scheduler and integrations remain disabled and only staging data is
+  accessible. Exercise recovery while retaining control-plane access.
+
+Production rollout requires owner approval, independently verified backups and
+recovery, a working staging test, a production OAuth client/callback, a securely
+approved subject, and an intentional release of the reviewed commit. Production
+currently auto-deploys pushes to `main`; do not push this branch or merge it until
+the release is approved.
+
+If the owner cannot sign in, use Railway control-plane access to check the exact
+callback, client configuration, and owner subject, then deploy a reviewed fix.
+Do not add an auth bypass or change the allowlist to admit everyone. Reverting to
+the previous unauthenticated application would expose the public app; only do so
+after an explicit risk decision and with independently verified protection on
+every public entry point.
+
+Streamlit's identity cookie may last up to 30 days and logging out does not
+revoke other already-running sessions. This app checks the Google identity
+token's expiration on every rerun, but cannot centrally revoke other active
+sessions. Authentication does not protect the scheduler or replace an upstream
+access gateway for non-Streamlit endpoints.
 
 ## Notes
 

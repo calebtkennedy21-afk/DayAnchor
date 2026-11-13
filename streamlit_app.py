@@ -1,4 +1,12 @@
 import os
+import streamlit as st
+
+from auth_boundary import enforce_owner_access
+
+st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
+if not enforce_owner_access(st, os.environ):
+    st.stop()
+
 import csv
 import json
 import html
@@ -14,7 +22,6 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg.rows import dict_row
-import streamlit as st
 import streamlit.components.v1 as components
 from functools import partial
 
@@ -82,9 +89,6 @@ try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
-
-
-st.set_page_config(page_title="DayAnchor", page_icon="⛵", layout="wide")
 
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
