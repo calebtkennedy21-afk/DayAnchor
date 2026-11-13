@@ -138,6 +138,70 @@ def render_task_list_panel(
     st_module.markdown('</div>', unsafe_allow_html=True)
 
 
+def render_notification_alerts(active_tasks, today_value, panel_key, render_task_card_fn, task_attention_sort_key_fn, st_module=st):
+    overdue = [task for task in active_tasks if task.get("due_date") and task["due_date"] < today_value]
+    blocked = [task for task in active_tasks if task.get("status") == "blocked"]
+    unscheduled_high = [
+        task for task in active_tasks
+        if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))
+    ]
+    due_tomorrow = [task for task in active_tasks if task.get("due_date") == today_value + timedelta(days=1)]
+
+    st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+    st_module.markdown('<div class="panel-title"><h3>Alerts</h3><span>Actionable items that need attention</span></div>', unsafe_allow_html=True)
+    if overdue:
+        st_module.error(f"{len(overdue)} overdue task(s) need triage.")
+    if blocked:
+        st_module.warning(f"{len(blocked)} blocked task(s) are waiting on unblock actions.")
+    if unscheduled_high:
+        st_module.warning(f"{len(unscheduled_high)} high-priority task(s) are unscheduled.")
+    if due_tomorrow:
+        st_module.info(f"{len(due_tomorrow)} task(s) are due tomorrow.")
+    if not (overdue or blocked or unscheduled_high or due_tomorrow):
+        st_module.success("No urgent alerts right now.")
+
+    alerts = {}
+    for label, tasks in (
+        ("Overdue", overdue),
+        ("Blocked", blocked),
+        ("Unscheduled high-priority", unscheduled_high),
+    ):
+        for task in tasks:
+            alert = alerts.setdefault(task["id"], {"task": task, "reasons": []})
+            if label not in alert["reasons"]:
+                alert["reasons"].append(label)
+
+    for task in due_tomorrow:
+        if task["id"] in alerts and "Due tomorrow" not in alerts[task["id"]]["reasons"]:
+            alerts[task["id"]]["reasons"].append("Due tomorrow")
+
+    sorted_alerts = sorted(alerts.values(), key=lambda alert: task_attention_sort_key_fn(alert["task"], today_value))
+    groups = [
+        ("Clinic Alerts", "Clinic overdue, blocked, and unscheduled items", "Clinic", "No clinic-specific alerts right now."),
+        ("Personal Alerts", "Personal overdue, blocked, and unscheduled items", "Personal", "No personal-specific alerts right now."),
+    ]
+    columns = st_module.columns(2)
+    for column, (title, subtitle, category, empty_text) in zip(columns, groups):
+        with column:
+            st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+            st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)
+            category_alerts = [alert for alert in sorted_alerts if alert["task"].get("category") == category]
+            if category_alerts:
+                for alert in category_alerts:
+                    render_task_card_fn(alert["task"], key_prefix=f"{panel_key}_alert", alert_reasons=alert["reasons"])
+            else:
+                st_module.markdown(f'<div class="empty-state">{empty_text}</div>', unsafe_allow_html=True)
+            st_module.markdown('</div>', unsafe_allow_html=True)
+
+    other_alerts = [alert for alert in sorted_alerts if alert["task"].get("category") not in ("Clinic", "Personal")]
+    if other_alerts:
+        st_module.markdown('<div class="panel"><div class="panel-title"><h3>Other Alerts</h3></div>', unsafe_allow_html=True)
+        for alert in other_alerts:
+            render_task_card_fn(alert["task"], key_prefix=f"{panel_key}_alert", alert_reasons=alert["reasons"])
+        st_module.markdown('</div>', unsafe_allow_html=True)
+    st_module.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_task_calendar_panel(tasks, panel_key, title, subtitle, render_task_calendar_compact_fn, app_settings=None, save_app_settings_fn=None, st_module=st):
     st_module.markdown('<div class="panel">', unsafe_allow_html=True)
     st_module.markdown(f'<div class="panel-title"><h3>{title}</h3><span>{subtitle}</span></div>', unsafe_allow_html=True)

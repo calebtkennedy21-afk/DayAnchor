@@ -5352,11 +5352,12 @@ def set_task_status(task_id, new_status):
         update_task(task_id, status=new_status, completed_date=None, completed_at=None)
 
 
-def render_task_card(task, key_prefix="task"):
+def render_task_card(task, key_prefix="task", alert_reasons=None):
     attention = task_attention_signal(task)
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     desc_html = f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""
-    card_html = f"<div class=\"task-card\"><div class=\"task-title\">{html.escape(str(task['title']))}</div>{desc_html}<div class=\"task-meta\"><span class=\"pill pill-priority-{task['priority']}\">Priority: {task['priority'].title()}</span><span class=\"pill pill-category\">{html.escape(str(task['category']))}</span><span class=\"pill pill-status pill-status-{task['status']}\">{status_label(task['status'])}</span>{attention_pill}<span class=\"pill\">Due {format_due_badge(task)}</span><span class=\"pill\">At {format_schedule_badge(task)}</span><span class=\"pill\">Repeat {format_recurrence_badge(task)}</span></div></div>"
+    reasons_html = "".join(f"<span class='pill pill-attention'>{html.escape(reason)}</span>" for reason in (alert_reasons or ()))
+    card_html = f"<div class=\"task-card\"><div class=\"task-title\">{html.escape(str(task['title']))}</div>{desc_html}<div class=\"task-meta\"><span class=\"pill pill-priority-{task['priority']}\">Priority: {task['priority'].title()}</span><span class=\"pill pill-category\">{html.escape(str(task['category']))}</span><span class=\"pill pill-status pill-status-{task['status']}\">{status_label(task['status'])}</span>{attention_pill}{reasons_html}<span class=\"pill\">Due {format_due_badge(task)}</span><span class=\"pill\">At {format_schedule_badge(task)}</span><span class=\"pill\">Repeat {format_recurrence_badge(task)}</span></div></div>"
     st.html(card_html)
     cols = st.columns(3)
     with cols[0]:
@@ -8408,57 +8409,9 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
-    overdue_all = sorted(
-        [task for task in active_tasks if task.get("due_date") and task["due_date"] < mountain_today()],
-        key=lambda task: task_attention_sort_key(task, mountain_today()),
+    page_renderers.render_notification_alerts(
+        active_tasks, today_value, panel_key, render_task_card, task_attention_sort_key, st_module=st
     )
-    blocked_all = [task for task in active_tasks if task.get("status") == "blocked"]
-    unscheduled_high = sorted(
-        [task for task in active_tasks if task.get("priority") == "high" and not (task.get("scheduled_date") and task.get("scheduled_time"))],
-        key=lambda task: task_attention_sort_key(task, mountain_today()),
-    )
-    due_tomorrow = [task for task in active_tasks if task.get("due_date") == (mountain_today() + timedelta(days=1))]
-
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><h3>Alerts</h3><span>Actionable items that need attention</span></div>', unsafe_allow_html=True)
-
-    if overdue_all:
-        st.error(f"{len(overdue_all)} overdue task(s) need triage.")
-    if blocked_all:
-        st.warning(f"{len(blocked_all)} blocked task(s) are waiting on unblock actions.")
-    if unscheduled_high:
-        st.warning(f"{len(unscheduled_high)} high-priority task(s) are unscheduled.")
-    if due_tomorrow:
-        st.info(f"{len(due_tomorrow)} task(s) are due tomorrow.")
-    if not (overdue_all or blocked_all or unscheduled_high or due_tomorrow):
-        st.success("No urgent alerts right now.")
-
-    alert_cols = st.columns(2)
-    with alert_cols[0]:
-        render_task_list_panel(
-            "Clinic Alerts",
-            "Clinic overdue, blocked, and unscheduled items",
-            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Clinic"], key=lambda task: task_attention_sort_key(task, mountain_today())),
-            "notif_clinic_alerts",
-            "No clinic-specific alerts right now.",
-        )
-    with alert_cols[1]:
-        render_task_list_panel(
-            "Personal Alerts",
-            "Personal overdue, blocked, and unscheduled items",
-            sorted([task for task in overdue_all + blocked_all + unscheduled_high if task.get("category") == "Personal"], key=lambda task: task_attention_sort_key(task, mountain_today())),
-            "notif_personal_alerts",
-            "No personal-specific alerts right now.",
-        )
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-    cols = st.columns(2, gap="large")
-    with cols[0]:
-        render_task_list_panel("Overdue Tasks", "Highest urgency", overdue_all, "notif_overdue", "No overdue tasks.")
-    with cols[1]:
-        render_task_list_panel("Blocked Tasks", "Needs intervention", blocked_all, "notif_blocked", "No blocked tasks.")
 
 
 def autoclave_next_due_date(last_completed_date, frequency_label, current_next_due=None):
