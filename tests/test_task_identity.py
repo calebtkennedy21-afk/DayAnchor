@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import psycopg
 
 import data_access
 import page_renderers
@@ -42,6 +43,13 @@ class FakeStreamlit:
 
     error = warning = info = success = markdown
 
+    def stop(self):
+        raise StopRequested
+
+
+class StopRequested(Exception):
+    pass
+
 
 @pytest.fixture
 def tasks_app():
@@ -59,6 +67,7 @@ def tasks_app():
         "data_access": SimpleNamespace(
             initialize_task_id_counter=data_access.initialize_task_id_counter,
             allocate_task_id=data_access.allocate_task_id,
+            observe_task_ids_or_stop=data_access.observe_task_ids_or_stop,
             record_task_outcome=Mock(),
         ),
         "db_enabled": lambda: False,
@@ -123,6 +132,45 @@ def test_counter_initializes_from_legacy_tasks_and_advances_past_new_external_id
     assert create_task(app, "After imported task") == 101
     app["delete_task"](101)
     assert create_task(app, "After deletion") == 102
+
+
+def test_replacement_high_id_is_observed_before_deletion(tasks_app):
+    app, st = tasks_app
+    assert create_task(app, "First") == 1
+    st.session_state.tasks = [{"id": 80}, {"id": 6}]
+    app["delete_task"](80)
+    assert create_task(app, "After replacement") == 81
+    app["delete_task"](81)
+    assert create_task(app, "Again") == 82
+
+
+@pytest.mark.parametrize("record", [{}, {"id": "2"}, {"id": None}, {"id": True}, None])
+def test_malformed_session_identity_reports_error_and_stops_without_changing_tasks(tasks_app, record):
+    app, st = tasks_app
+    st.session_state.tasks = [record]
+    with pytest.raises(StopRequested):
+        data_access.observe_task_ids_or_stop(st)
+    assert st.session_state.tasks == [record]
+    with pytest.raises(StopRequested):
+        app["delete_task"](1)
+    assert st.session_state.tasks == [record]
+    assert any("integer ID" in message for message in st.messages)
+    with pytest.raises(StopRequested):
+        create_task(app, "Cannot create")
+    assert st.session_state.tasks == [record]
+    with pytest.raises(StopRequested):
+        data_access.load_tasks(lambda: False, Mock(), st_module=st)
+    assert st.session_state.tasks == [record]
+
+
+def test_bad_counter_and_reset_are_explicit(tasks_app):
+    _, st = tasks_app
+    st.session_state.task_id_high_watermark = "invalid"
+    with pytest.raises(StopRequested):
+        data_access.observe_task_ids_or_stop(st)
+    assert any("counter is invalid" in message for message in st.messages)
+    st.session_state = SessionState(tasks=[])
+    assert data_access.allocate_task_id(st.session_state) == 1
 
 
 def test_all_creation_entry_points_share_the_allocator(tasks_app):

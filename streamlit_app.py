@@ -96,7 +96,7 @@ def mountain_today():
 
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
-data_access.initialize_task_id_counter(st.session_state)
+data_access.observe_task_ids_or_stop(st)
 if "ai_response" not in st.session_state:
     st.session_state.ai_response = ""
 if "ai_error" not in st.session_state:
@@ -4775,6 +4775,7 @@ def add_task(
                 inserted = cur.fetchone()
                 return inserted[0] if inserted else None
 
+    data_access.observe_task_ids_or_stop(st)
     task_id = data_access.allocate_task_id(st.session_state)
     st.session_state.tasks.append(
         {
@@ -4966,6 +4967,7 @@ def delete_task(task_id):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
         return
+    data_access.observe_task_ids_or_stop(st)
     st.session_state.tasks = [task for task in st.session_state.tasks if task["id"] != task_id]
 
 
@@ -5353,13 +5355,15 @@ def set_task_status(task_id, new_status):
         update_task(task_id, status=new_status, completed_date=None, completed_at=None)
 
 
-def render_task_card(task, key_prefix="task", alert_reasons=None):
+def render_task_card(task, key_prefix="task", alert_reasons=None, read_only=False):
     attention = task_attention_signal(task)
     attention_pill = f"<span class='pill pill-attention'>Attention: {attention['label']}</span>" if attention["tier"] < 4 or attention["age_days"] >= 7 else ""
     desc_html = f"<div style='margin-top:0.45rem; color:var(--muted);'>{html.escape(str(task.get('description') or ''))}</div>" if task.get("description") else ""
     reasons_html = "".join(f"<span class='pill pill-attention'>{html.escape(reason)}</span>" for reason in (alert_reasons or ()))
     card_html = f"<div class=\"task-card\"><div class=\"task-title\">{html.escape(str(task['title']))}</div>{desc_html}<div class=\"task-meta\"><span class=\"pill pill-priority-{task['priority']}\">Priority: {task['priority'].title()}</span><span class=\"pill pill-category\">{html.escape(str(task['category']))}</span><span class=\"pill pill-status pill-status-{task['status']}\">{status_label(task['status'])}</span>{attention_pill}{reasons_html}<span class=\"pill\">Due {format_due_badge(task)}</span><span class=\"pill\">At {format_schedule_badge(task)}</span><span class=\"pill\">Repeat {format_recurrence_badge(task)}</span></div></div>"
     st.html(card_html)
+    if read_only:
+        return
     cols = st.columns(3)
     with cols[0]:
         if task["status"] != "completed" and st.button("Mark complete", key=f"{key_prefix}_complete_{task['id']}"):
@@ -8416,7 +8420,8 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
 
     page_renderers.render_notification_alerts(
         active_tasks, today_value, panel_key, render_task_card, task_attention_sort_key,
-        st_module=st, identity_tasks=tasks if db_enabled() else st.session_state.tasks,
+        st_module=st, identity_tasks=getattr(tasks, "identity_tasks", tasks if db_enabled() else st.session_state.tasks),
+        read_only=getattr(tasks, "source", None) == "database_fallback",
     )
 
 

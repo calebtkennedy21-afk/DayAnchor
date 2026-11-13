@@ -26,6 +26,7 @@ Current capabilities include:
 - Notifications page with alert-focused task triage (overdue, blocked, unscheduled high priority, due tomorrow).
 - Notification task cards combine overlapping alert reasons so each task appears once while keeping its task actions.
 - If tasks share an ID, Notifications reports the collision and withholds task actions until the IDs are resolved.
+- Session task IDs use a high-water mark to prevent reuse during that session; resetting session state resets the counter. Database-read fallback alerts are read-only until database reads recover.
 - Notifications page now includes Telegram alert controls with test send, manual alert check, and history reset.
 - Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
 - Daily Review page now includes a generic Clinic Day Closeout Checklist with per-day completion tracking (independent from task status).

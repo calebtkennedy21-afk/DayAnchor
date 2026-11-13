@@ -14,11 +14,39 @@ def mountain_today():
     return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
+class TaskIdentityError(ValueError):
+    pass
+
+
+class LoadedTasks(list):
+    def __init__(self, tasks, source, identity_tasks):
+        super().__init__(tasks)
+        self.source = source
+        self.identity_tasks = identity_tasks
+
+
 def initialize_task_id_counter(session_state):
-    existing_max = max((task["id"] for task in session_state["tasks"]), default=0)
+    tasks = session_state["tasks"]
+    if not isinstance(tasks, list):
+        raise TaskIdentityError("Task identity cannot be established: the session task collection is invalid.")
+    for task in tasks:
+        if not isinstance(task, dict) or type(task.get("id")) is not int:
+            raise TaskIdentityError("Task identity cannot be established: every session task must have an integer ID. No tasks were changed.")
+    existing_max = max((task["id"] for task in tasks), default=0)
+    watermark = session_state.get("task_id_high_watermark", 0)
+    if type(watermark) is not int:
+        raise TaskIdentityError("Task identity cannot be established: the session ID counter is invalid. No tasks were changed.")
     session_state["task_id_high_watermark"] = max(
-        session_state.get("task_id_high_watermark", 0), existing_max
+        watermark, existing_max
     )
+
+
+def observe_task_ids_or_stop(st_module):
+    try:
+        initialize_task_id_counter(st_module.session_state)
+    except TaskIdentityError as exc:
+        st_module.error(str(exc))
+        st_module.stop()
 
 
 def allocate_task_id(session_state):
@@ -44,8 +72,17 @@ def _task_visible_in_app(task, reference_time=None):
 
 
 def load_tasks(db_enabled_fn, get_connection_fn, st_module=st):
+    def load_session_tasks(source):
+        observe_task_ids_or_stop(st_module)
+        tasks = st_module.session_state.tasks
+        return LoadedTasks(
+            [task for task in tasks if _task_visible_in_app(task)],
+            source,
+            list(tasks),
+        )
+
     if not db_enabled_fn():
-        return [task for task in st_module.session_state.tasks if _task_visible_in_app(task)]
+        return load_session_tasks("session")
     try:
         with get_connection_fn() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -74,9 +111,10 @@ def load_tasks(db_enabled_fn, get_connection_fn, st_module=st):
                     ORDER BY created_date DESC, id DESC
                     """
                 )
-                return cur.fetchall()
+                tasks = cur.fetchall()
+                return LoadedTasks(tasks, "database", tasks)
     except psycopg.Error:
-        return [task for task in st_module.session_state.tasks if _task_visible_in_app(task)]
+        return load_session_tasks("database_fallback")
 
 
 def load_surgical_cases(db_enabled_fn, get_connection_fn, st_module=st):

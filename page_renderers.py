@@ -138,7 +138,7 @@ def render_task_list_panel(
     st_module.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_notification_alerts(active_tasks, today_value, panel_key, render_task_card_fn, task_attention_sort_key_fn, st_module=st, identity_tasks=None):
+def render_notification_alerts(active_tasks, today_value, panel_key, render_task_card_fn, task_attention_sort_key_fn, st_module=st, identity_tasks=None, read_only=False):
     overdue = [task for task in active_tasks if task.get("due_date") and task["due_date"] < today_value]
     blocked = [task for task in active_tasks if task.get("status") == "blocked"]
     unscheduled_high = [
@@ -169,6 +169,15 @@ def render_notification_alerts(active_tasks, today_value, panel_key, render_task
         st_module.markdown('</div>', unsafe_allow_html=True)
         return
 
+    if read_only:
+        st_module.warning("Database task loading failed. Session fallback alerts are read-only until the database can be read.")
+
+    def render_alert(alert):
+        kwargs = {"key_prefix": f"{panel_key}_alert", "alert_reasons": alert["reasons"]}
+        if read_only:
+            kwargs["read_only"] = True
+        render_task_card_fn(alert["task"], **kwargs)
+
     alerts = {}
     for label, tasks in (
         ("Overdue", overdue),
@@ -197,7 +206,7 @@ def render_notification_alerts(active_tasks, today_value, panel_key, render_task
             category_alerts = [alert for alert in sorted_alerts if alert["task"].get("category") == category]
             if category_alerts:
                 for alert in category_alerts:
-                    render_task_card_fn(alert["task"], key_prefix=f"{panel_key}_alert", alert_reasons=alert["reasons"])
+                    render_alert(alert)
             else:
                 st_module.markdown(f'<div class="empty-state">{empty_text}</div>', unsafe_allow_html=True)
             st_module.markdown('</div>', unsafe_allow_html=True)
@@ -206,7 +215,7 @@ def render_notification_alerts(active_tasks, today_value, panel_key, render_task
     if other_alerts:
         st_module.markdown('<div class="panel"><div class="panel-title"><h3>Other Alerts</h3></div>', unsafe_allow_html=True)
         for alert in other_alerts:
-            render_task_card_fn(alert["task"], key_prefix=f"{panel_key}_alert", alert_reasons=alert["reasons"])
+            render_alert(alert)
         st_module.markdown('</div>', unsafe_allow_html=True)
     st_module.markdown('</div>', unsafe_allow_html=True)
 

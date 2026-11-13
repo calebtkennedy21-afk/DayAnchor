@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import psycopg
 from streamlit.testing.v1 import AppTest
 
+import data_access
 import page_renderers
 from scheduling_core import task_attention_sort_key
 
@@ -163,11 +165,13 @@ def renderer():
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
 
-    def render(tasks, clicked=None, values=None, identity_tasks=None):
+    def render(tasks, clicked=None, values=None, identity_tasks=None, active_tasks=None):
         st = FakeStreamlit(clicked=clicked, values=values)
         st.session_state = SimpleNamespace(tasks=identity_tasks if identity_tasks is not None else tasks)
         namespace["st"] = st
-        namespace["render_notifications_panel"](tasks, tasks, {}, panel_key="notifications_page")
+        namespace["render_notifications_panel"](
+            tasks, tasks if active_tasks is None else active_tasks, {}, panel_key="notifications_page"
+        )
         return st
 
     return render, namespace
@@ -245,6 +249,71 @@ def test_duplicate_ids_hidden_by_filter_or_completed_still_block_alert_actions(r
     st = render([visible], identity_tasks=[hidden, visible])
     assert not st.cards
     assert any("multiple tasks share an ID" in message for message in st.messages)
+
+
+@pytest.mark.parametrize("duplicate", [True, False])
+def test_database_read_fallback_uses_full_session_identity_and_is_read_only(renderer, duplicate):
+    render, namespace = renderer
+    visible = task(1, status="blocked")
+    hidden = task(1 if duplicate else 2, status="completed", category="Personal",
+                  completed_at=datetime(2020, 1, 1))
+    session = {"tasks": [visible, hidden]}
+
+    class State(dict):
+        def __getattr__(self, name):
+            return self[name]
+
+    st = SimpleNamespace(session_state=State(session))
+    connection = Mock(side_effect=psycopg.OperationalError("simulated failure"))
+    loaded = data_access.load_tasks(lambda: True, connection, st_module=st)
+    assert loaded.source == "database_fallback"
+    assert loaded == [visible]
+    assert loaded.identity_tasks == [visible, hidden]
+    namespace["db_enabled"] = lambda: True
+    result = render(loaded, identity_tasks=[visible, hidden])
+    assert not any(key.startswith("notifications_page_alert_") for key in result.keys)
+    if duplicate:
+        assert not result.cards
+        assert any("multiple tasks share an ID" in message for message in result.messages)
+    else:
+        assert len(result.cards) == 1
+        assert any("read-only" in message for message in result.messages)
+    connection.assert_called_once()
+
+
+def test_database_read_fallback_blocks_duplicate_excluded_by_sidebar_filter(renderer):
+    render, namespace = renderer
+    visible = task(1, status="blocked", category="Clinic")
+    hidden = task(1, status="blocked", category="Personal")
+
+    class State(dict):
+        def __getattr__(self, name):
+            return self[name]
+
+    st = SimpleNamespace(session_state=State(tasks=[visible, hidden]))
+    connection = Mock(side_effect=psycopg.OperationalError("simulated failure"))
+    loaded = data_access.load_tasks(lambda: True, connection, st_module=st)
+    namespace["db_enabled"] = lambda: True
+    result = render(loaded, identity_tasks=[visible, hidden], active_tasks=[visible])
+    assert not result.cards
+    assert any("multiple tasks share an ID" in message for message in result.messages)
+
+
+def test_successful_database_load_uses_database_source_without_session_fallback():
+    rows = [task(7, status="blocked")]
+    cursor = Mock()
+    cursor.fetchall.return_value = rows
+    connection = Mock()
+    connection.__enter__ = Mock(return_value=connection)
+    connection.__exit__ = Mock(return_value=False)
+    cursor_context = Mock()
+    cursor_context.__enter__ = Mock(return_value=cursor)
+    cursor_context.__exit__ = Mock(return_value=False)
+    connection.cursor.return_value = cursor_context
+    st = SimpleNamespace(session_state=SimpleNamespace(tasks=[]))
+    loaded = data_access.load_tasks(lambda: True, lambda: connection, st_module=st)
+    assert loaded.source == "database"
+    assert loaded == rows and loaded.identity_tasks == rows
 
 
 @pytest.mark.parametrize(
