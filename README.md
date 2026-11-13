@@ -62,6 +62,48 @@ is unchanged; explicitly disable it in staging.
 1. Create a separate staging Railway project and database with synthetic data.
    Do not copy production database variables or external integration credentials.
    Set `ALERT_SCHEDULER_ENABLED=false`.
+   Set `DAYANCHOR_DEPLOYMENT_ENV=staging` on every staging process. This mode is
+   an operational setting, not proof that a database is safe.
+   Configure the staging service start command as `sh ./start-staging.sh`. It
+   runs `python -m staging_database` as a mandatory connection-free preflight
+   before launching the existing application command. The standalone preflight
+   may also be run on its own. Railway start-command configuration and live
+   enforcement must be verified before staging deployment; the unchanged
+   production launcher does not enforce this staging preflight.
+   The only accepted explicit deployment modes are `production` and `staging`;
+   an absent value preserves production behavior. Empty, padded, misspelled,
+   or other explicit values are errors. An absent value cannot identify staging,
+   so the staging-specific start command is essential.
+   Set the app's `DATABASE_URL` to the new staging database's private connection
+   string, and independently configure these expected target attributes:
+
+   - `DAYANCHOR_STAGING_DB_HOST`
+   - `DAYANCHOR_STAGING_DB_PORT`
+   - `DAYANCHOR_STAGING_DB_NAME`
+   - `DAYANCHOR_STAGING_DB_USER`
+
+   Obtain the four non-password fields from the new staging PostgreSQL service's
+   connection settings, verify them independently, and enter them as separate
+   variables. Do not copy a production database URL, password, or target.
+   The staging guard requires an explicit host, port, database, user, and
+   password and `sslmode` in `DATABASE_URL`, and accepts PostgreSQL URIs or
+   keyword DSNs. Approved TLS modes are `require`, `verify-ca`, and
+   `verify-full`; prefer `verify-full` with a trusted CA and matching hostname.
+   `require` encrypts but does not guarantee server identity. GSS encryption
+   negotiation is disabled so that the specified TLS policy is used. Other
+   TLS parameters and `PG*` overrides are rejected; libpq's default trust store
+   must support the chosen verification mode. Actual Railway TLS and CA
+   compatibility has not been verified and must be confirmed before deployment;
+   do not silently downgrade TLS.
+   It rejects missing or mismatched identities, multiple URL aliases, `PG*`
+   environment variables, multi-host and indirect targets, and unsupported
+   connection parameters before connecting. It does not fall back after failure.
+   Leave `DATABASE_PUBLIC_URL`, `DATABASE_PRIVATE_URL`, `POSTGRES_URL`,
+   `POSTGRESQL_URL`, and `PG*` variables unset on the staging app and scheduler.
+   Do not set `OPENAI_API_KEY`, `NEWSAPI_KEY`, `TELEGRAM_BOT_TOKEN`, or
+   `TELEGRAM_CHAT_ID`, and keep Telegram disabled in staging settings and
+   `TELEGRAM_ALERTS_ENABLED=false`. The guard is not a substitute for separate
+   credentials, private networking, and infrastructure isolation.
 2. In Google Cloud, configure the OAuth consent screen and create a **Web
    application** OAuth client for staging. If the consent screen is in testing
    mode, add the owner as an approved test user. Register the staging origin as
@@ -122,8 +164,9 @@ access gateway for non-Streamlit endpoints.
 
 ## Notes
 
-- Postgres URL env var priority: `DATABASE_URL`, then `DATABASE_PUBLIC_URL`.
-- Connection behavior: the app tries both URLs and uses the first one that connects.
+- Outside staging, Postgres URL env var priority starts with `DATABASE_URL`,
+  then `DATABASE_PUBLIC_URL`; the app tries configured alternatives until one
+  connects. Staging instead requires the single guarded `DATABASE_URL`.
 - No additional SSL env var is required; the app defaults to `sslmode=require` if omitted.
 - Table creation is automatic on startup (`tasks`).
 - Sidebar now shows detected DB variable names and health state for quick troubleshooting.

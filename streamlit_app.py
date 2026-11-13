@@ -39,6 +39,7 @@ import ai_envelope
 import ai_workflows
 import app_bootstrap
 import autopilot
+import staging_database
 import dayanchor_brain
 import data_access
 import scheduling_core as scheduling_core_module
@@ -532,6 +533,8 @@ def ensure_sslmode(url):
 
 
 def database_url_candidates():
+    if staging_database.is_staging():
+        return [("DATABASE_URL", staging_database.staging_candidate())]
     candidates = []
     seen = set()
 
@@ -2606,8 +2609,10 @@ def db_enabled():
 
 def get_connection():
     if not DB_URL:
+        if staging_database.is_staging():
+            raise staging_database.StagingDatabaseError(staging_database.ERROR)
         raise RuntimeError("Database URL is not configured.")
-    return psycopg.connect(DB_URL)
+    return staging_database.connect(DB_URL, psycopg.connect)
 
 
 def initialize_database():
@@ -2626,7 +2631,7 @@ def initialize_database():
     errors = []
     for source_name, candidate_url in candidates:
         try:
-            with psycopg.connect(candidate_url) as conn:
+            with staging_database.connect(candidate_url, psycopg.connect) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
@@ -2946,6 +2951,10 @@ def initialize_database():
             DB_CANDIDATE_SOURCE = source_name
             return
         except psycopg.Error as exc:
+            if staging_database.is_staging():
+                raise staging_database.StagingDatabaseError(
+                    "Staging database initialization failed. Check the staging database configuration and availability."
+                ) from None
             errors.append(f"{source_name}: {exc}")
 
     DB_ERROR = " | ".join(errors)

@@ -13,6 +13,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 import autopilot
+import staging_database
 import telegram_alerts
 import telegram_inbox
 
@@ -32,6 +33,8 @@ def _ensure_sslmode(url):
 
 
 def database_url_candidates(environ=None):
+    if staging_database.is_staging(environ):
+        return [("DATABASE_URL", staging_database.staging_candidate(environ))]
     env = environ or os.environ
     candidates = []
     for name in ("DATABASE_URL", "DATABASE_PUBLIC_URL"):
@@ -217,12 +220,14 @@ def run_autopilot_rollover(connection, tasks, settings, now_local, notify=False)
 
 
 def run_once(connection=None):
+    if connection is not None and staging_database.is_staging():
+        raise staging_database.StagingDatabaseError(staging_database.ERROR)
     owns_connection = connection is None
     if owns_connection:
         candidates = database_url_candidates()
         if not candidates:
             return {"skipped": True, "reason": "No database URL configured."}
-        connection = psycopg.connect(candidates[0][1])
+        connection = staging_database.connect(candidates[0][1], psycopg.connect)
 
     try:
         tasks, settings = load_state(connection)
