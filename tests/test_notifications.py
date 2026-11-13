@@ -20,12 +20,15 @@ class RerunRequested(Exception):
 
 
 class FakeStreamlit:
-    def __init__(self, clicked=None):
+    def __init__(self, clicked=None, values=None):
         self.clicked = clicked
+        self.values = values or {}
         self.keys = set()
         self.buttons = set()
         self.cards = []
         self.messages = []
+        self.section = None
+        self.card_sections = []
 
     def __enter__(self):
         return self
@@ -51,15 +54,17 @@ class FakeStreamlit:
         self._widget(key)
         if self.clicked == "notifications_page_alert_status_apply_1" and key == "notifications_page_alert_status_select_1":
             return "in_progress"
-        return options[index]
+        selected = self.values.get(key, options[index])
+        assert selected in options
+        return selected
 
     def text_input(self, label, value="", key=None, **kwargs):
         self._widget(key)
-        return value
+        return self.values.get(key, value)
 
     def text_area(self, label, value="", key=None, **kwargs):
         self._widget(key)
-        return value
+        return self.values.get(key, value)
 
     def checkbox(self, label, value=False, key=None, **kwargs):
         self._widget(key)
@@ -79,9 +84,13 @@ class FakeStreamlit:
 
     def markdown(self, text, **kwargs):
         self.messages.append(text)
+        for section in ("Clinic Alerts", "Personal Alerts", "Other Alerts"):
+            if f"<h3>{section}</h3>" in text:
+                self.section = section
 
     def html(self, content):
         self.cards.append(content)
+        self.card_sections.append(self.section)
 
     def metric(self, *args, **kwargs):
         pass
@@ -144,6 +153,7 @@ def renderer():
         "format_schedule_badge": lambda item: "",
         "format_recurrence_badge": lambda item: "",
         "render_metrics_row": Mock(),
+        "db_enabled": lambda: False,
         "telegram_alerts": SimpleNamespace(build_telegram_config=lambda *args: {}),
         "normalize_quick_reminders": lambda items: [],
         "complete_task": Mock(),
@@ -153,8 +163,9 @@ def renderer():
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
 
-    def render(tasks, clicked=None):
-        st = FakeStreamlit(clicked=clicked)
+    def render(tasks, clicked=None, values=None, identity_tasks=None):
+        st = FakeStreamlit(clicked=clicked, values=values)
+        st.session_state = SimpleNamespace(tasks=identity_tasks if identity_tasks is not None else tasks)
         namespace["st"] = st
         namespace["render_notifications_panel"](tasks, tasks, {}, panel_key="notifications_page")
         return st
@@ -214,6 +225,50 @@ def test_due_tomorrow_summary_and_reason_when_task_already_in_alerts(renderer):
     assert len(st.cards) == 1
     assert ">Due tomorrow</span>" in st.cards[0]
     assert any("2 task(s) are due tomorrow" in message for message in st.messages)
+
+
+def test_duplicate_ids_stop_alert_actions_with_explicit_error(renderer):
+    render, _ = renderer
+    st = render([
+        task(1, status="blocked", category="Clinic"),
+        task(1, priority="high", category="Personal"),
+    ])
+    assert not st.cards
+    assert not any(key.startswith("notifications_page_alert_") for key in st.keys)
+    assert any("multiple tasks share an ID" in message for message in st.messages)
+
+
+def test_duplicate_ids_hidden_by_filter_or_completed_still_block_alert_actions(renderer):
+    render, _ = renderer
+    visible = task(1, status="blocked")
+    hidden = task(1, status="completed", category="Personal")
+    st = render([visible], identity_tasks=[hidden, visible])
+    assert not st.cards
+    assert any("multiple tasks share an ID" in message for message in st.messages)
+
+
+@pytest.mark.parametrize(
+    ("values", "category", "section", "title", "description"),
+    [
+        ({"notifications_page_alert_edit_title_1": "Updated title"}, "Other", "Other Alerts", "Updated title", "Original"),
+        ({"notifications_page_alert_edit_description_1": "Updated description"}, "Other", "Other Alerts", "Task 1", "Updated description"),
+        ({"notifications_page_alert_edit_category_1": "Personal"}, "Personal", "Personal Alerts", "Task 1", "Original"),
+        ({"notifications_page_alert_edit_category_1": "Clinic"}, "Clinic", "Clinic Alerts", "Task 1", "Original"),
+    ],
+)
+def test_other_category_edit_preserves_or_explicitly_changes_category(
+    renderer, values, category, section, title, description
+):
+    render, namespace = renderer
+    item = task(1, status="blocked", category="Other", description="Original")
+    before = render([item])
+    assert before.card_sections == ["Other Alerts"]
+    namespace["update_task"].side_effect = lambda task_id, **fields: item.update(fields)
+    with pytest.raises(RerunRequested):
+        render([item], clicked="notifications_page_alert_save_1", values=values)
+    assert (item["category"], item["title"], item["description"]) == (category, title, description)
+    after = render([item])
+    assert after.card_sections == [section]
 
 
 @pytest.mark.parametrize(
@@ -281,6 +336,7 @@ format_due_badge = format_schedule_badge = format_recurrence_badge = lambda task
 render_metrics_row = lambda: None
 telegram_alerts = SimpleNamespace(build_telegram_config=lambda *args: {})
 normalize_quick_reminders = lambda items: []
+db_enabled = lambda: False
 def complete_task(task_id):
     st.session_state["completed_id"] = task_id
 tasks = [
@@ -289,6 +345,7 @@ tasks = [
     {"id": 2, "title": "Second", "category": "Clinic", "priority": "medium",
      "status": "blocked", "due_date": None},
 ]
+st.session_state.tasks = tasks
 render_notifications_panel(tasks, tasks, {}, panel_key="notifications_page")
 """
     app = AppTest.from_string(script).run()
@@ -302,3 +359,50 @@ render_notifications_panel(tasks, tasks, {}, panel_key="notifications_page")
     app.button(key="notifications_page_alert_complete_1").click().run()
     assert not app.exception
     assert app.session_state["completed_id"] == 1
+
+
+def test_real_streamlit_edits_other_task_and_moves_it_only_when_category_changes():
+    script = """
+import ast
+import html
+from datetime import date, time
+from pathlib import Path
+import streamlit as st
+import page_renderers
+from scheduling_core import task_attention_sort_key
+
+source = Path("streamlit_app.py")
+tree = ast.parse(source.read_text())
+nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "render_task_card"]
+exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), globals())
+today = date(2026, 11, 13)
+mountain_today = lambda: today
+task_attention_signal = lambda task: {"tier": 4, "age_days": 0}
+status_label = lambda value: value
+format_due_badge = format_schedule_badge = format_recurrence_badge = lambda task: ""
+if "task" not in st.session_state:
+    st.session_state.task = {"id": 1, "title": "Original", "description": "Original description",
+                             "category": "Other", "priority": "medium", "status": "blocked",
+                             "due_date": today}
+def update_task(task_id, **fields):
+    st.session_state.task.update(fields)
+page_renderers.render_notification_alerts(
+    [st.session_state.task], today, "notifications", render_task_card, task_attention_sort_key, st_module=st
+)
+"""
+    app = AppTest.from_string(script).run()
+    assert not app.exception
+    app.text_input(key="notifications_alert_edit_title_1").set_value("Changed title")
+    app.text_area(key="notifications_alert_edit_description_1").set_value("Changed description")
+    app.button(key="notifications_alert_save_1").click().run()
+    assert not app.exception
+    assert app.session_state["task"]["category"] == "Other"
+    assert app.session_state["task"]["title"] == "Changed title"
+    assert app.session_state["task"]["description"] == "Changed description"
+    assert any("Other Alerts" in item.value for item in app.markdown)
+
+    app.selectbox(key="notifications_alert_edit_category_1").select("Personal")
+    app.button(key="notifications_alert_save_1").click().run()
+    assert not app.exception
+    assert app.session_state["task"]["category"] == "Personal"
+    assert not any("Other Alerts" in item.value for item in app.markdown)

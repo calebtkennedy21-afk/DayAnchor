@@ -14,6 +14,19 @@ def mountain_today():
     return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
+def initialize_task_id_counter(session_state):
+    existing_max = max((task["id"] for task in session_state["tasks"]), default=0)
+    session_state["task_id_high_watermark"] = max(
+        session_state.get("task_id_high_watermark", 0), existing_max
+    )
+
+
+def allocate_task_id(session_state):
+    initialize_task_id_counter(session_state)
+    session_state["task_id_high_watermark"] += 1
+    return session_state["task_id_high_watermark"]
+
+
 def _task_visible_in_app(task, reference_time=None):
     if task.get("status") != "completed":
         return True

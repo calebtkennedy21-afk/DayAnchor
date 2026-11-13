@@ -138,7 +138,7 @@ def render_task_list_panel(
     st_module.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_notification_alerts(active_tasks, today_value, panel_key, render_task_card_fn, task_attention_sort_key_fn, st_module=st):
+def render_notification_alerts(active_tasks, today_value, panel_key, render_task_card_fn, task_attention_sort_key_fn, st_module=st, identity_tasks=None):
     overdue = [task for task in active_tasks if task.get("due_date") and task["due_date"] < today_value]
     blocked = [task for task in active_tasks if task.get("status") == "blocked"]
     unscheduled_high = [
@@ -159,6 +159,15 @@ def render_notification_alerts(active_tasks, today_value, panel_key, render_task
         st_module.info(f"{len(due_tomorrow)} task(s) are due tomorrow.")
     if not (overdue or blocked or unscheduled_high or due_tomorrow):
         st_module.success("No urgent alerts right now.")
+
+    task_ids = [task["id"] for task in (identity_tasks if identity_tasks is not None else active_tasks)]
+    if len(task_ids) != len(set(task_ids)) or len(task_ids) != len({str(task_id) for task_id in task_ids}):
+        st_module.error(
+            "Cannot display task alerts safely because multiple tasks share an ID. "
+            "Resolve the duplicate task IDs before editing or deleting tasks."
+        )
+        st_module.markdown('</div>', unsafe_allow_html=True)
+        return
 
     alerts = {}
     for label, tasks in (

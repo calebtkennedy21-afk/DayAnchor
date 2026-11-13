@@ -96,6 +96,7 @@ def mountain_today():
 
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
+data_access.initialize_task_id_counter(st.session_state)
 if "ai_response" not in st.session_state:
     st.session_state.ai_response = ""
 if "ai_error" not in st.session_state:
@@ -4774,7 +4775,7 @@ def add_task(
                 inserted = cur.fetchone()
                 return inserted[0] if inserted else None
 
-    task_id = len(st.session_state.tasks) + 1
+    task_id = data_access.allocate_task_id(st.session_state)
     st.session_state.tasks.append(
         {
             "id": task_id,
@@ -5391,10 +5392,14 @@ def render_task_card(task, key_prefix="task", alert_reasons=None):
             height=80,
             key=f"{key_prefix}_edit_description_{task['id']}",
         )
+        category_options = ["Personal", "Clinic"]
+        current_category = task["category"]
+        if current_category not in category_options:
+            category_options.append(current_category)
         edit_category = st.selectbox(
             "Category",
-            ["Personal", "Clinic"],
-            index=0 if task.get("category") == "Personal" else 1,
+            category_options,
+            index=category_options.index(current_category),
             key=f"{key_prefix}_edit_category_{task['id']}",
         )
         edit_priority = st.selectbox(
@@ -8410,7 +8415,8 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
 
     page_renderers.render_notification_alerts(
-        active_tasks, today_value, panel_key, render_task_card, task_attention_sort_key, st_module=st
+        active_tasks, today_value, panel_key, render_task_card, task_attention_sort_key,
+        st_module=st, identity_tasks=tasks if db_enabled() else st.session_state.tasks,
     )
 
 

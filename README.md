@@ -25,6 +25,7 @@ Current capabilities include:
 - AI `Auto-Schedule Tasks` flow with one-click apply for schedule updates.
 - Notifications page with alert-focused task triage (overdue, blocked, unscheduled high priority, due tomorrow).
 - Notification task cards combine overlapping alert reasons so each task appears once while keeping its task actions.
+- If tasks share an ID, Notifications reports the collision and withholds task actions until the IDs are resolved.
 - Notifications page now includes Telegram alert controls with test send, manual alert check, and history reset.
 - Daily Review page with AI-generated end-of-day recap and tomorrow draft plan.
 - Daily Review page now includes a generic Clinic Day Closeout Checklist with per-day completion tracking (independent from task status).
