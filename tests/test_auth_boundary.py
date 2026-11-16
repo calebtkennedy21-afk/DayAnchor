@@ -303,7 +303,7 @@ def test_scheduler_environment_isolated_without_starting_scheduler(tmp_path, set
     fake_python.write_text(
         """#!/bin/sh
 case "$1" in
-  alert_scheduler.py) env > "$SCHEDULER_ENV";;
+  alert_scheduler.py) env > "$SCHEDULER_ENV.tmp" && mv "$SCHEDULER_ENV.tmp" "$SCHEDULER_ENV";;
   auth_config.py)
     if [ "$EXPECT_SCHEDULER" = yes ]; then
       i=0

@@ -8,6 +8,7 @@ import pytest
 import psycopg
 
 import data_access
+from ai_envelope import envelope_from_plan
 import page_renderers
 from scheduling_core import shift_date_by_rule, task_attention_sort_key
 
@@ -69,6 +70,7 @@ def tasks_app():
             allocate_task_id=data_access.allocate_task_id,
             observe_task_ids_or_stop=data_access.observe_task_ids_or_stop,
             record_task_outcome=Mock(),
+            apply_planner_task_suggestions=data_access.apply_planner_task_suggestions,
         ),
         "db_enabled": lambda: False,
         "get_connection": Mock(side_effect=AssertionError("Database access is forbidden")),
@@ -77,7 +79,11 @@ def tasks_app():
         "date": date,
         "time": time,
         "shift_date_by_rule": shift_date_by_rule,
-        "_ai_db_kwargs": lambda: {},
+        "_ai_db_kwargs": lambda: {
+            "db_enabled_fn": lambda: False,
+            "get_connection_fn": Mock(side_effect=AssertionError("Database access is forbidden")),
+            "st_module": st,
+        },
         "parse_quick_capture_input": lambda raw, settings: {"confidence": 0.0},
         "apply_post_capture_autoschedule": lambda *args: "",
     }
@@ -177,10 +183,15 @@ def test_all_creation_entry_points_share_the_allocator(tasks_app):
     app, st = tasks_app
     assert create_task(app, "Direct", recurrence_rule="daily") == 1
     app["seed_sample_tasks"]()
-    app["apply_ai_suggestions"]([{
+    proposal_id = data_access.log_ai_event(
+        envelope_from_plan(("Plan", "", [{
         "title": "Suggestion", "description": "", "category": "Personal",
         "priority": "low", "due_date": TODAY,
-    }])
+        }])),
+        TODAY,
+        st_module=st,
+    )
+    app["apply_ai_suggestions"](proposal_id)
     quick = app["capture_task_from_quick_entry"]("Quick", "Clinic", "medium", TODAY, {})
     assert quick["task_id"] == 6
     app["delete_task"](2)

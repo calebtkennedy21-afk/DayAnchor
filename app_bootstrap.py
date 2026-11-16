@@ -54,6 +54,7 @@ def run_app(context, st_module=st):
     initialize_database = context["initialize_database"]
     load_app_settings = context["load_app_settings"]
     save_app_settings = context["save_app_settings"]
+    retry_pending_app_settings = context["retry_pending_app_settings"]
     inject_styles = context["inject_styles"]
     render_hero = context["render_hero"]
     db_health_status = context["db_health_status"]
@@ -244,6 +245,27 @@ def run_app(context, st_module=st):
 
     initialize_database()
     app_settings = load_app_settings()
+    pending_settings = st_module.session_state.get("pending_app_settings")
+    if isinstance(pending_settings, dict):
+        if pending_settings.get("conflict"):
+            st_module.error(
+                "The database settings changed after this draft was created. Automatic retry is blocked; review and reconcile the pending draft with the current settings."
+            )
+        elif pending_settings.get("baseline_known"):
+            st_module.warning(
+                "Settings changes are pending and are not saved to the database. Retry is allowed only if the durable settings are unchanged."
+            )
+        else:
+            st_module.error(
+                "The durable baseline for this draft could not be verified. Automatic retry is disabled; review and reconcile the draft manually."
+            )
+        with st_module.expander("Review pending settings draft"):
+            st_module.json(pending_settings.get("settings") or {})
+        if pending_settings.get("baseline_known") and not pending_settings.get("conflict"):
+            if st_module.button("Retry pending settings save", key="retry_pending_app_settings"):
+                result = retry_pending_app_settings()
+                if result.status == "persisted":
+                    st_module.rerun()
     feature_flags = app_settings.get("feature_flags") if isinstance(app_settings, dict) else {}
     if not isinstance(feature_flags, dict):
         feature_flags = {}

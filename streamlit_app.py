@@ -69,6 +69,8 @@ import telegram_inbox
 import workout_core
 import workout_page
 from brain_dump_core import parse_brain_dump
+import brain_dump_ui
+from brain_dump_ui import apply_brain_dump_decision
 from settings_serialization import dumps_json_safe
 from scheduling_core import (
     build_week_rebalance_moves,
@@ -108,6 +110,8 @@ if "ai_error" not in st.session_state:
     st.session_state.ai_error = ""
 if "ai_suggestions" not in st.session_state:
     st.session_state.ai_suggestions = []
+if "ai_suggestion_event_id" not in st.session_state:
+    st.session_state.ai_suggestion_event_id = None
 if "ai_schedule_error" not in st.session_state:
     st.session_state.ai_schedule_error = ""
 if "ai_schedule_updates" not in st.session_state:
@@ -179,6 +183,13 @@ FEATURE_FLAG_DEFAULTS = {
     item["key"]: bool(item.get("default", False))
     for item in FEATURE_FLAG_DEFINITIONS
 }
+
+
+class SettingsSaveResult(dict):
+    def __init__(self, settings, status, message=""):
+        super().__init__(settings)
+        self.status = status
+        self.message = message
 
 
 DEFAULT_APP_SETTINGS = {
@@ -1243,9 +1254,11 @@ def generate_ai_plan(tasks, user_prompt):
         return "", f"AI request failed: {exc}", []
 
 
-def apply_ai_suggestions(suggestions):
-    for item in suggestions:
-        add_task(
+def apply_ai_suggestions(event_id):
+    return data_access.apply_planner_task_suggestions(
+        event_id,
+        mountain_today(),
+        task_factory=lambda item: add_task(
             item["title"],
             item["description"],
             item["category"],
@@ -1254,7 +1267,9 @@ def apply_ai_suggestions(suggestions):
             scheduled_date=item.get("scheduled_date"),
             scheduled_time=item.get("scheduled_time"),
             scheduled_minutes=item.get("scheduled_minutes"),
-        )
+        ),
+        **_ai_db_kwargs(),
+    )
 
 
 def generate_ai_schedule(tasks, user_prompt):
@@ -4134,8 +4149,13 @@ def load_app_settings():
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute("SELECT payload FROM app_settings WHERE id = 1")
                     row = cur.fetchone()
-                    if row and row.get("payload"):
-                        payload = json.loads(row["payload"])
+                    baseline_payload = row["payload"] if row else None
+                    st.session_state["app_settings_database_baseline"] = {
+                        "known": True,
+                        "payload": baseline_payload,
+                    }
+                    if baseline_payload:
+                        payload = json.loads(baseline_payload)
                         merged = dict(DEFAULT_APP_SETTINGS)
                         merged.update(payload)
                         merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
@@ -4143,7 +4163,10 @@ def load_app_settings():
                             merged["overview_site_label"] = "MOA (Mercy Orthopedic Associates)"
                         return merged
         except (psycopg.Error, json.JSONDecodeError):
-            pass
+            st.session_state["app_settings_database_baseline"] = {
+                "known": False,
+                "payload": None,
+            }
 
     stored = st.session_state.get("app_settings")
     if isinstance(stored, dict):
@@ -4158,30 +4181,175 @@ def load_app_settings():
     return merged
 
 
+def _persist_settings_candidate(merged, expected_payload, baseline_known, pending_draft=None):
+    if not baseline_known:
+        return SettingsSaveResult(
+            merged,
+            "conflict",
+            "Settings could not be safely retried because the durable baseline is unknown. Review the pending draft against current settings.",
+        )
+
+    try:
+        payload_text = dumps_json_safe(merged)
+    except (TypeError, ValueError):
+        return SettingsSaveResult(
+            merged,
+            "failed",
+            "Settings could not be serialized. Your edits are retained as a pending draft; retry after correcting them.",
+        )
+
+    if not db_enabled():
+        return SettingsSaveResult(
+            merged,
+            "failed",
+            "The database is unavailable. Your pending settings draft has been retained.",
+        )
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT payload FROM app_settings WHERE id = 1")
+                row = cur.fetchone()
+                current_payload = row["payload"] if row else None
+                if current_payload != expected_payload:
+                    return SettingsSaveResult(
+                        merged,
+                        "conflict",
+                        "Settings changed in the database since this draft was created. No changes were saved; review the current settings and pending draft before reconciling.",
+                    )
+
+                if expected_payload is None:
+                    cur.execute(
+                        """
+                        INSERT INTO app_settings (id, payload, updated_at)
+                        VALUES (1, %s, NOW())
+                        ON CONFLICT (id) DO NOTHING
+                        RETURNING id
+                        """,
+                        (payload_text,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE app_settings
+                        SET payload = %s, updated_at = NOW()
+                        WHERE id = 1 AND payload = %s
+                        RETURNING id
+                        """,
+                        (payload_text, expected_payload),
+                    )
+                if cur.fetchone() is None:
+                    return SettingsSaveResult(
+                        merged,
+                        "conflict",
+                        "Settings changed while this draft was being saved. No changes were saved; the pending draft is available for review.",
+                    )
+    except (psycopg.Error, staging_database.StagingDatabaseError):
+        result = SettingsSaveResult(
+            merged,
+            "failed",
+            "Settings could not be persisted. Your edits are retained as a pending draft; retry from Settings.",
+        )
+    else:
+        st.session_state["app_settings"] = merged
+        st.session_state["app_settings_database_baseline"] = {
+            "known": True,
+            "payload": payload_text,
+        }
+        if (
+            pending_draft is not None
+            and st.session_state.get("pending_app_settings") is pending_draft
+        ):
+            st.session_state.pop("pending_app_settings", None)
+        result = SettingsSaveResult(merged, "persisted", "Settings persisted to the database.")
+        st.session_state["last_settings_save_result"] = result
+        return result
+
+    return result
+
+
+def _store_pending_settings_draft(merged, expected_payload, baseline_known, conflict=False):
+    pending = {
+        "settings": merged,
+        "base_payload": expected_payload,
+        "baseline_known": baseline_known,
+        "conflict": conflict,
+    }
+    st.session_state["pending_app_settings"] = pending
+    return pending
+
+
 def save_app_settings(settings):
     merged = dict(DEFAULT_APP_SETTINGS)
     merged.update(settings)
     merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
 
-    if db_enabled():
-        try:
-            payload_text = dumps_json_safe(merged)
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO app_settings (id, payload, updated_at)
-                        VALUES (1, %s, NOW())
-                        ON CONFLICT (id)
-                        DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
-                        """,
-                        (payload_text,),
-                    )
-        except psycopg.Error:
-            pass
+    if st.session_state.get("pending_app_settings") is not None:
+        result = SettingsSaveResult(
+            merged,
+            "conflict",
+            "A pending settings draft must be reviewed or safely retried before another settings save.",
+        )
+        st.session_state["last_settings_save_result"] = result
+        st.error(result.message)
+        st.stop()
 
-    st.session_state["app_settings"] = merged
-    return merged
+    if not db_enabled():
+        st.session_state["app_settings"] = merged
+        result = SettingsSaveResult(merged, "session_only", "Settings are available only for this session.")
+        st.session_state["last_settings_save_result"] = result
+        st.info(result.message)
+        st.stop()
+
+    baseline = st.session_state.get("app_settings_database_baseline") or {}
+    baseline_known = bool(baseline.get("known"))
+    expected_payload = baseline.get("payload")
+    result = _persist_settings_candidate(merged, expected_payload, baseline_known)
+    if result.status == "persisted":
+        st.success(result.message)
+        return result
+
+    _store_pending_settings_draft(
+        merged,
+        expected_payload,
+        baseline_known,
+        conflict=result.status == "conflict",
+    )
+    st.session_state["last_settings_save_result"] = result
+    st.error(result.message)
+    st.stop()
+
+
+def retry_pending_app_settings():
+    pending = st.session_state.get("pending_app_settings")
+    if not isinstance(pending, dict) or not isinstance(pending.get("settings"), dict):
+        result = SettingsSaveResult(
+            {},
+            "failed",
+            "No valid pending settings draft is available.",
+        )
+    else:
+        result = _persist_settings_candidate(
+            pending["settings"],
+            pending.get("base_payload"),
+            bool(pending.get("baseline_known")),
+            pending_draft=pending,
+        )
+
+    st.session_state["last_settings_save_result"] = result
+    if result.status == "persisted":
+        st.success(result.message)
+        return result
+
+    if isinstance(pending, dict):
+        _store_pending_settings_draft(
+            pending["settings"],
+            pending.get("base_payload"),
+            bool(pending.get("baseline_known")),
+            conflict=result.status == "conflict",
+        )
+    st.error(result.message)
+    st.stop()
 
 
 def seed_sample_tasks():
@@ -5830,54 +5998,6 @@ def render_personal_focus_panel(personal_tasks, active_tasks, app_settings, pane
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-_BRAIN_DUMP_NOTE_KEYS = {
-    "Clinic": ("clinical_notes", "clinical_notes_updated_at"),
-    "Family": ("family_notes", "family_notes_updated_at"),
-}
-
-
-def apply_brain_dump_decision(entry, decision, app_settings, updates, status_prefix=""):
-    """Converts one inbox entry; settings changes accumulate in `updates` for a single save."""
-    item_type = decision.get("item_type") or "task"
-    category = decision.get("category") or entry.get("category") or "Personal"
-    title = decision.get("title") or entry.get("title") or entry.get("raw_text") or "Untitled thought"
-    priority = decision.get("priority") if decision.get("priority") in ("high", "medium", "low") else "medium"
-    now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
-    if item_type == "task":
-        description = decision.get("description") or entry.get("raw_text") or ""
-        if category == "Family":
-            # Tasks only support Personal/Clinic, so keep the Family origin in the description.
-            description = f"[Family] {description}".strip()
-        add_task(
-            title,
-            description,
-            "Clinic" if category == "Clinic" else "Personal",
-            priority,
-            decision.get("due_date") or mountain_today(),
-            scheduled_date=decision.get("scheduled_date"),
-            scheduled_time=decision.get("scheduled_time"),
-        )
-    elif item_type == "reminder":
-        reminders = updates.setdefault("quick_reminders", list(app_settings.get("quick_reminders") or []))
-        reminders.append(
-            {
-                "reminder_id": str(entry.get("dump_id")),
-                "text": title,
-                "category": category,
-                "remind_date": decision.get("due_date"),
-                "remind_time": decision.get("scheduled_time"),
-                "status": "active",
-                "created_at": now_iso,
-            }
-        )
-    else:
-        note_key, stamp_key = _BRAIN_DUMP_NOTE_KEYS.get(category, ("personal_notes", "personal_notes_updated_at"))
-        existing_note = str(updates.get(note_key, app_settings.get(note_key)) or "").strip()
-        updates[note_key] = f"{existing_note}\n- {entry.get('raw_text') or title}".strip()
-        updates[stamp_key] = now_iso
-    entry["status"] = f"{status_prefix}converted_{item_type}"
-
-
 def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
     entries = [item for item in (app_settings.get("brain_dump_entries") or []) if isinstance(item, dict)]
     active_entries = [item for item in entries if str(item.get("status") or "new") == "new"]
@@ -5963,34 +6083,22 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
                 f"{proposal.get('reason') or 'No reason provided.'}{duplicate_note}"
             )
         if st.button("Apply selected", key=f"{panel_key}_apply_ai", type="primary"):
-            entry_by_id = {str(item.get("dump_id")): item for item in entries}
-            updates = {}
-            applied = 0
-            for proposal in ai_triage:
-                pid = str(proposal.get("dump_id"))
-                entry = entry_by_id.get(pid)
-                if not entry or str(entry.get("status") or "new") != "new":
-                    continue
-                if not st.session_state.get(f"{panel_key}_ai_apply_{pid}", True):
-                    continue
-                decision = {
-                    **proposal,
-                    "item_type": st.session_state.get(f"{panel_key}_ai_type_{pid}") or proposal.get("item_type"),
-                    "title": st.session_state.get(f"{panel_key}_ai_title_{pid}") or proposal.get("title"),
-                }
-                apply_brain_dump_decision(entry, decision, app_settings, updates, status_prefix="ai_")
-                applied += 1
-            app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
-            if applied == 0:
-                _resolve_open_proposal("capture", "rejected", "rejected", "nothing selected")
-            elif applied < len(ai_triage):
-                _resolve_open_proposal("capture", "applied", "accepted", f"{applied} of {len(ai_triage)} applied")
-            else:
-                _resolve_open_proposal("capture", "applied", "accepted", f"{applied} applied")
-            st.session_state[triage_key] = []
-            st.session_state[triage_error_key] = ""
-            st.success(f"Applied {applied} decision(s).")
-            st.rerun()
+            _, should_rerun = brain_dump_ui.handle_ai_brain_dump_apply(
+                entries,
+                ai_triage,
+                app_settings,
+                mountain_today(),
+                panel_key,
+                triage_key,
+                triage_error_key,
+                convert_fn=data_access.convert_brain_dump_entries,
+                db_enabled_fn=db_enabled,
+                get_connection_fn=get_connection,
+                resolve_proposal_fn=_resolve_open_proposal,
+                st_module=st,
+            )
+            if should_rerun:
+                st.rerun()
         if st.button("Discard proposals", key=f"{panel_key}_discard_ai"):
             _resolve_open_proposal("capture", "rejected", "rejected")
             st.session_state[triage_key] = []
@@ -6027,11 +6135,24 @@ def render_brain_dump_panel(app_settings, panel_key="brain_dump"):
         for col_index, label, action_key, item_type, success_text in manual_actions:
             with action_cols[col_index]:
                 if st.button(label, key=f"{panel_key}_{action_key}_{dump_id}"):
-                    updates = {}
-                    apply_brain_dump_decision(entry, {**entry, "item_type": item_type}, app_settings, updates)
-                    app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
-                    st.success(success_text)
-                    st.rerun()
+                    if item_type == "task":
+                        _, should_rerun = brain_dump_ui.handle_manual_brain_dump_task(
+                            entry,
+                            app_settings,
+                            mountain_today(),
+                            convert_fn=data_access.convert_brain_dump_entries,
+                            db_enabled_fn=db_enabled,
+                            get_connection_fn=get_connection,
+                            st_module=st,
+                        )
+                        if should_rerun:
+                            st.rerun()
+                    else:
+                        updates = {}
+                        apply_brain_dump_decision(entry, {**entry, "item_type": item_type}, app_settings, updates)
+                        app_settings = save_app_settings({**app_settings, **updates, "brain_dump_entries": entries})
+                        st.success(success_text)
+                        st.rerun()
         with action_cols[3]:
             if st.button("Dismiss", key=f"{panel_key}_dismiss_{dump_id}"):
                 entry["status"] = "dismissed"
@@ -15384,6 +15505,7 @@ def undo_ai_event(event):
 
 def render_ai_activity_panel(panel_key):
     st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
+    data_access.expire_stale_ai_events(**_ai_db_kwargs())
     st.markdown(
         '<div class="panel-title"><h3>AI Activity</h3><span>What the assistants proposed or did on their own, last 7 days</span></div>',
         unsafe_allow_html=True,
@@ -15392,11 +15514,21 @@ def render_ai_activity_panel(panel_key):
     if not events:
         st.markdown('<div class="empty-state">No AI activity recorded yet.</div>', unsafe_allow_html=True)
     for event in events:
-        state = event.get("outcome") or event.get("status")
+        status = event.get("status") or "unknown"
         created = event.get("created_at")
         stamp = created.strftime("%a %I:%M %p") if hasattr(created, "strftime") else ""
         info_col, action_col = st.columns([0.82, 0.18])
-        info_col.markdown(f"**{event.get('pillar')}** · {state} · {stamp}  \n{event.get('summary')}")
+        note = event.get("outcome_note")
+        outcome = event.get("outcome")
+        details = []
+        if outcome:
+            details.append(f"Outcome: {outcome}")
+        if note:
+            details.append(note)
+        detail = f"  \n{' · '.join(details)}" if details else ""
+        info_col.markdown(
+            f"**{event.get('pillar')}** · {status} · {stamp}  \n{event.get('summary')}{detail}"
+        )
         undoable = (
             event.get("pillar") == "autopilot"
             and event.get("status") == "applied"
@@ -15494,27 +15626,76 @@ def render_ai_panel(tasks, active_tasks, panel_key="main"):
         st.markdown('<div class="panel ai-response-card">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><h3>Plan Builder</h3><span>Ask for a focused day plan or a task rescue plan</span></div>', unsafe_allow_html=True)
         if generate_plan_clicked:
+            st.session_state.ai_suggestion_event_id = None
+            st.session_state.ai_suggestions = []
+            previous_event_id = st.session_state.get("ai_open_event_ids", {}).get("planning")
             result, error, suggestions = generate_ai_plan(tasks, ai_prompt)
             st.session_state.ai_response = result
             st.session_state.ai_error = error
-            st.session_state.ai_suggestions = suggestions
+            if suggestions:
+                event_id = st.session_state.get("ai_open_event_ids", {}).get("planning")
+                if event_id is None or event_id == previous_event_id:
+                    st.session_state.ai_error = (
+                        error or "The task proposal could not be recorded. No tasks can be added."
+                    )
+                else:
+                    try:
+                        event = data_access.get_ai_event(event_id, **_ai_db_kwargs())
+                        if event is None:
+                            raise RuntimeError("The saved Planner proposal could not be loaded.")
+                        st.session_state.ai_suggestion_event_id = event_id
+                        st.session_state.ai_suggestions = data_access.planner_task_suggestions(event)
+                    except Exception as exc:
+                        st.session_state.ai_error = f"Could not load the saved Planner proposal: {exc}"
         if st.session_state.ai_error:
             st.warning(st.session_state.ai_error)
         if st.session_state.ai_response:
             st.markdown(st.session_state.ai_response)
-        if st.session_state.ai_suggestions:
-            st.caption(f"Suggested tasks detected: {len(st.session_state.ai_suggestions)}")
-            if st.button("Add Suggested Tasks", type="primary", key=f"{panel_key}_apply_suggested"):
-                apply_ai_suggestions(st.session_state.ai_suggestions)
-                added_count = len(st.session_state.ai_suggestions)
-                _resolve_open_proposal("planning", "applied", "accepted", f"{added_count} task(s) added")
-                st.session_state.ai_suggestions = []
-                st.success(f"Added {added_count} suggested task(s).")
-                st.rerun()
-            if st.button("Dismiss suggestions", key=f"{panel_key}_dismiss_suggested"):
-                _resolve_open_proposal("planning", "rejected", "rejected")
-                st.session_state.ai_suggestions = []
-                st.rerun()
+        proposal_id = st.session_state.ai_suggestion_event_id
+        if proposal_id is not None:
+            try:
+                proposal = data_access.get_ai_event(proposal_id, **_ai_db_kwargs())
+                if proposal is None:
+                    raise RuntimeError("The saved Planner proposal is unavailable.")
+                proposal_items = data_access.planner_task_suggestions(proposal)
+                st.session_state.ai_suggestions = proposal_items
+                st.caption(f"Proposal {proposal_id} · {proposal.get('status')}")
+                for item in proposal_items:
+                    st.markdown(
+                        f"- **{item['title']}** · {item['category']} · {item['priority']} priority"
+                        + (f" · due {item['due_date']}" if item.get("due_date") else "")
+                        + (f"\n  {item['description']}" if item.get("description") else "")
+                    )
+                if proposal.get("status") == "proposed":
+                    if st.button("Approve and add tasks", type="primary", key=f"{panel_key}_apply_suggested"):
+                        try:
+                            added_ids = apply_ai_suggestions(proposal_id)
+                        except Exception as exc:
+                            st.error(f"Could not apply the Planner proposal: {exc}")
+                        else:
+                            st.session_state.ai_suggestion_event_id = None
+                            st.session_state.ai_suggestions = []
+                            open_ids = st.session_state.setdefault("ai_open_event_ids", {})
+                            if open_ids.get("planning") == proposal_id:
+                                open_ids.pop("planning")
+                            st.success(f"Added {len(added_ids)} task(s).")
+                            st.rerun()
+                    if st.button("Reject proposal", key=f"{panel_key}_dismiss_suggested"):
+                        try:
+                            data_access.reject_planner_task_suggestions(proposal_id, **_ai_db_kwargs())
+                        except Exception as exc:
+                            st.error(f"Could not reject the Planner proposal: {exc}")
+                        else:
+                            st.session_state.ai_suggestion_event_id = None
+                            st.session_state.ai_suggestions = []
+                            open_ids = st.session_state.setdefault("ai_open_event_ids", {})
+                            if open_ids.get("planning") == proposal_id:
+                                open_ids.pop("planning")
+                            st.rerun()
+                elif proposal.get("status") in ("expired", "rejected", "applied"):
+                    st.info(f"This proposal is {proposal['status']} and can no longer be applied.")
+            except Exception as exc:
+                st.error(f"Could not load the saved Planner proposal: {exc}")
         if not st.session_state.ai_response and not st.session_state.ai_error:
             st.markdown('<div class="empty-state">Generate a plan to turn the task board into a sequence of actions.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -15709,8 +15890,13 @@ def _log_ai_event(envelope, day):
         data_access.expire_stale_ai_events(**_ai_db_kwargs())
     except Exception:
         pass
-    # A new proposal supersedes any earlier one that was never acted on.
-    _resolve_open_proposal(envelope.pillar, "expired", "ignored", "superseded by a newer run")
+    planner_proposal = (
+        envelope.pillar == "planning"
+        and envelope.kind == "suggestion"
+        and envelope.status == "proposed"
+    )
+    if not planner_proposal:
+        _resolve_open_proposal(envelope.pillar, "expired", "ignored", "superseded by a newer run")
     event_id = data_access.log_ai_event(envelope, day, **_ai_db_kwargs())
     if event_id is not None and envelope.status == "proposed":
         st.session_state.setdefault("ai_open_event_ids", {})[envelope.pillar] = event_id
@@ -15810,6 +15996,7 @@ app_bootstrap.run_app(
         "initialize_database": initialize_database,
         "load_app_settings": load_app_settings,
         "save_app_settings": save_app_settings,
+        "retry_pending_app_settings": retry_pending_app_settings,
         "inject_styles": inject_styles,
         "render_hero": render_hero,
         "db_health_status": db_health_status,

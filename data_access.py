@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass, field
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,6 +25,499 @@ class LoadedTasks(list):
         super().__init__(tasks)
         self.source = source
         self.identity_tasks = identity_tasks
+
+
+@dataclass
+class BrainDumpConversionResult:
+    status: str
+    message: str
+    task_ids: list = field(default_factory=list)
+    created_task_ids: list = field(default_factory=list)
+    settings: dict = field(default_factory=dict)
+    mode: str = "database"
+
+
+class _BrainDumpConversionAbort(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def _brain_dump_date(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
+def _brain_dump_time(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, time) else time.fromisoformat(str(value))
+
+
+def _brain_dump_proposal_ids(event):
+    payload = event.get("payload_json") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return set()
+    return {
+        str(item.get("data", {}).get("dump_id"))
+        for item in payload["items"]
+        if isinstance(item, dict)
+        and item.get("type") == "triage"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("dump_id") is not None
+    }
+
+
+def _prepare_brain_dump_decisions(settings, decisions, today, status_prefix):
+    entries = settings.get("brain_dump_entries")
+    if not isinstance(entries, list):
+        raise _BrainDumpConversionAbort("rejected", "The brain-dump inbox is unavailable.")
+
+    entry_by_id = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("dump_id") is not None:
+            entry_id = str(entry["dump_id"])
+            if entry_id in entry_by_id:
+                raise _BrainDumpConversionAbort("rejected", "Brain-dump entry identity is ambiguous.")
+            entry_by_id[entry_id] = entry
+
+    normalized = []
+    seen = set()
+    for raw_decision in decisions:
+        if not isinstance(raw_decision, dict):
+            raise _BrainDumpConversionAbort("rejected", "A brain-dump decision is invalid.")
+        entry_id = str(raw_decision.get("dump_id") or "").strip()
+        item_type = str(raw_decision.get("item_type") or "").strip().lower()
+        if not entry_id or entry_id in seen or item_type not in {"task", "reminder", "note", "idea"}:
+            raise _BrainDumpConversionAbort("rejected", "A brain-dump decision is invalid or duplicated.")
+        entry = entry_by_id.get(entry_id)
+        if entry is None:
+            raise _BrainDumpConversionAbort("rejected", "A brain-dump entry is no longer available.")
+        seen.add(entry_id)
+        normalized.append((entry_id, entry, dict(raw_decision), item_type))
+
+    if not normalized:
+        raise _BrainDumpConversionAbort("rejected", "No brain-dump decisions were selected.")
+
+    updates = []
+    for entry_id, entry, decision, item_type in normalized:
+        status = str(entry.get("status") or "new")
+        converted_status = f"{status_prefix}converted_{item_type}"
+        if status in {f"converted_{item_type}", f"ai_converted_{item_type}"}:
+            if item_type == "task" and type(entry.get("task_id")) is not int:
+                raise _BrainDumpConversionAbort(
+                    "rejected",
+                    "A converted brain-dump task is missing its recorded task ID.",
+                )
+            updates.append((entry_id, entry, decision, item_type, True))
+            continue
+        if status != "new":
+            raise _BrainDumpConversionAbort(
+                "rejected",
+                "A brain-dump entry is no longer eligible for conversion.",
+            )
+        updates.append((entry_id, entry, decision, item_type, False))
+
+    task_ids = [
+        entry["task_id"]
+        for _, entry, _, item_type, already_applied in updates
+        if item_type == "task" and already_applied
+    ]
+    task_specs = []
+    for entry_id, entry, decision, item_type, already_applied in updates:
+        if already_applied:
+            continue
+        title = str(
+            decision.get("title")
+            or entry.get("title")
+            or entry.get("raw_text")
+            or "Untitled thought"
+        ).strip()
+        if item_type == "task":
+            category = decision.get("category") or entry.get("category") or "Personal"
+            description = str(decision.get("description") or entry.get("raw_text") or "")
+            if category == "Family":
+                description = f"[Family] {description}".strip()
+            task_specs.append(
+                {
+                    "dump_id": entry_id,
+                    "entry": entry,
+                    "title": title,
+                    "description": description,
+                    "category": "Clinic" if category == "Clinic" else "Personal",
+                    "priority": decision.get("priority")
+                    if decision.get("priority") in ("high", "medium", "low")
+                    else "medium",
+                    "due_date": _brain_dump_date(decision.get("due_date") or today),
+                    "scheduled_date": _brain_dump_date(decision.get("scheduled_date")),
+                    "scheduled_time": _brain_dump_time(decision.get("scheduled_time")),
+                }
+            )
+        elif item_type == "reminder":
+            reminders = list(settings.get("quick_reminders") or [])
+            reminders.append(
+                {
+                    "reminder_id": entry_id,
+                    "text": title,
+                    "category": decision.get("category") or entry.get("category") or "Personal",
+                    "remind_date": decision.get("due_date"),
+                    "remind_time": decision.get("scheduled_time"),
+                    "status": "active",
+                    "created_at": datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds"),
+                }
+            )
+            settings["quick_reminders"] = reminders
+        else:
+            category = decision.get("category") or entry.get("category") or "Personal"
+            note_key, stamp_key = {
+                "Clinic": ("clinical_notes", "clinical_notes_updated_at"),
+                "Family": ("family_notes", "family_notes_updated_at"),
+            }.get(category, ("personal_notes", "personal_notes_updated_at"))
+            existing_note = str(settings.get(note_key) or "").strip()
+            settings[note_key] = f"{existing_note}\n- {entry.get('raw_text') or title}".strip()
+            settings[stamp_key] = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+
+        entry["status"] = converted_status
+        if item_type == "task":
+            entry.pop("task_id", None)
+    return normalized, updates, task_specs, task_ids
+
+
+def convert_brain_dump_entries(
+    decisions,
+    today,
+    session_settings=None,
+    event_id=None,
+    status_prefix="",
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    """Atomically convert selected inbox decisions and resolve their AI proposal."""
+    if st_module.session_state.get("pending_app_settings") is not None:
+        return BrainDumpConversionResult(
+            "rejected",
+            "Conversion is blocked while settings changes are pending. Review or safely retry that draft first.",
+            mode="session" if not (db_enabled_fn and db_enabled_fn()) else "database",
+        )
+    if status_prefix == "ai_" and event_id is None:
+        return BrainDumpConversionResult(
+            "rejected",
+            "The AI triage proposal could not be verified. No decisions were applied.",
+            mode="session" if not (db_enabled_fn and db_enabled_fn()) else "database",
+        )
+
+    if db_enabled_fn and db_enabled_fn():
+        try:
+            with get_connection_fn() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT payload FROM app_settings WHERE id = 1 FOR UPDATE"
+                    )
+                    settings_row = cur.fetchone()
+                    if settings_row is None or not settings_row.get("payload"):
+                        raise _BrainDumpConversionAbort(
+                            "rejected",
+                            "The durable settings row is unavailable. No brain-dump tasks were created.",
+                        )
+                    original_payload = settings_row["payload"]
+                    settings = json.loads(original_payload)
+                    if not isinstance(settings, dict):
+                        raise _BrainDumpConversionAbort(
+                            "rejected",
+                            "The durable settings payload is invalid. No brain-dump tasks were created.",
+                        )
+
+                    normalized, updates, task_specs, task_ids = _prepare_brain_dump_decisions(
+                        settings,
+                        decisions,
+                        today,
+                        status_prefix,
+                    )
+                    all_already_applied = all(item[-1] for item in updates)
+
+                    event = None
+                    if event_id is not None:
+                        cur.execute(
+                            """
+                            SELECT id, pillar, kind, status, payload_json, expires_at, task_ids
+                            FROM ai_events
+                            WHERE id = %s
+                            FOR UPDATE
+                            """,
+                            (event_id,),
+                        )
+                        event = cur.fetchone()
+                        if event is None or event.get("pillar") != "capture" or event.get("kind") != "decision":
+                            raise _BrainDumpConversionAbort(
+                                "rejected",
+                                "The AI triage proposal is unavailable. No conversion was applied.",
+                            )
+                        requested_ids = {entry_id for entry_id, *_ in normalized}
+                        proposal_ids = _brain_dump_proposal_ids(event)
+                        if not requested_ids.issubset(proposal_ids):
+                            raise _BrainDumpConversionAbort(
+                                "rejected",
+                                "The selected entries do not match this AI triage proposal.",
+                            )
+                        if event.get("status") == "applied" and all_already_applied:
+                            existing_ids = list(event.get("task_ids") or task_ids)
+                            return BrainDumpConversionResult(
+                                "already_applied",
+                                "This AI brain-dump proposal was already applied.",
+                                task_ids=existing_ids,
+                                settings=settings,
+                                mode="database",
+                            )
+                        if event.get("status") != "proposed":
+                            raise _BrainDumpConversionAbort(
+                                "rejected",
+                                "The AI triage proposal is no longer eligible for conversion.",
+                            )
+                        if event.get("expires_at") and event["expires_at"] < datetime.now(MOUNTAIN_TIMEZONE):
+                            raise _BrainDumpConversionAbort(
+                                "rejected",
+                                "The AI triage proposal has expired. No conversion was applied.",
+                            )
+                    elif all_already_applied:
+                        return BrainDumpConversionResult(
+                            "already_applied",
+                            "This brain-dump entry was already converted.",
+                            task_ids=task_ids,
+                            settings=settings,
+                            mode="database",
+                        )
+
+                    created_task_ids = []
+                    for spec in task_specs:
+                        cur.execute(
+                            """
+                            INSERT INTO tasks (
+                                title, description, category, priority, status, created_date,
+                                due_date, scheduled_date, scheduled_time, scheduled_minutes,
+                                recurrence_rule, recurrence_interval, completed_date, completed_at
+                            )
+                            VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, NULL, NULL, 1, NULL, NULL)
+                            RETURNING id
+                            """,
+                            (
+                                spec["title"],
+                                spec["description"],
+                                spec["category"],
+                                spec["priority"],
+                                today,
+                                spec["due_date"],
+                                spec["scheduled_date"],
+                                spec["scheduled_time"],
+                            ),
+                        )
+                        inserted = cur.fetchone()
+                        if not inserted or type(inserted.get("id")) is not int:
+                            raise _BrainDumpConversionAbort(
+                                "failed",
+                                "Task creation did not return a valid task ID. No conversion was committed.",
+                            )
+                        task_id = inserted["id"]
+                        spec["entry"]["task_id"] = task_id
+                        created_task_ids.append(task_id)
+                        task_ids.append(task_id)
+
+                    updated_payload = json.dumps(settings, default=str)
+                    cur.execute(
+                        """
+                        UPDATE app_settings
+                        SET payload = %s, updated_at = NOW()
+                        WHERE id = 1 AND payload = %s
+                        RETURNING id
+                        """,
+                        (updated_payload, original_payload),
+                    )
+                    if cur.fetchone() is None:
+                        raise _BrainDumpConversionAbort(
+                            "rejected",
+                            "Settings changed during conversion. No brain-dump tasks were committed.",
+                        )
+
+                    if event is not None:
+                        cur.execute(
+                            """
+                            UPDATE ai_events
+                            SET status = 'applied', outcome = 'accepted', task_ids = %s,
+                                outcome_note = %s, resolved_at = NOW()
+                            WHERE id = %s AND status = 'proposed'
+                            RETURNING id
+                            """,
+                            (
+                                task_ids,
+                                f"{len(normalized)} brain-dump decision(s) applied",
+                                event_id,
+                            ),
+                        )
+                        if cur.fetchone() is None:
+                            raise _BrainDumpConversionAbort(
+                                "failed",
+                                "The AI proposal could not be resolved. No conversion was committed.",
+                            )
+        except _BrainDumpConversionAbort as exc:
+            return BrainDumpConversionResult(
+                exc.status,
+                str(exc),
+                mode="database",
+            )
+        except (psycopg.Error, TypeError, ValueError):
+            return BrainDumpConversionResult(
+                "failed",
+                "Brain-dump conversion could not be persisted. No conversion was committed.",
+                mode="database",
+            )
+
+        st_module.session_state["app_settings"] = settings
+        st_module.session_state["app_settings_database_baseline"] = {
+            "known": True,
+            "payload": updated_payload,
+        }
+        return BrainDumpConversionResult(
+            "already_applied"
+            if all_already_applied
+            else "created"
+            if created_task_ids
+            else "applied",
+            "Brain-dump decisions were applied.",
+            task_ids=task_ids,
+            created_task_ids=created_task_ids,
+            settings=settings,
+            mode="database",
+        )
+
+    session_state = st_module.session_state
+    original_tasks = deepcopy(session_state.get("tasks", []))
+    original_watermark = session_state.get("task_id_high_watermark")
+    had_settings = "app_settings" in session_state
+    original_settings = deepcopy(session_state.get("app_settings"))
+    original_events = deepcopy(session_state.get("ai_events", []))
+    settings = deepcopy(
+        session_state.get("app_settings")
+        if isinstance(session_state.get("app_settings"), dict)
+        else session_settings or {}
+    )
+
+    def restore_session_state():
+        session_state["tasks"] = original_tasks
+        if original_watermark is None:
+            session_state.pop("task_id_high_watermark", None)
+        else:
+            session_state["task_id_high_watermark"] = original_watermark
+        if had_settings:
+            session_state["app_settings"] = original_settings
+        else:
+            session_state.pop("app_settings", None)
+        session_state["ai_events"] = original_events
+
+    try:
+        normalized, updates, task_specs, task_ids = _prepare_brain_dump_decisions(
+            settings,
+            decisions,
+            today,
+            status_prefix,
+        )
+        all_already_applied = all(item[-1] for item in updates)
+        event = None
+        if event_id is not None:
+            event = next(
+                (item for item in session_state.get("ai_events", []) if item.get("id") == event_id),
+                None,
+            )
+            if event is None or event.get("pillar") != "capture" or event.get("kind") != "decision":
+                raise _BrainDumpConversionAbort("rejected", "The AI triage proposal is unavailable.")
+            requested_ids = {entry_id for entry_id, *_ in normalized}
+            if not requested_ids.issubset(_brain_dump_proposal_ids(event)):
+                raise _BrainDumpConversionAbort("rejected", "The selected entries do not match this AI triage proposal.")
+            if event.get("status") == "applied" and all_already_applied:
+                return BrainDumpConversionResult(
+                    "already_applied",
+                    "This AI brain-dump proposal was already applied.",
+                    task_ids=list(event.get("task_ids") or task_ids),
+                    settings=settings,
+                    mode="session",
+                )
+            if event.get("status") != "proposed":
+                raise _BrainDumpConversionAbort("rejected", "The AI triage proposal is no longer eligible for conversion.")
+            if event.get("expires_at") and event["expires_at"] < datetime.now(MOUNTAIN_TIMEZONE):
+                raise _BrainDumpConversionAbort("rejected", "The AI triage proposal has expired.")
+        elif all_already_applied:
+            return BrainDumpConversionResult(
+                "already_applied",
+                "This brain-dump entry was already converted.",
+                task_ids=task_ids,
+                settings=settings,
+                mode="session",
+            )
+
+        tasks = session_state.setdefault("tasks", [])
+        created_task_ids = []
+        for spec in task_specs:
+            task_id = allocate_task_id(session_state)
+            tasks.append(
+                {
+                    "id": task_id,
+                    "title": spec["title"],
+                    "description": spec["description"],
+                    "category": spec["category"],
+                    "priority": spec["priority"],
+                    "status": "todo",
+                    "created_date": today,
+                    "due_date": spec["due_date"],
+                    "scheduled_date": spec["scheduled_date"],
+                    "scheduled_time": spec["scheduled_time"],
+                    "scheduled_minutes": None,
+                    "recurrence_rule": None,
+                    "recurrence_interval": 1,
+                    "completed_date": None,
+                    "completed_at": None,
+                }
+            )
+            spec["entry"]["task_id"] = task_id
+            task_ids.append(task_id)
+            created_task_ids.append(task_id)
+
+        session_state["app_settings"] = settings
+        if event is not None:
+            event.update(
+                status="applied",
+                outcome="accepted",
+                task_ids=task_ids,
+                outcome_note=f"{len(normalized)} brain-dump decision(s) applied",
+                resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+            )
+    except _BrainDumpConversionAbort as exc:
+        restore_session_state()
+        return BrainDumpConversionResult(exc.status, str(exc), mode="session")
+    except (TaskIdentityError, TypeError, ValueError):
+        restore_session_state()
+        return BrainDumpConversionResult(
+            "failed",
+            "Brain-dump conversion failed. No session changes were retained.",
+            mode="session",
+        )
+    except Exception:
+        restore_session_state()
+        raise
+
+    return BrainDumpConversionResult(
+        "already_applied"
+        if all_already_applied
+        else "created"
+        if created_task_ids
+        else "applied",
+        "Brain-dump decisions are available for this session only.",
+        task_ids=task_ids,
+        created_task_ids=created_task_ids,
+        settings=settings,
+        mode="session",
+    )
 
 
 def initialize_task_id_counter(session_state):
@@ -1671,6 +2166,23 @@ def log_ai_event(envelope, day, db_enabled_fn=None, get_connection_fn=None, st_m
         try:
             with get_connection_fn() as conn:
                 with conn.cursor() as cur:
+                    if (
+                        envelope.pillar == "planning"
+                        and envelope.kind == "suggestion"
+                        and envelope.status == "proposed"
+                    ):
+                        # Serialize proposal creation so concurrent runs cannot leave two open plans.
+                        cur.execute("SELECT pg_advisory_xact_lock(7319, 2042)")
+                        cur.execute(
+                            """
+                            UPDATE ai_events
+                            SET status = 'expired', outcome = 'ignored',
+                                outcome_note = 'superseded by a newer Planner proposal',
+                                resolved_at = NOW()
+                            WHERE pillar = 'planning' AND kind = 'suggestion'
+                              AND status = 'proposed'
+                            """
+                        )
                     cur.execute(
                         """
                         INSERT INTO ai_events (
@@ -1699,6 +2211,24 @@ def log_ai_event(envelope, day, db_enabled_fn=None, get_connection_fn=None, st_m
             return None
 
     events = st_module.session_state.setdefault("ai_events", [])
+    if (
+        envelope.pillar == "planning"
+        and envelope.kind == "suggestion"
+        and envelope.status == "proposed"
+    ):
+        now = datetime.now(MOUNTAIN_TIMEZONE)
+        for event in events:
+            if (
+                event.get("pillar") == "planning"
+                and event.get("kind") == "suggestion"
+                and event.get("status") == "proposed"
+            ):
+                event.update(
+                    status="expired",
+                    outcome="ignored",
+                    outcome_note="superseded by a newer Planner proposal",
+                    resolved_at=now,
+                )
     event_id = max([e["id"] for e in events], default=0) + 1
     events.append(
         {
@@ -1753,6 +2283,220 @@ def load_recent_ai_events(days=1, pillars=None, limit=30, db_enabled_fn=None, ge
         if e["day"] >= cutoff and (pillar_list is None or e["pillar"] in pillar_list)
     ]
     return sorted(matches, key=lambda e: e["id"], reverse=True)[:limit]
+
+
+def get_ai_event(event_id, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Load one event without hiding persistence errors from an approval action."""
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, created_at, day, pillar, kind, status, source, summary, text,
+                           payload_json, task_ids, context_refs, expires_at, resolved_at,
+                           outcome, outcome_note
+                    FROM ai_events
+                    WHERE id = %s
+                    """,
+                    (event_id,),
+                )
+                return cur.fetchone()
+
+    return next(
+        (event for event in st_module.session_state.get("ai_events", []) if event["id"] == event_id),
+        None,
+    )
+
+
+def planner_task_suggestions(event):
+    payload = event.get("payload_json") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if event.get("pillar") != "planning" or event.get("kind") != "suggestion":
+        raise ValueError("This event is not a Planner task suggestion.")
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ValueError("The Planner proposal payload is invalid.")
+    suggestions = []
+    for item in payload["items"]:
+        if not isinstance(item, dict) or item.get("type") != "task_suggestion":
+            raise ValueError("The Planner proposal contains an invalid task suggestion.")
+        data = item.get("data")
+        if not isinstance(data, dict) or not str(data.get("title", "")).strip():
+            raise ValueError("The Planner proposal contains a task without a title.")
+        suggestions.append(data)
+    if not suggestions:
+        raise ValueError("The Planner proposal contains no tasks.")
+    return deepcopy(suggestions)
+
+
+def _parse_planner_date(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
+def _parse_planner_time(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, time) else time.fromisoformat(str(value))
+
+
+def apply_planner_task_suggestions(
+    event_id,
+    today,
+    task_factory=None,
+    db_enabled_fn=None,
+    get_connection_fn=None,
+    st_module=st,
+):
+    """Atomically create a proposal's tasks and resolve its event as applied."""
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT id, pillar, kind, status, payload_json, expires_at
+                    FROM ai_events
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (event_id,),
+                )
+                event = cur.fetchone()
+                if event is None or event["status"] != "proposed":
+                    raise ValueError("This Planner proposal is no longer available.")
+                if event.get("expires_at") and event["expires_at"] < datetime.now(MOUNTAIN_TIMEZONE):
+                    cur.execute(
+                        """
+                        UPDATE ai_events
+                        SET status = 'expired', outcome = 'ignored', resolved_at = NOW()
+                        WHERE id = %s AND status = 'proposed'
+                        """,
+                        (event_id,),
+                    )
+                    expired = True
+                else:
+                    expired = False
+                    suggestions = planner_task_suggestions(event)
+                    task_ids = []
+                    for item in suggestions:
+                        cur.execute(
+                            """
+                            INSERT INTO tasks (
+                                title, description, category, priority, status, created_date,
+                                due_date, scheduled_date, scheduled_end_date, scheduled_time,
+                                scheduled_minutes, recurrence_rule, recurrence_interval,
+                                completed_date, completed_at
+                            )
+                            VALUES (%s, %s, %s, %s, 'todo', %s, %s, %s, %s, %s, %s, NULL, 1, NULL, NULL)
+                            RETURNING id
+                            """,
+                            (
+                                str(item["title"]).strip(),
+                                str(item.get("description", "")).strip(),
+                                item["category"],
+                                item["priority"],
+                                today,
+                                _parse_planner_date(item.get("due_date")),
+                                _parse_planner_date(item.get("scheduled_date")),
+                                _parse_planner_date(item.get("scheduled_end_date")),
+                                _parse_planner_time(item.get("scheduled_time")),
+                                item.get("scheduled_minutes"),
+                            ),
+                        )
+                        task_ids.append(cur.fetchone()["id"])
+                    cur.execute(
+                        """
+                        UPDATE ai_events
+                        SET status = 'applied', outcome = 'accepted', task_ids = %s,
+                            outcome_note = %s, resolved_at = NOW()
+                        WHERE id = %s AND status = 'proposed'
+                        """,
+                        (task_ids, f"{len(task_ids)} task(s) added", event_id),
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError("The Planner proposal changed before it could be applied.")
+            if expired:
+                raise ValueError("This Planner proposal has expired.")
+            return task_ids
+
+    event = get_ai_event(event_id, st_module=st_module)
+    if event is None or event["status"] != "proposed":
+        raise ValueError("This Planner proposal is no longer available.")
+    if event.get("expires_at") and event["expires_at"] < datetime.now(MOUNTAIN_TIMEZONE):
+        event.update(
+            status="expired",
+            outcome="ignored",
+            resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+        )
+        raise ValueError("This Planner proposal has expired.")
+    suggestions = planner_task_suggestions(event)
+    tasks = st_module.session_state.setdefault("tasks", [])
+    original_tasks = list(tasks)
+    original_watermark = st_module.session_state.get("task_id_high_watermark")
+    original_event = dict(event)
+    if task_factory is None:
+        raise ValueError("Task creation is unavailable in session fallback mode.")
+    try:
+        task_ids = [task_factory(item) for item in suggestions]
+        event.update(
+            status="applied",
+            outcome="accepted",
+            task_ids=task_ids,
+            outcome_note=f"{len(task_ids)} task(s) added",
+            resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+        )
+        return task_ids
+    except Exception:
+        tasks[:] = original_tasks
+        if original_watermark is None:
+            st_module.session_state.pop("task_id_high_watermark", None)
+        else:
+            st_module.session_state["task_id_high_watermark"] = original_watermark
+        event.clear()
+        event.update(original_event)
+        raise
+
+
+def reject_planner_task_suggestions(event_id, db_enabled_fn=None, get_connection_fn=None, st_module=st):
+    """Reject only a still-open, unexpired Planner task proposal."""
+    if db_enabled_fn and db_enabled_fn():
+        with get_connection_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ai_events
+                    SET status = 'rejected', outcome = 'rejected',
+                        outcome_note = 'User rejected proposal', resolved_at = NOW()
+                    WHERE id = %s AND pillar = 'planning' AND kind = 'suggestion'
+                      AND status = 'proposed'
+                      AND (expires_at IS NULL OR expires_at >= NOW())
+                    """,
+                    (event_id,),
+                )
+                if cur.rowcount != 1:
+                    raise ValueError("This Planner proposal is no longer available.")
+                return True
+
+    event = get_ai_event(event_id, st_module=st_module)
+    if event is None or event.get("pillar") != "planning" or event.get("kind") != "suggestion":
+        raise ValueError("This Planner proposal is no longer available.")
+    if event["status"] != "proposed":
+        raise ValueError("This Planner proposal is no longer available.")
+    if event.get("expires_at") and event["expires_at"] < datetime.now(MOUNTAIN_TIMEZONE):
+        event.update(
+            status="expired",
+            outcome="ignored",
+            resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+        )
+        raise ValueError("This Planner proposal has expired.")
+    event.update(
+        status="rejected",
+        outcome="rejected",
+        outcome_note="User rejected proposal",
+        resolved_at=datetime.now(MOUNTAIN_TIMEZONE),
+    )
+    return True
 
 
 def resolve_ai_event(event_id, status, outcome=None, note="", db_enabled_fn=None, get_connection_fn=None, st_module=st):
