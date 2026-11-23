@@ -1,11 +1,14 @@
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 
 from overview_core import (
+    ensure_planner_workspace_mode,
     build_time_blocks,
     clinic_day_profiles,
     clinic_day_summary,
     overview_runtime_settings,
     personal_focus_summary,
+    preserve_clinic_schedule_confirmation,
+    resolve_planner_workspace,
     resolve_overview_day_context,
     schedule_workload_snapshot,
 )
@@ -181,3 +184,130 @@ def test_resolve_overview_day_context_manual_override():
     )
     assert context["mode"] == "Outpatient clinic"
     assert context["reason_text"] == "You pinned this mode manually."
+
+
+def _resolve_workspace(
+    current_date,
+    clinic_weekdays=("Tuesday", "Thursday"),
+    admin_weekdays=("Monday", "Friday"),
+    confirmed=True,
+    mode="Auto",
+):
+    return resolve_planner_workspace(
+        mode,
+        current_date,
+        list(clinic_weekdays),
+        confirmed,
+        list(admin_weekdays),
+    )
+
+
+def test_planner_workspace_auto_selects_confirmed_clinic_and_personal_weekdays():
+    clinical = _resolve_workspace(date(2026, 5, 19))
+    personal = _resolve_workspace(date(2026, 5, 20))
+
+    assert clinical["mode"] == "Clinical"
+    assert clinical["source"] == "schedule"
+    assert personal["mode"] == "Personal"
+    assert personal["source"] == "schedule"
+
+
+def test_planner_workspace_is_balanced_for_unconfirmed_or_missing_schedule():
+    unconfirmed = _resolve_workspace(date(2026, 5, 19), confirmed=False)
+    missing_clinic_weekdays = resolve_planner_workspace(
+        "Auto", date(2026, 5, 19), None, True, ["Monday"]
+    )
+
+    assert unconfirmed["mode"] == "Balanced"
+    assert missing_clinic_weekdays["mode"] == "Balanced"
+
+
+def test_planner_workspace_does_not_infer_confirmation_from_default_weekdays():
+    context = _resolve_workspace(date(2026, 5, 19), confirmed=False)
+
+    assert context["mode"] == "Balanced"
+    assert "Confirm" in context["reason"]
+
+
+def test_planner_workspace_rejects_invalid_or_contradictory_weekdays():
+    invalid = _resolve_workspace(date(2026, 5, 19), clinic_weekdays=("Tuesday", "Funday"))
+    contradictory = _resolve_workspace(
+        date(2026, 5, 19),
+        clinic_weekdays=("Tuesday", "Monday"),
+        admin_weekdays=("Monday", "Friday"),
+    )
+
+    assert invalid["mode"] == "Balanced"
+    assert contradictory["mode"] == "Balanced"
+    assert "conflict" in contradictory["reason"]
+
+
+def test_planner_workspace_uses_mountain_date_for_aware_datetimes():
+    utc_just_after_midnight = datetime(2026, 5, 19, 1, 0, tzinfo=timezone.utc)
+
+    context = _resolve_workspace(
+        utc_just_after_midnight,
+        clinic_weekdays=("Monday",),
+        admin_weekdays=("Tuesday",),
+    )
+
+    assert context["mode"] == "Clinical"
+    assert context["reason"].startswith("Monday")
+
+
+def test_planner_workspace_manual_override_bypasses_schedule_and_is_session_scoped():
+    settings = {
+        "planner_workspace_mode": "Clinical",
+        "clinic_weekdays": ["Tuesday"],
+        "admin_weekdays": ["Monday"],
+    }
+    original_settings = {
+        "clinic_weekdays": list(settings["clinic_weekdays"]),
+        "admin_weekdays": list(settings["admin_weekdays"]),
+    }
+    clinical = _resolve_workspace(date(2026, 5, 20), mode=settings["planner_workspace_mode"], confirmed=False)
+    personal = _resolve_workspace(date(2026, 5, 20), mode="Personal", confirmed=False)
+
+    assert clinical["mode"] == "Clinical"
+    assert clinical["source"] == "manual"
+    assert personal["mode"] == "Personal"
+    assert settings["clinic_weekdays"] == original_settings["clinic_weekdays"]
+    assert settings["admin_weekdays"] == original_settings["admin_weekdays"]
+
+
+def test_planner_workspace_auto_state_defaults_persists_and_reevaluates_each_date():
+    session_state = {}
+    assert ensure_planner_workspace_mode(session_state) == "Auto"
+    session_state["planner_workspace_mode"] = "Personal"
+    assert ensure_planner_workspace_mode(session_state) == "Personal"
+    session_state["planner_workspace_mode"] = "Auto"
+
+    monday = _resolve_workspace(
+        date(2026, 5, 18),
+        clinic_weekdays=("Monday",),
+        admin_weekdays=("Tuesday",),
+    )
+    tuesday = _resolve_workspace(
+        date(2026, 5, 19),
+        clinic_weekdays=("Monday",),
+        admin_weekdays=("Tuesday",),
+    )
+
+    assert session_state["planner_workspace_mode"] == "Auto"
+    assert monday["mode"] == "Clinical"
+    assert tuesday["mode"] == "Personal"
+
+
+def test_clinic_schedule_confirmation_is_preserved_only_when_schedule_is_unchanged():
+    settings = {
+        "overview_clinic_schedule_confirmed": True,
+        "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+        "overview_admin_weekdays": ["Monday", "Friday"],
+    }
+
+    assert preserve_clinic_schedule_confirmation(
+        settings, ["Tuesday", "Thursday"], ["Monday", "Friday"]
+    )
+    assert not preserve_clinic_schedule_confirmation(
+        settings, ["Monday", "Thursday"], ["Monday", "Friday"]
+    )

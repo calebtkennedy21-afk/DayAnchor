@@ -4,6 +4,8 @@ import calendar
 
 import streamlit as st
 
+from scheduling_core import scheduled_date_range
+
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
@@ -12,6 +14,13 @@ SURGICAL_CASE_CHECKLIST_FIELDS = (
     ("pt_protocol", "PT protocol", "Appropriate rehabilitation protocol selected or linked."),
     ("dme_dispensed", "DME dispensed", "Correct durable medical equipment confirmed and dispensed."),
     ("post_op_plan", "Post-op follow-up", "Post-op visits scheduled appropriately."),
+)
+PLANNER_DAILY_NAVIGATION = (
+    ("Schedule", "Schedule"),
+    ("Clinic", "Clinic"),
+    ("MA Lead", "MA Lead"),
+    ("Family", "Family Schedule"),
+    ("Personal", "Personal"),
 )
 
 
@@ -233,6 +242,315 @@ def split_cases_by_status(case_list):
     return groups
 
 
+def overview_lane_order(workspace_context):
+    if workspace_context == "Clinical":
+        return ("Clinical", "Family", "Personal")
+    if workspace_context == "Personal":
+        return ("Personal", "Family", "Clinical")
+    return ("Personal", "Clinical", "Family")
+
+
+def build_planner_daily_overview(
+    active_tasks,
+    family_items,
+    workspace_context,
+    today,
+    attention_sort_key_fn,
+    lead_followups=(),
+    personal_goal_summary=None,
+):
+    def task_identity(task):
+        task_id = task.get("id")
+        if task_id is not None:
+            return ("id", task_id)
+        return ("object", id(task))
+
+    seen_task_ids = set()
+    unique_tasks = []
+    for task in active_tasks or []:
+        task_key = task_identity(task)
+        if task_key in seen_task_ids:
+            continue
+        seen_task_ids.add(task_key)
+        unique_tasks.append(task)
+
+    commitments = []
+    scheduled_task_ids = set()
+    for task in unique_tasks:
+        if today not in scheduled_date_range(task):
+            continue
+        scheduled_task_ids.add(task_identity(task))
+        commitments.append(
+            {
+                "kind": "task",
+                "id": task.get("id"),
+                "title": task.get("title") or "Untitled task",
+                "category": task.get("category") or "Task",
+                "date": today,
+                "time": task.get("scheduled_time"),
+                "minutes": task.get("scheduled_minutes"),
+                "due_date": task.get("due_date"),
+            }
+        )
+
+    seen_family_occurrences = set()
+    for item in family_items or []:
+        start_date = item.get("start_date")
+        end_date = item.get("end_date") or start_date
+        if (
+            not start_date
+            or not end_date
+            or not (start_date <= today <= end_date)
+            or str(item.get("status") or "planned").lower() in {"completed", "cancelled", "canceled"}
+        ):
+            continue
+        occurrence_key = (
+            item.get("notification_source_id") or item.get("item_id") or item.get("title"),
+            start_date,
+            item.get("occurrence_index", 0),
+        )
+        if occurrence_key in seen_family_occurrences:
+            continue
+        seen_family_occurrences.add(occurrence_key)
+        commitments.append(
+            {
+                "kind": "family",
+                "id": item.get("item_id"),
+                "title": item.get("title") or "Family commitment",
+                "category": "Family",
+                "date": today,
+                "time": item.get("start_time"),
+                "minutes": None,
+            }
+        )
+
+    commitments.sort(
+        key=lambda item: (
+            item["time"] is None,
+            item["time"] or time(23, 59),
+            item["category"],
+            item["title"].lower(),
+        )
+    )
+
+    if workspace_context == "Clinical":
+        preferred_category = "Clinic"
+    elif workspace_context == "Personal":
+        preferred_category = "Personal"
+    else:
+        preferred_category = None
+    preferred_tasks = [
+        task for task in unique_tasks
+        if preferred_category is None or task.get("category") == preferred_category
+    ]
+    ordered_preferred = sorted(
+        preferred_tasks,
+        key=lambda task: attention_sort_key_fn(task, today),
+    )
+    priority_tasks = [
+        task for task in ordered_preferred
+        if task_identity(task) not in scheduled_task_ids
+        and not (
+            task.get("due_date")
+            and task["due_date"] <= today + timedelta(days=7)
+        )
+    ][:3]
+    represented_task_ids = scheduled_task_ids.union(
+        task_identity(task) for task in priority_tasks
+    )
+
+    deadlines = sorted(
+        [
+            task for task in unique_tasks
+            if task.get("due_date")
+            and task["due_date"] <= today + timedelta(days=7)
+            and task_identity(task) not in represented_task_ids
+        ],
+        key=lambda task: (task["due_date"], attention_sort_key_fn(task, today)),
+    )[:5]
+    represented_task_ids.update(
+        task_identity(task) for task in deadlines
+    )
+
+    unfinished_tasks = [
+        task for task in sorted(unique_tasks, key=lambda task: attention_sort_key_fn(task, today))
+        if task_identity(task) not in represented_task_ids
+    ][:3]
+
+    followup_limit = today + timedelta(days=7)
+    due_followups = sorted(
+        [
+            item for item in (lead_followups or [])
+            if item.get("next_follow_up_date")
+            and item["next_follow_up_date"] <= followup_limit
+        ],
+        key=lambda item: (item["next_follow_up_date"], str(item.get("person_name") or "").lower()),
+    )[:3]
+    family_ids_today = {
+        (
+            item.get("notification_source_id") or item.get("item_id") or item.get("title"),
+            item.get("start_date"),
+        )
+        for item in (family_items or [])
+        if item.get("start_date") == today
+    }
+    upcoming_family = []
+    seen_upcoming_family = set()
+    for item in family_items or []:
+        start_date = item.get("start_date")
+        if not start_date or not today < start_date <= followup_limit:
+            continue
+        occurrence_key = (
+            item.get("notification_source_id") or item.get("item_id") or item.get("title"),
+            start_date,
+        )
+        if occurrence_key in family_ids_today or occurrence_key in seen_upcoming_family:
+            continue
+        if str(item.get("status") or "planned").lower() in {"completed", "cancelled", "canceled"}:
+            continue
+        seen_upcoming_family.add(occurrence_key)
+        upcoming_family.append(item)
+    upcoming_family.sort(
+        key=lambda item: (item["start_date"], item.get("start_time") or time(23, 59), item.get("title") or "")
+    )
+
+    goal_summary = personal_goal_summary or {}
+    goal = goal_summary.get("streak_leader") if workspace_context in {"Personal", "Balanced"} else None
+    return {
+        "workspace": workspace_context,
+        "commitments": commitments,
+        "priority_tasks": priority_tasks,
+        "deadlines": deadlines,
+        "unfinished_tasks": unfinished_tasks,
+        "lead_followups": due_followups,
+        "upcoming_family": upcoming_family[:3],
+        "personal_goal": goal,
+    }
+
+
+def render_planner_daily_overview(
+    daily_overview,
+    today,
+    panel_key,
+    st_module=st,
+):
+    st_module.markdown('<div class="panel">', unsafe_allow_html=True)
+    st_module.markdown(
+        f"<div class='panel-title'><h3>Today · {today.strftime('%A, %b %d')}</h3>"
+        f"<span>{daily_overview['workspace']} workspace · schedule, priorities, and due items</span></div>",
+        unsafe_allow_html=True,
+    )
+    st_module.caption("Today's schedule")
+    if daily_overview["commitments"]:
+        for item in daily_overview["commitments"][:8]:
+            item_time = item["time"].strftime("%I:%M %p").lstrip("0") if item["time"] else "Time not set"
+            duration = f" · {item['minutes']} min" if item["minutes"] else ""
+            due_label = (
+                f" · due {item['due_date']}"
+                if item.get("due_date")
+                else ""
+            )
+            st_module.write(
+                f"{item_time} · {item['title']} · {item['category']}{duration}{due_label}"
+            )
+        if len(daily_overview["commitments"]) > 8:
+            st_module.caption(
+                f"{len(daily_overview['commitments']) - 8} more commitments are listed in Schedule or Family."
+            )
+    else:
+        st_module.caption("No commitments are scheduled for today.")
+
+    summary_columns = st_module.columns(3, gap="medium")
+    with summary_columns[0]:
+        responsibility_heading = (
+            "Clinical priorities"
+            if daily_overview["workspace"] == "Clinical"
+            else "Personal priorities"
+            if daily_overview["workspace"] == "Personal"
+            else "Top responsibilities"
+        )
+        st_module.markdown(f"**{responsibility_heading}**")
+        responsibilities = daily_overview["priority_tasks"]
+        if responsibilities:
+            for task in responsibilities:
+                due_label = f" · due {task['due_date']}" if task.get("due_date") else ""
+                st_module.write(
+                    f"{task.get('title') or 'Untitled task'} · {task.get('category') or 'Task'}"
+                    f" · {str(task.get('priority') or 'medium').title()}{due_label}"
+                )
+        else:
+            st_module.caption("No unscheduled priorities in this workspace.")
+        if daily_overview["personal_goal"]:
+            goal = daily_overview["personal_goal"]
+            st_module.caption(
+                f"Personal goal: {goal.get('title') or 'Active goal'} "
+                f"({goal.get('week_checkins', 0)}/{goal.get('target_frequency', 1)} this week)"
+            )
+
+    with summary_columns[1]:
+        heading = (
+            "Clinic deadlines & MA Lead"
+            if daily_overview["workspace"] == "Clinical"
+            else "Deadlines · all contexts"
+        )
+        st_module.markdown(f"**{heading}**")
+        if daily_overview["workspace"] == "Clinical" and daily_overview["lead_followups"]:
+            for item in daily_overview["lead_followups"]:
+                st_module.write(
+                    f"MA Lead · {item.get('person_name') or 'Follow-up'} · {item['next_follow_up_date']}"
+                )
+        if daily_overview["deadlines"]:
+            for task in daily_overview["deadlines"]:
+                due_date = task.get("due_date")
+                due_label = "overdue" if due_date < today else "today" if due_date == today else str(due_date)
+                st_module.write(
+                    f"{task.get('title') or 'Untitled task'} · {task.get('category') or 'Task'} · {due_label}"
+                )
+        else:
+            st_module.caption("No task deadlines in the next seven days.")
+        if (
+            daily_overview["lead_followups"]
+            and daily_overview["workspace"] != "Clinical"
+        ):
+            for item in daily_overview["lead_followups"]:
+                st_module.write(
+                    f"MA Lead · {item.get('person_name') or 'Follow-up'} · {item['next_follow_up_date']}"
+                )
+        elif not daily_overview["lead_followups"]:
+            st_module.caption("No MA Lead follow-ups due in the next seven days.")
+
+    with summary_columns[2]:
+        st_module.markdown("**Unfinished responsibilities**")
+        if daily_overview["unfinished_tasks"]:
+            for task in daily_overview["unfinished_tasks"]:
+                due_label = f" · due {task['due_date']}" if task.get("due_date") else ""
+                st_module.write(
+                    f"{task.get('title') or 'Untitled task'} · {task.get('category') or 'Task'}{due_label}"
+                )
+        else:
+            st_module.caption("No other unfinished tasks need attention.")
+        if daily_overview["upcoming_family"]:
+            for item in daily_overview["upcoming_family"]:
+                item_time = item.get("start_time")
+                when = item_time.strftime("%I:%M %p").lstrip("0") if item_time else "Time not set"
+                st_module.write(
+                    f"Family · {item.get('title') or 'Commitment'} · "
+                    f"{item['start_date']} · {when}"
+                )
+
+    action_columns = st_module.columns(5)
+    for column, (label, page_name) in zip(action_columns, PLANNER_DAILY_NAVIGATION):
+        with column:
+            if st_module.button(
+                f"Open {label}",
+                key=f"{panel_key}_daily_open_{label.lower().replace(' ', '_')}",
+                use_container_width=True,
+            ):
+                st_module.session_state["current_page"] = page_name
+                st_module.rerun()
+    st_module.markdown("</div>", unsafe_allow_html=True)
+
+
 def render_overview_control_tower(
     tasks,
     active_tasks,
@@ -245,6 +563,89 @@ def render_overview_control_tower(
     panel_key,
     deps,
     st_module=st,
+    workspace_context="Balanced",
+    daily_overview=False,
+    unfiltered_active_tasks=None,
+    personal_goal_summary=None,
+):
+    if daily_overview:
+        today = mountain_today()
+        family_items = (
+            deps["normalize_family_schedule_items"](app_settings.get("family_schedule_items") or [])
+            if deps.get("normalize_family_schedule_items")
+            else []
+        )
+        family_summary = (
+            deps["weekly_family_schedule_summary"](family_items, end_day=today, window_days=14)
+            if deps.get("weekly_family_schedule_summary")
+            else {"upcoming_items": family_items}
+        )
+        lead_followups = (
+            deps["load_lead_relationship_touchpoints"]()
+            if deps.get("load_lead_relationship_touchpoints")
+            else []
+        )
+        daily_summary = build_planner_daily_overview(
+            unfiltered_active_tasks if unfiltered_active_tasks is not None else active_tasks,
+            family_summary.get("upcoming_items") or [],
+            workspace_context,
+            today,
+            deps["task_attention_sort_key"],
+            lead_followups=lead_followups,
+            personal_goal_summary=personal_goal_summary,
+        )
+        render_planner_daily_overview(
+            daily_summary,
+            today,
+            panel_key=f"{panel_key}_daily",
+            st_module=st_module,
+        )
+        with st_module.expander("Detailed overview and quick actions", expanded=False):
+            _render_overview_control_tower_details(
+                tasks,
+                active_tasks,
+                completed_today_all,
+                personal_tasks,
+                clinic_tasks,
+                scheduled_tasks,
+                app_settings,
+                overview_settings,
+                panel_key,
+                deps,
+                st_module=st_module,
+                workspace_context=workspace_context,
+            )
+        return
+
+    _render_overview_control_tower_details(
+        tasks,
+        active_tasks,
+        completed_today_all,
+        personal_tasks,
+        clinic_tasks,
+        scheduled_tasks,
+        app_settings,
+        overview_settings,
+        panel_key,
+        deps,
+        st_module=st_module,
+        workspace_context=workspace_context,
+    )
+
+
+def _render_overview_control_tower_details(
+    tasks,
+    active_tasks,
+    completed_today_all,
+    personal_tasks,
+    clinic_tasks,
+    scheduled_tasks,
+    app_settings,
+    overview_settings,
+    panel_key,
+    deps,
+    st_module=st,
+    workspace_context="Balanced",
 ):
     today = mountain_today()
     lens_key = f"{panel_key}_lens"
@@ -322,8 +723,10 @@ def render_overview_control_tower(
         unsafe_allow_html=True,
     )
 
-    lane_top = st_module.columns(3, gap="large")
-    with lane_top[0]:
+    lane_columns = dict(
+        zip(overview_lane_order(workspace_context), st_module.columns(3, gap="large"))
+    )
+    with lane_columns["Personal"]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Personal Lane</h3><span>What needs your attention first</span></div>', unsafe_allow_html=True)
         st_module.markdown(
@@ -343,7 +746,7 @@ def render_overview_control_tower(
             st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
-    with lane_top[1]:
+    with lane_columns["Clinical"]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Clinical Lane</h3><span>Outpatient flow and task pressure</span></div>', unsafe_allow_html=True)
         st_module.markdown(
@@ -363,7 +766,7 @@ def render_overview_control_tower(
             st_module.rerun()
         st_module.markdown('</div>', unsafe_allow_html=True)
 
-    with lane_top[2]:
+    with lane_columns["Family"]:
         st_module.markdown('<div class="panel">', unsafe_allow_html=True)
         st_module.markdown('<div class="panel-title"><h3>Family Lane</h3><span>Schedules, trips, camps, and shared planning</span></div>', unsafe_allow_html=True)
         st_module.markdown(

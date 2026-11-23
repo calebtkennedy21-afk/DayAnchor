@@ -11,6 +11,89 @@ def mountain_today():
     return datetime.now(MOUNTAIN_TIMEZONE).date()
 
 
+PLANNER_WORKSPACE_MODES = ("Auto", "Clinical", "Personal")
+PLANNER_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+
+
+def ensure_planner_workspace_mode(session_state):
+    mode = session_state.get("planner_workspace_mode")
+    if mode not in PLANNER_WORKSPACE_MODES:
+        mode = "Auto"
+        session_state["planner_workspace_mode"] = mode
+    return mode
+
+
+def _workspace_date(current_date):
+    if isinstance(current_date, datetime):
+        if current_date.tzinfo is None:
+            return current_date.date()
+        return current_date.astimezone(MOUNTAIN_TIMEZONE).date()
+    if isinstance(current_date, date):
+        return current_date
+    return None
+
+
+def _valid_workspace_weekdays(value, allow_empty):
+    if not isinstance(value, (list, tuple)):
+        return None
+    if any(not isinstance(day, str) or day not in PLANNER_WEEKDAYS for day in value):
+        return None
+    if len(set(value)) != len(value) or (not allow_empty and not value):
+        return None
+    return set(value)
+
+
+def resolve_planner_workspace(
+    mode,
+    current_date,
+    clinic_weekdays,
+    schedule_confirmed,
+    admin_weekdays,
+):
+    if mode not in PLANNER_WORKSPACE_MODES:
+        mode = "Auto"
+    if mode != "Auto":
+        return {
+            "mode": mode,
+            "source": "manual",
+            "reason": f"{mode} workspace selected for this session.",
+        }
+
+    today = _workspace_date(current_date)
+    if today is None:
+        reason = "The current local date is unavailable."
+    elif schedule_confirmed is not True:
+        reason = "Confirm the recurring clinic schedule to enable automatic selection."
+    else:
+        clinic_days = _valid_workspace_weekdays(clinic_weekdays, allow_empty=False)
+        admin_days = _valid_workspace_weekdays(admin_weekdays, allow_empty=True)
+        if clinic_days is None or admin_days is None:
+            reason = "The recurring schedule is missing or contains invalid weekdays."
+        elif clinic_days.intersection(admin_days):
+            reason = "Clinic and admin weekdays conflict; review the schedule before using Auto."
+        else:
+            weekday = today.strftime("%A")
+            return {
+                "mode": "Clinical" if weekday in clinic_days else "Personal",
+                "source": "schedule",
+                "reason": (
+                    f"{weekday} is a confirmed clinic weekday."
+                    if weekday in clinic_days
+                    else f"{weekday} is a confirmed non-clinic weekday."
+                ),
+            }
+
+    return {"mode": "Balanced", "source": "unknown", "reason": reason}
+
+
+def preserve_clinic_schedule_confirmation(settings, clinic_weekdays, admin_weekdays):
+    return (
+        settings.get("overview_clinic_schedule_confirmed") is True
+        and settings.get("overview_clinic_weekdays") == clinic_weekdays
+        and settings.get("overview_admin_weekdays") == admin_weekdays
+    )
+
+
 def clinic_day_profiles(app_settings):
     patient_target = safe_int(app_settings.get("surgeon_clinic_patient_target", 25), 25)
     general_patient_target = safe_int(app_settings.get("general_clinic_patient_target", 25), 25)

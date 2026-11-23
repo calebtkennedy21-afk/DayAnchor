@@ -1,12 +1,210 @@
 import json
 import os
 from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass
+from enum import Enum
 from zoneinfo import ZoneInfo
 from urllib import error, parse, request
+import http.client
+import re
+import socket
 
 import autopilot
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
+
+
+class TelegramSendOutcome(str, Enum):
+    CONFIRMED_SUCCESS = "confirmed_success"
+    DEFINITE_TRANSIENT_FAILURE = "definite_transient_failure"
+    DEFINITE_PERMANENT_FAILURE = "definite_permanent_failure"
+    UNCERTAIN = "uncertain"
+
+
+@dataclass(frozen=True)
+class TelegramSendResult:
+    outcome: TelegramSendOutcome
+    message_id: int | None = None
+    http_status: int | None = None
+    telegram_error_code: int | None = None
+    telegram_description: str | None = None
+    retry_after: int | None = None
+    error_details: str | None = None
+
+
+_TOKEN_PATTERN = re.compile(r"\b\d{5,}:[A-Za-z0-9_-]{20,}\b")
+_PERMANENT_TELEGRAM_ERRORS = (
+    "unauthorized",
+    "chat not found",
+    "bot was blocked by the user",
+    "user is deactivated",
+    "bot can't initiate conversation",
+    "bot cannot initiate conversation",
+    "not enough rights to send",
+    "have no rights to send",
+    "can't parse entities",
+    "message is too long",
+)
+
+
+def _safe_telegram_text(value, token="", limit=500):
+    text = str(value or "")
+    if token:
+        text = text.replace(token, "[redacted]")
+    text = _TOKEN_PATTERN.sub("[redacted]", text)
+    return text[:limit]
+
+
+def _telegram_error_fields(body):
+    if not isinstance(body, dict):
+        return None, None, None
+    code = body.get("error_code")
+    if type(code) is not int:
+        code = None
+    description = body.get("description")
+    if not isinstance(description, str):
+        description = None
+    retry_after = None
+    parameters = body.get("parameters")
+    if isinstance(parameters, dict):
+        value = parameters.get("retry_after")
+        if type(value) is int and value >= 0:
+            retry_after = value
+    return code, description, retry_after
+
+
+def _classify_telegram_rejection(http_status, body, token=""):
+    error_code, description, retry_after = _telegram_error_fields(body)
+    if isinstance(http_status, int) and 500 <= http_status < 600:
+        return TelegramSendResult(
+            TelegramSendOutcome.UNCERTAIN,
+            http_status=http_status,
+            telegram_error_code=error_code,
+            telegram_description=_safe_telegram_text(description, token) if description else None,
+            error_details=_safe_telegram_text(description or f"Telegram server error (HTTP {http_status}).", token),
+        )
+    if http_status == 429 or error_code == 429:
+        return TelegramSendResult(
+            TelegramSendOutcome.DEFINITE_TRANSIENT_FAILURE,
+            http_status=http_status,
+            telegram_error_code=error_code,
+            telegram_description=_safe_telegram_text(description, token) if description else None,
+            retry_after=retry_after,
+            error_details=_safe_telegram_text(description or "Telegram rate limited the request.", token),
+        )
+
+    normalized_description = (description or "").lower()
+    permanent = (
+        error_code in {400, 401, 403}
+        and any(marker in normalized_description for marker in _PERMANENT_TELEGRAM_ERRORS)
+    )
+    if permanent:
+        return TelegramSendResult(
+            TelegramSendOutcome.DEFINITE_PERMANENT_FAILURE,
+            http_status=http_status,
+            telegram_error_code=error_code,
+            telegram_description=_safe_telegram_text(description, token),
+            error_details=_safe_telegram_text(description, token),
+        )
+
+    return TelegramSendResult(
+        TelegramSendOutcome.UNCERTAIN,
+        http_status=http_status,
+        telegram_error_code=error_code,
+        telegram_description=_safe_telegram_text(description, token) if description else None,
+        retry_after=retry_after,
+        error_details=_safe_telegram_text(description or f"Unclassified Telegram response (HTTP {http_status}).", token),
+    )
+
+
+def send_telegram_message_typed(config, message, reply_markup=None, timeout=10):
+    """Send via sendMessage and return structured evidence for a durable dispatcher.
+
+    This API is intentionally separate from send_telegram_message(), whose
+    legacy (success, error_text) return contract remains unchanged.
+    """
+    token = str(config.get("bot_token") or "").strip()
+    chat_id = str(config.get("chat_id") or "").strip()
+    if not token or not chat_id:
+        return TelegramSendResult(
+            TelegramSendOutcome.DEFINITE_PERMANENT_FAILURE,
+            error_details="Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID.",
+        )
+
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "disable_web_page_preview": True,
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    req = request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            http_status = response.getcode()
+            raw_body = response.read()
+    except error.HTTPError as exc:
+        http_status = exc.code
+        try:
+            raw_body = exc.read()
+        except (OSError, http.client.HTTPException):
+            raw_body = b""
+        try:
+            body = json.loads(raw_body.decode("utf-8", errors="replace"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            body = None
+        return _classify_telegram_rejection(http_status, body, token)
+    except (TimeoutError, socket.timeout, ConnectionError, OSError, error.URLError, http.client.HTTPException) as exc:
+        detail = getattr(exc, "reason", None) or exc
+        return TelegramSendResult(
+            TelegramSendOutcome.UNCERTAIN,
+            error_details=_safe_telegram_text(detail, token),
+        )
+
+    if not isinstance(http_status, int) or not 200 <= http_status < 300:
+        return _classify_telegram_rejection(
+            http_status if isinstance(http_status, int) else None,
+            None,
+            token,
+        )
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return TelegramSendResult(
+            TelegramSendOutcome.UNCERTAIN,
+            http_status=http_status,
+            error_details="Telegram returned a malformed or incomplete JSON response.",
+        )
+
+    if not isinstance(body, dict):
+        return TelegramSendResult(
+            TelegramSendOutcome.UNCERTAIN,
+            http_status=http_status,
+            error_details="Telegram returned an unexpected response shape.",
+        )
+    if body.get("ok") is not True:
+        return _classify_telegram_rejection(http_status, body, token)
+
+    result = body.get("result")
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    if type(message_id) is not int or message_id < 1:
+        return TelegramSendResult(
+            TelegramSendOutcome.UNCERTAIN,
+            http_status=http_status,
+            error_details="Telegram success response did not contain a valid message ID.",
+        )
+    return TelegramSendResult(
+        TelegramSendOutcome.CONFIRMED_SUCCESS,
+        message_id=message_id,
+        http_status=http_status,
+    )
 
 
 def _as_bool(value, default=False):

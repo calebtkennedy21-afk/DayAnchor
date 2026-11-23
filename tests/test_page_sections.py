@@ -5,6 +5,7 @@ from page_sections import (
     case_library_filter_preset_values,
     case_matches_library_filters,
     case_stream_options,
+    overview_lane_order,
     surgical_case_checklist_summary,
     split_cases_by_status,
 )
@@ -163,3 +164,14 @@ def test_split_cases_by_status_groups_expected_cases():
     assert [item["id"] for item in groups["planned"]] == [1, 4]
     assert [item["id"] for item in groups["completed"]] == [2]
     assert [item["id"] for item in groups["canceled"]] == [3]
+
+
+def test_overview_lane_order_emphasizes_context_without_hiding_other_lanes():
+    clinical = overview_lane_order("Clinical")
+    personal = overview_lane_order("Personal")
+    balanced = overview_lane_order("Balanced")
+
+    assert clinical == ("Clinical", "Family", "Personal")
+    assert personal == ("Personal", "Family", "Clinical")
+    assert balanced == ("Personal", "Clinical", "Family")
+    assert set(clinical) == set(personal) == set(balanced)

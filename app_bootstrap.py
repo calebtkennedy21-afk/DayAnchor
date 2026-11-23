@@ -4,6 +4,13 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+import notification_identity
+from overview_core import (
+    PLANNER_WEEKDAYS,
+    ensure_planner_workspace_mode,
+    resolve_planner_workspace,
+)
+
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
@@ -197,9 +204,11 @@ def run_app(context, st_module=st):
                 st_module.warning("Add reminder text before saving.")
             else:
                 now_iso = datetime.now(MOUNTAIN_TIMEZONE).isoformat(timespec="seconds")
+                reminder_id = notification_identity.new_notification_source_id()
                 reminders.append(
                     {
-                        "reminder_id": f"quick_{datetime.now(MOUNTAIN_TIMEZONE).strftime('%Y%m%d%H%M%S%f')}",
+                        "reminder_id": reminder_id,
+                        "notification_source_id": reminder_id,
                         "text": reminder_text.strip(),
                         "category": reminder_category,
                         "notes": reminder_notes.strip(),
@@ -798,8 +807,117 @@ def run_app(context, st_module=st):
     if current_page == "Planner":
         render_page_banner("ai", "Planner System", "Create plans, prioritize, schedule work, and apply AI task suggestions.")
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
+        workspace_mode = ensure_planner_workspace_mode(st_module.session_state)
+        workspace_mode = st_module.selectbox(
+            "Planner workspace",
+            ["Auto", "Clinical", "Personal"],
+            key="planner_workspace_mode",
+            help="Auto uses only your explicitly confirmed recurring clinic weekdays.",
+        )
+        workspace = resolve_planner_workspace(
+            workspace_mode,
+            mountain_today(),
+            app_settings.get("overview_clinic_weekdays"),
+            app_settings.get("overview_clinic_schedule_confirmed"),
+            app_settings.get("overview_admin_weekdays"),
+        )
+        if workspace["mode"] == "Balanced":
+            st_module.info(f"Balanced workspace · {workspace['reason']}")
+        else:
+            st_module.caption(f"{workspace['mode']} workspace · {workspace['reason']}")
+
+        raw_clinic_weekdays = app_settings.get("overview_clinic_weekdays")
+        clinic_weekdays_valid = (
+            isinstance(raw_clinic_weekdays, (list, tuple))
+            and bool(raw_clinic_weekdays)
+            and all(isinstance(day, str) and day in PLANNER_WEEKDAYS for day in raw_clinic_weekdays)
+        )
+        if clinic_weekdays_valid:
+            clinic_weekdays_valid = len(set(raw_clinic_weekdays)) == len(raw_clinic_weekdays)
+        clinic_weekdays = raw_clinic_weekdays if isinstance(raw_clinic_weekdays, (list, tuple)) else []
+        clinic_weekdays = [day for day in PLANNER_WEEKDAYS if day in clinic_weekdays]
+        raw_admin_weekdays = app_settings.get("overview_admin_weekdays")
+        admin_weekdays_valid = (
+            isinstance(raw_admin_weekdays, (list, tuple))
+            and all(isinstance(day, str) and day in PLANNER_WEEKDAYS for day in raw_admin_weekdays)
+        )
+        if admin_weekdays_valid:
+            admin_weekdays_valid = len(set(raw_admin_weekdays)) == len(raw_admin_weekdays)
+        admin_weekdays = raw_admin_weekdays if isinstance(raw_admin_weekdays, (list, tuple)) else []
+        admin_weekdays = [day for day in PLANNER_WEEKDAYS if day in admin_weekdays]
+        clinic_widget_key = f"planner_confirm_clinic_{'_'.join(clinic_weekdays) or 'none'}"
+        admin_widget_key = f"planner_confirm_admin_{'_'.join(admin_weekdays) or 'none'}"
+        schedule_confirmed = app_settings.get("overview_clinic_schedule_confirmed") is True
+        with st_module.expander(
+            "Confirm recurring work schedule",
+            expanded=not schedule_confirmed,
+        ):
+            st_module.caption(
+                "Saved clinic weekdays: "
+                f"{', '.join(clinic_weekdays) if clinic_weekdays else 'none'}"
+            )
+            st_module.caption(
+                "Automatic selection stays balanced until this schedule is durably confirmed."
+            )
+            if not clinic_weekdays_valid or not admin_weekdays_valid:
+                st_module.warning(
+                    "The saved weekday configuration is invalid. Review both weekday lists before confirming."
+                )
+            with st_module.form("planner_confirm_schedule_form"):
+                confirmed_clinic_weekdays = st_module.multiselect(
+                    "Recurring clinic weekdays",
+                    PLANNER_WEEKDAYS,
+                    default=clinic_weekdays,
+                    key=clinic_widget_key,
+                )
+                confirmed_admin_weekdays = st_module.multiselect(
+                    "Admin weekdays",
+                    PLANNER_WEEKDAYS,
+                    default=admin_weekdays,
+                    key=admin_widget_key,
+                )
+                confirm_schedule = st_module.form_submit_button(
+                    "Update confirmed schedule" if schedule_confirmed else "Confirm schedule",
+                    type="primary",
+                )
+            if confirm_schedule:
+                if not confirmed_clinic_weekdays:
+                    st_module.warning("Select at least one recurring clinic weekday before confirming.")
+                elif set(confirmed_clinic_weekdays).intersection(confirmed_admin_weekdays):
+                    st_module.warning(
+                        "A weekday cannot be configured as both clinic and admin. Resolve the overlap before confirming."
+                    )
+                else:
+                    save_result = save_app_settings(
+                        {
+                            **app_settings,
+                            "overview_clinic_weekdays": confirmed_clinic_weekdays,
+                            "overview_admin_weekdays": confirmed_admin_weekdays,
+                            "overview_clinic_schedule_confirmed": True,
+                        },
+                        require_durable=True,
+                    )
+                    if save_result.status == "persisted":
+                        app_settings = save_result
+                        st_module.success("Recurring work schedule confirmed and saved.")
+                        st_module.rerun()
+
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="planner_system_overview")
+        render_overview_control_tower(
+            tasks,
+            active_tasks,
+            completed_today_all,
+            personal_tasks,
+            clinic_tasks,
+            scheduled_tasks,
+            app_settings,
+            overview_settings,
+            panel_key="planner_system_overview",
+            workspace_context=workspace["mode"],
+            daily_overview=True,
+            unfiltered_active_tasks=all_active_tasks,
+            personal_goal_summary=personal_goal_summary,
+        )
         if render_planner_brain_queue:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_planner_brain_queue(active_tasks, app_settings, panel_key="planner_system_brain_queue")

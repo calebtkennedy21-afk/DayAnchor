@@ -5,7 +5,8 @@ import os
 import signal
 import time as time_module
 from calendar import monthrange
-from datetime import date, datetime, time, timedelta
+from copy import deepcopy
+from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
@@ -13,7 +14,9 @@ import psycopg
 from psycopg.rows import dict_row
 
 import autopilot
+import notification_identity
 import staging_database
+import settings_persistence
 import telegram_alerts
 import telegram_inbox
 
@@ -95,6 +98,7 @@ def _normalize_reminders(raw_reminders):
         if not isinstance(item, dict):
             continue
         reminder = dict(item)
+        reminder["notification_source_id"] = notification_identity.notification_source_id(item, "reminder_id")
         reminder["remind_date"] = _parse_date(reminder.get("remind_date") or reminder.get("due_date"))
         reminder["remind_time"] = _parse_time(reminder.get("remind_time") or reminder.get("due_time"))
         normalized.append(reminder)
@@ -129,6 +133,7 @@ def _expand_family_items(raw_items, anchor_day, window_days=3):
                 expanded.append(
                     {
                         "item_id": str(raw_item.get("item_id") or f"family_{index}_{start_date.isoformat()}_{title}"),
+                        "notification_source_id": notification_identity.notification_source_id(raw_item, "item_id"),
                         "title": title,
                         "item_type": str(raw_item.get("item_type") or raw_item.get("category") or "Appointment"),
                         "status": str(raw_item.get("status") or "planned"),
@@ -172,18 +177,168 @@ def load_state(connection):
     return tasks, settings
 
 
-def save_alert_state(connection, settings):
-    payload = json.dumps(settings, default=str)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO app_settings (id, payload, updated_at)
-            VALUES (1, %s, NOW())
-            ON CONFLICT (id)
-            DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
-            """,
-            (payload,),
+class SchedulerSettingsPersistenceError(RuntimeError):
+    """Raised when scheduler operational state cannot be safely persisted."""
+
+
+def _utc_datetime(value):
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _merge_alert_history(current, baseline, desired):
+    if not all(isinstance(value, dict) for value in (current, baseline, desired)):
+        raise ValueError("Telegram alert history must be a mapping.")
+
+    merged = dict(current)
+    missing = object()
+    for key in set(baseline) | set(desired):
+        before = baseline.get(key, missing)
+        after = desired.get(key, missing)
+        if before == after:
+            continue
+        present = merged.get(key, missing)
+        if after is missing:
+            if present == before:
+                merged.pop(key, None)
+        elif present is missing or present == before or present == after:
+            merged[key] = after
+    return merged
+
+
+def _merge_pending_notifications(current, baseline, desired):
+    if not all(
+        values is None or isinstance(values, list)
+        for values in (current, baseline, desired)
+    ):
+        raise ValueError("Pending autopilot notifications must be lists.")
+    current = list(current or [])
+    baseline = list(baseline or [])
+    desired = list(desired or [])
+
+    remaining = list(current)
+    removed = {}
+    for value in baseline:
+        removed[value] = removed.get(value, 0) + 1
+    for value in desired:
+        if removed.get(value, 0):
+            removed[value] -= 1
+    for value, count in removed.items():
+        for _ in range(count):
+            if value in remaining:
+                remaining.remove(value)
+
+    additions = {}
+    for value in desired:
+        additions[value] = additions.get(value, 0) + 1
+    for value in baseline:
+        if additions.get(value, 0):
+            additions[value] -= 1
+    for value, count in additions.items():
+        if count and value not in remaining:
+            remaining.extend([value] * count)
+    return remaining
+
+
+def _merge_operational_settings(current, baseline, desired):
+    """Apply only scheduler-owned deltas to a newly read durable payload."""
+    if not all(isinstance(value, dict) for value in (current, baseline, desired)):
+        raise ValueError("Scheduler settings snapshots must be mappings.")
+
+    merged = dict(current)
+    for key in ("telegram_alert_history",):
+        before = baseline.get(key, {})
+        after = desired.get(key, before)
+        if after != before:
+            merged[key] = _merge_alert_history(merged.get(key, {}), before, after)
+
+    before_pending = baseline.get("autopilot_pending_notify", [])
+    after_pending = desired.get("autopilot_pending_notify", before_pending)
+    if after_pending != before_pending:
+        merged["autopilot_pending_notify"] = _merge_pending_notifications(
+            merged.get("autopilot_pending_notify", []),
+            before_pending,
+            after_pending,
         )
+
+    before_offset = baseline.get("telegram_update_offset")
+    after_offset = desired.get("telegram_update_offset", before_offset)
+    if after_offset != before_offset:
+        try:
+            parsed_after = int(after_offset)
+            parsed_current = int(merged.get("telegram_update_offset"))
+        except (TypeError, ValueError):
+            if merged.get("telegram_update_offset", before_offset) == before_offset:
+                merged["telegram_update_offset"] = after_offset
+        else:
+            merged["telegram_update_offset"] = max(parsed_after, parsed_current)
+
+    before_checked = baseline.get("telegram_last_checked_at")
+    after_checked = desired.get("telegram_last_checked_at", before_checked)
+    if after_checked != before_checked:
+        current_checked = merged.get("telegram_last_checked_at", before_checked)
+        if current_checked == before_checked:
+            merged["telegram_last_checked_at"] = after_checked
+        else:
+            current_dt = _utc_datetime(current_checked)
+            desired_dt = _utc_datetime(after_checked)
+            if current_dt is not None and desired_dt is not None and desired_dt > current_dt:
+                merged["telegram_last_checked_at"] = after_checked
+    return merged
+
+
+def save_alert_state(connection, settings, baseline_settings, max_attempts=3):
+    """CAS-merge scheduler-owned deltas without replacing unrelated user settings."""
+    if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
+        raise ValueError("max_attempts must be between 1 and 5.")
+    if not isinstance(baseline_settings, dict) or not isinstance(settings, dict):
+        raise ValueError("Scheduler settings and baseline must be mappings.")
+    if connection is None or connection.closed:
+        raise SchedulerSettingsPersistenceError(
+            "Scheduler state could not be saved because the database connection is unavailable."
+        )
+
+    try:
+        for _ in range(max_attempts):
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SELECT payload FROM app_settings WHERE id = 1")
+                row = cursor.fetchone()
+                current_payload = row["payload"] if row else None
+                if current_payload:
+                    current_settings = json.loads(current_payload)
+                    if not isinstance(current_settings, dict):
+                        raise ValueError("Durable app settings payload must be a JSON object.")
+                else:
+                    current_settings = {}
+
+                merged = _merge_operational_settings(
+                    current_settings,
+                    baseline_settings,
+                    settings,
+                )
+                payload_text = json.dumps(merged, default=str)
+                if settings_persistence.compare_and_swap_payload(
+                    cursor,
+                    payload_text,
+                    current_payload,
+                ):
+                    return
+        connection.rollback()
+        raise SchedulerSettingsPersistenceError(
+            "Scheduler state was not saved because app settings kept changing."
+        )
+    except SchedulerSettingsPersistenceError:
+        raise
+    except (psycopg.Error, TypeError, ValueError, json.JSONDecodeError, AttributeError) as exc:
+        connection.rollback()
+        raise SchedulerSettingsPersistenceError(
+            "Scheduler state could not be safely persisted."
+        ) from exc
 
 
 def run_autopilot_rollover(connection, tasks, settings, now_local, notify=False):
@@ -231,6 +386,7 @@ def run_once(connection=None):
 
     try:
         tasks, settings = load_state(connection)
+        baseline_settings = deepcopy(settings)
         config = telegram_alerts.build_telegram_config(settings, os.environ)
 
         try:
@@ -286,7 +442,7 @@ def run_once(connection=None):
 
         settings["telegram_alert_history"] = telegram_alerts.prune_alert_history(history, now_value=now_local)
         settings["telegram_last_checked_at"] = now_local.isoformat(timespec="seconds")
-        save_alert_state(connection, settings)
+        save_alert_state(connection, settings, baseline_settings)
         connection.commit()
         return {
             "skipped": False,

@@ -47,6 +47,8 @@ def valid_configuration(auth, owner_subject):
 
 
 def authorized_identity(identity, owner_subject, client_id, now=None):
+    if not isinstance(identity, Mapping):
+        return False
     if identity.get("is_logged_in") is not True:
         return False
     subject = identity.get("sub")

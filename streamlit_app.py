@@ -59,6 +59,7 @@ from overview_core import (
     clinic_day_summary,
     overview_runtime_settings,
     personal_focus_summary,
+    preserve_clinic_schedule_confirmation,
     resolve_overview_day_context,
     schedule_workload_snapshot,
 )
@@ -66,12 +67,14 @@ import page_renderers
 import page_sections
 import telegram_alerts
 import telegram_inbox
+import notification_identity
 import workout_core
 import workout_page
 from brain_dump_core import parse_brain_dump
 import brain_dump_ui
 from brain_dump_ui import apply_brain_dump_decision
 from settings_serialization import dumps_json_safe
+import settings_persistence
 from scheduling_core import (
     build_week_rebalance_moves,
     clinic_visit_templates,
@@ -223,6 +226,7 @@ DEFAULT_APP_SETTINGS = {
     "overview_shift_minutes": 480,
     "overview_focus_window_minutes": 90,
     "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+    "overview_clinic_schedule_confirmed": False,
     "overview_admin_weekdays": ["Monday", "Friday"],
     "calendar_weekday_assignments": {
         "Monday": ["Office day"],
@@ -1518,6 +1522,7 @@ def normalize_family_schedule_items(raw_items):
         normalized.append(
             {
                 "item_id": str(raw_item.get("item_id") or f"family_{source_index}_{start_date.isoformat()}_{title.lower().replace(' ', '_')}").strip(),
+                "notification_source_id": notification_identity.notification_source_id(raw_item, "item_id"),
                 "source_index": source_index,
                 "title": title,
                 "item_type": item_type,
@@ -1724,6 +1729,7 @@ def normalize_quick_reminders(raw_reminders):
         normalized.append(
             {
                 "reminder_id": str(raw_item.get("reminder_id") or f"quick_reminder_{source_index}_{text.lower().replace(' ', '_')}").strip(),
+                "notification_source_id": notification_identity.notification_source_id(raw_item, "reminder_id"),
                 "source_index": source_index,
                 "text": text,
                 "category": str(raw_item.get("category") or "General").strip() or "General",
@@ -4218,27 +4224,11 @@ def _persist_settings_candidate(merged, expected_payload, baseline_known, pendin
                         "Settings changed in the database since this draft was created. No changes were saved; review the current settings and pending draft before reconciling.",
                     )
 
-                if expected_payload is None:
-                    cur.execute(
-                        """
-                        INSERT INTO app_settings (id, payload, updated_at)
-                        VALUES (1, %s, NOW())
-                        ON CONFLICT (id) DO NOTHING
-                        RETURNING id
-                        """,
-                        (payload_text,),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        UPDATE app_settings
-                        SET payload = %s, updated_at = NOW()
-                        WHERE id = 1 AND payload = %s
-                        RETURNING id
-                        """,
-                        (payload_text, expected_payload),
-                    )
-                if cur.fetchone() is None:
+                if not settings_persistence.compare_and_swap_payload(
+                    cur,
+                    payload_text,
+                    expected_payload,
+                ):
                     return SettingsSaveResult(
                         merged,
                         "conflict",
@@ -4279,7 +4269,34 @@ def _store_pending_settings_draft(merged, expected_payload, baseline_known, conf
     return pending
 
 
-def save_app_settings(settings):
+def backfill_notification_source_identities(settings):
+    baseline = st.session_state.get("app_settings_database_baseline") or {}
+    result = notification_identity.persist_notification_identity_backfill(
+        settings,
+        current_settings=st.session_state.get("app_settings"),
+        baseline=baseline,
+        database_available=db_enabled(),
+        pending_draft=st.session_state.get("pending_app_settings"),
+        persist=_persist_settings_candidate,
+    )
+    if result.status in {"failed", "conflict"} and result.settings != settings and db_enabled():
+        _store_pending_settings_draft(
+            result.settings,
+            baseline.get("payload"),
+            bool(baseline.get("known")),
+            conflict=result.status == "conflict",
+        )
+    if not result.durable_ready:
+        st.session_state["last_settings_save_result"] = SettingsSaveResult(
+            result.settings,
+            result.status,
+            result.message,
+        )
+        st.error(result.message)
+    return result
+
+
+def save_app_settings(settings, require_durable=False):
     merged = dict(DEFAULT_APP_SETTINGS)
     merged.update(settings)
     merged["feature_flags"] = normalize_feature_flags(merged.get("feature_flags"))
@@ -4291,13 +4308,19 @@ def save_app_settings(settings):
             "A pending settings draft must be reviewed or safely retried before another settings save.",
         )
         st.session_state["last_settings_save_result"] = result
+        if require_durable:
+            st.warning(result.message)
+            return result
         st.error(result.message)
         st.stop()
 
     if not db_enabled():
-        st.session_state["app_settings"] = merged
         result = SettingsSaveResult(merged, "session_only", "Settings are available only for this session.")
         st.session_state["last_settings_save_result"] = result
+        if require_durable:
+            st.warning("Automatic schedule detection is not durably configured because the database is unavailable.")
+            return result
+        st.session_state["app_settings"] = merged
         st.info(result.message)
         st.stop()
 
@@ -4310,12 +4333,20 @@ def save_app_settings(settings):
         return result
 
     _store_pending_settings_draft(
-        merged,
+        {
+            **merged,
+            "overview_clinic_schedule_confirmed": False,
+        } if require_durable else merged,
         expected_payload,
         baseline_known,
         conflict=result.status == "conflict",
     )
     st.session_state["last_settings_save_result"] = result
+    if require_durable:
+        st.warning(
+            "Automatic schedule detection is not durably configured. The schedule remains unconfirmed until a durable save succeeds."
+        )
+        return result
     st.error(result.message)
     st.stop()
 
@@ -5934,6 +5965,11 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
     st.session_state[settings_key] = updated
 
     if st.button("Save overview defaults", key=f"{panel_key}_save_overview_defaults", type="secondary"):
+        schedule_confirmation = preserve_clinic_schedule_confirmation(
+            app_settings,
+            updated["clinic_weekdays"],
+            updated["admin_weekdays"],
+        )
         app_settings = save_app_settings(
             {
                 **app_settings,
@@ -5946,6 +5982,7 @@ def render_overview_tuning_panel(app_settings, panel_key="overview"):
                 "overview_shift_minutes": updated["shift_minutes"],
                 "overview_focus_window_minutes": updated["focus_window_minutes"],
                 "overview_clinic_weekdays": updated["clinic_weekdays"],
+                "overview_clinic_schedule_confirmed": schedule_confirmation,
                 "overview_admin_weekdays": updated["admin_weekdays"],
                 "overview_procedure_friday_frequency_weeks": updated["procedure_friday_frequency_weeks"],
                 "overview_procedure_friday_cycle_offset": updated["procedure_friday_cycle_offset"],
@@ -7377,9 +7414,11 @@ def render_family_schedule_panel(active_tasks, app_settings, panel_key="family_s
                 deduped_checklist.append(item)
 
             updated_family_items = list(raw_family_items)
+            family_item_id = notification_identity.new_notification_source_id()
             updated_family_items.append(
                 {
-                    "item_id": uuid4().hex,
+                    "item_id": family_item_id,
+                    "notification_source_id": family_item_id,
                     "title": family_title.strip(),
                     "item_type": family_type,
                     "family_member": family_member.strip(),
@@ -8485,9 +8524,11 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
             st.warning("Add reminder text before saving.")
         else:
             updated_reminders = list(raw_quick_reminders)
+            reminder_id = notification_identity.new_notification_source_id()
             updated_reminders.append(
                 {
-                    "reminder_id": uuid4().hex,
+                    "reminder_id": reminder_id,
+                    "notification_source_id": reminder_id,
                     "text": reminder_text.strip(),
                     "category": reminder_category,
                     "notes": reminder_note.strip(),
@@ -15962,6 +16003,7 @@ page_shared_deps = {
     "schedule_workload_snapshot": schedule_workload_snapshot,
     "normalize_family_schedule_items": normalize_family_schedule_items,
     "weekly_family_schedule_summary": weekly_family_schedule_summary,
+    "load_lead_relationship_touchpoints": load_lead_relationship_touchpoints,
     "normalize_quick_reminders": normalize_quick_reminders,
     "format_due": format_due,
     "add_task": add_task,

@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import psycopg
 import pytest
 
+import notification_identity
 import settings_serialization
+import settings_persistence
 
 
 class SessionState(dict):
@@ -28,6 +30,9 @@ class FakeStreamlit:
 
     def info(self, message):
         self.messages.append(("info", message))
+
+    def warning(self, message):
+        self.messages.append(("warning", message))
 
     def error(self, message):
         self.messages.append(("error", message))
@@ -113,6 +118,7 @@ def _settings_functions():
         "load_app_settings",
         "_persist_settings_candidate",
         "_store_pending_settings_draft",
+        "backfill_notification_source_identities",
         "save_app_settings",
         "retry_pending_app_settings",
     }
@@ -141,6 +147,8 @@ def _app(st, db, enabled=True):
         "DEFAULT_APP_SETTINGS": {"feature_flags": {}},
         "normalize_feature_flags": lambda flags: dict(flags or {}),
         "dumps_json_safe": settings_serialization.dumps_json_safe,
+        "notification_identity": notification_identity,
+        "settings_persistence": settings_persistence,
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
     return namespace
@@ -179,6 +187,83 @@ def test_database_unavailable_save_is_explicitly_session_only():
     assert not any(kind == "success" for kind, _ in st.messages)
 
 
+def test_durable_schedule_confirmation_is_not_enabled_by_session_only_save():
+    committed = {
+        "feature_flags": {},
+        "overview_clinic_schedule_confirmed": False,
+    }
+    st = FakeStreamlit(app_settings=committed)
+    app = _app(st, SettingsDatabase(), enabled=False)
+
+    result = app["save_app_settings"](
+        {
+            **committed,
+            "overview_clinic_schedule_confirmed": True,
+            "overview_clinic_weekdays": ["Tuesday"],
+        },
+        require_durable=True,
+    )
+
+    assert result.status == "session_only"
+    assert st.session_state["app_settings"] == committed
+    assert st.session_state["last_settings_save_result"].status == "session_only"
+    assert any("not durably configured" in message for _, message in st.messages)
+
+
+def test_durable_schedule_confirmation_requires_successful_database_save():
+    committed = {
+        "feature_flags": {},
+        "overview_clinic_schedule_confirmed": False,
+        "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+        "overview_admin_weekdays": ["Monday", "Friday"],
+    }
+    st = FakeStreamlit(app_settings=committed)
+    db = SettingsDatabase(fail=True, payload=json.dumps(committed))
+    app = _app(st, db)
+    app["load_app_settings"]()
+
+    result = app["save_app_settings"](
+        {
+            **committed,
+            "overview_clinic_schedule_confirmed": True,
+            "overview_clinic_weekdays": ["Tuesday"],
+        },
+        require_durable=True,
+    )
+
+    assert result.status == "failed"
+    assert st.session_state["app_settings"] == committed
+    assert st.session_state["pending_app_settings"]["settings"]["overview_clinic_schedule_confirmed"] is False
+    assert json.loads(db.payload) == committed
+    assert not any(kind == "success" for kind, _ in st.messages)
+
+
+def test_durable_schedule_confirmation_is_enabled_after_database_save():
+    committed = {
+        "feature_flags": {},
+        "overview_clinic_schedule_confirmed": False,
+        "overview_clinic_weekdays": ["Tuesday", "Thursday"],
+        "overview_admin_weekdays": ["Monday", "Friday"],
+    }
+    st = FakeStreamlit(app_settings=committed)
+    db = SettingsDatabase(payload=json.dumps(committed))
+    app = _app(st, db)
+    app["load_app_settings"]()
+
+    result = app["save_app_settings"](
+        {
+            **committed,
+            "overview_clinic_schedule_confirmed": True,
+            "overview_clinic_weekdays": ["Tuesday"],
+        },
+        require_durable=True,
+    )
+
+    assert result.status == "persisted"
+    assert json.loads(db.payload)["overview_clinic_schedule_confirmed"] is True
+    assert st.session_state["app_settings"]["overview_clinic_schedule_confirmed"] is True
+
+
 def test_database_write_failure_preserves_committed_cache_and_pending_edits():
     committed = {"feature_flags": {}, "theme": "saved"}
     st = FakeStreamlit(app_settings=committed)
@@ -197,6 +282,80 @@ def test_database_write_failure_preserves_committed_cache_and_pending_edits():
     assert st.session_state["last_settings_save_result"].status == "failed"
     assert any(kind == "error" for kind, _ in st.messages)
     assert not any(kind == "success" for kind, _ in st.messages)
+
+
+def test_notification_identity_backfill_persists_through_settings_cas():
+    committed = {
+        "feature_flags": {},
+        "quick_reminders": [{"text": "Call back"}],
+        "family_schedule_items": [{"title": "Practice"}],
+    }
+    st = FakeStreamlit(app_settings=committed)
+    db = SettingsDatabase(payload=json.dumps(committed))
+    app = _app(st, db)
+    settings = app["load_app_settings"]()
+
+    result = app["backfill_notification_source_identities"](settings)
+
+    assert result.status == "persisted"
+    assert result.durable_ready is True
+    persisted = json.loads(db.payload)
+    assert persisted["quick_reminders"][0]["notification_source_id"]
+    assert persisted["family_schedule_items"][0]["notification_source_id"]
+    assert st.session_state["app_settings_database_baseline"]["payload"] == db.payload
+
+
+def test_notification_identity_backfill_cas_conflict_does_not_overwrite_newer_settings():
+    committed = {"feature_flags": {}, "quick_reminders": [{"text": "Call back"}]}
+    newer = {"feature_flags": {}, "theme": "newer", "quick_reminders": [{"text": "Changed"}]}
+    st = FakeStreamlit(app_settings=committed)
+    db = SettingsDatabase(
+        payload=json.dumps(committed),
+        after_select=lambda database: setattr(database, "payload", json.dumps(newer)),
+    )
+    app = _app(st, db)
+    settings = app["load_app_settings"]()
+
+    result = app["backfill_notification_source_identities"](settings)
+
+    assert result.status == "conflict"
+    assert result.durable_ready is False
+    assert db.payload == json.dumps(newer)
+    assert db.write_count == 0
+    assert st.session_state["pending_app_settings"]["conflict"] is True
+    assert not any(kind == "success" for kind, _ in st.messages)
+
+
+def test_failed_notification_identity_backfill_is_not_durable_ready():
+    committed = {"feature_flags": {}, "quick_reminders": [{"text": "Call back"}]}
+    st = FakeStreamlit(app_settings=committed)
+    db = SettingsDatabase(fail=True, payload=json.dumps(committed))
+    app = _app(st, db)
+    settings = app["load_app_settings"]()
+
+    result = app["backfill_notification_source_identities"](settings)
+
+    assert result.status == "failed"
+    assert result.durable_ready is False
+    assert "not ready for durable notification enqueueing" in result.message
+    assert db.payload == json.dumps(committed)
+    assert st.session_state["app_settings"] == committed
+    assert st.session_state["pending_app_settings"]["settings"]["quick_reminders"][0]["notification_source_id"]
+
+
+def test_session_only_notification_identity_backfill_is_not_durable_ready():
+    committed = {"feature_flags": {}, "quick_reminders": [{"text": "Call back"}]}
+    st = FakeStreamlit(app_settings=committed)
+    app = _app(st, SettingsDatabase(), enabled=False)
+    settings = app["load_app_settings"]()
+
+    result = app["backfill_notification_source_identities"](settings)
+
+    assert result.status == "session_only"
+    assert result.durable_ready is False
+    assert "not durable" in result.message
+    assert "notification_source_id" not in st.session_state["app_settings"]["quick_reminders"][0]
+    assert "notification_source_id" in result.settings["quick_reminders"][0]
 
 
 def test_serialization_failure_preserves_edits_without_exposing_exception():
