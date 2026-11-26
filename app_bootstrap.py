@@ -4,12 +4,57 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from overview_core import PLANNER_WEEKDAYS, ensure_planner_workspace_mode, resolve_planner_workspace
+
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Denver")
 
 
 def mountain_today():
     return datetime.now(MOUNTAIN_TIMEZONE).date()
+
+
+def render_planner_workspace(app_settings, today, st_module=st):
+    ensure_planner_workspace_mode(st_module.session_state)
+    workspace_mode = st_module.selectbox(
+        "Planner workspace",
+        ["Auto", "Clinical", "Personal"],
+        key="planner_workspace_mode",
+        help="Auto uses a recurring clinic schedule you confirm for this session.",
+    )
+    saved_clinic = app_settings.get("overview_clinic_weekdays")
+    saved_admin = app_settings.get("overview_admin_weekdays")
+    clinic_days = [day for day in PLANNER_WEEKDAYS if isinstance(saved_clinic, (list, tuple)) and day in saved_clinic]
+    admin_days = [day for day in PLANNER_WEEKDAYS if isinstance(saved_admin, (list, tuple)) and day in saved_admin]
+    with st_module.expander("Confirm recurring work schedule for this session"):
+        st_module.caption("Confirmation is temporary and does not change your saved schedule.")
+        with st_module.form("planner_confirm_schedule_form"):
+            confirmed_clinic = st_module.multiselect("Recurring clinic weekdays", PLANNER_WEEKDAYS, default=clinic_days)
+            confirmed_admin = st_module.multiselect("Admin weekdays", PLANNER_WEEKDAYS, default=admin_days)
+            confirm_schedule = st_module.form_submit_button("Confirm for this session")
+        if confirm_schedule:
+            if not confirmed_clinic:
+                st_module.warning("Select at least one recurring clinic weekday before confirming.")
+            elif set(confirmed_clinic).intersection(confirmed_admin):
+                st_module.warning("A weekday cannot be configured as both clinic and admin.")
+            else:
+                st_module.session_state["planner_session_schedule"] = {
+                    "clinic": confirmed_clinic,
+                    "admin": confirmed_admin,
+                }
+                st_module.rerun()
+    schedule = st_module.session_state.get("planner_session_schedule")
+    workspace = resolve_planner_workspace(
+        workspace_mode, today,
+        schedule["clinic"] if schedule else None,
+        schedule is not None,
+        schedule["admin"] if schedule else None,
+    )
+    if workspace["mode"] == "Balanced":
+        st_module.info(f"Balanced workspace · {workspace['reason']}")
+    else:
+        st_module.caption(f"{workspace['mode']} workspace · {workspace['reason']}")
+    return workspace
 
 
 def summarize_schedule_conflicts(scheduled_tasks, fallback_minutes=60, daily_capacity_minutes=480):
@@ -776,8 +821,14 @@ def run_app(context, st_module=st):
     if current_page == "Planner":
         render_page_banner("ai", "Planner System", "Create plans, prioritize, schedule work, and apply AI task suggestions.")
         overview_settings = st_module.session_state.get("overview_page_settings", overview_runtime_settings(app_settings))
+        workspace = render_planner_workspace(app_settings, mountain_today(), st_module=st_module)
         st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
-        render_overview_control_tower(tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks, scheduled_tasks, app_settings, overview_settings, panel_key="planner_system_overview")
+        render_overview_control_tower(
+            tasks, active_tasks, completed_today_all, personal_tasks, clinic_tasks,
+            scheduled_tasks, app_settings, overview_settings, panel_key="planner_system_overview",
+            workspace_context=workspace["mode"], daily_overview=True,
+            unfiltered_active_tasks=all_active_tasks, personal_goal_summary=personal_goal_summary,
+        )
         if render_planner_brain_queue:
             st_module.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
             render_planner_brain_queue(active_tasks, app_settings, panel_key="planner_system_brain_queue")

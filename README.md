@@ -3,6 +3,10 @@ Daily task app for personal and clinic responsibilities.
 
 ## Current State
 
+The Planner workspace offers Auto, Clinical, and Personal views and a daily
+overview. Auto stays balanced until the recurring work schedule is confirmed
+for the current session; confirmation does not change saved settings.
+
 The app now supports Postgres persistence using Railway-provided URL environment variables.
 If no database URL is found, the app falls back to session memory.
 

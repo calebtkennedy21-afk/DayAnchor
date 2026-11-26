@@ -15752,6 +15752,7 @@ page_shared_deps = {
     "schedule_workload_snapshot": schedule_workload_snapshot,
     "normalize_family_schedule_items": normalize_family_schedule_items,
     "weekly_family_schedule_summary": weekly_family_schedule_summary,
+    "load_lead_relationship_touchpoints": load_lead_relationship_touchpoints,
     "normalize_quick_reminders": normalize_quick_reminders,
     "format_due": format_due,
     "add_task": add_task,
