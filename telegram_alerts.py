@@ -123,6 +123,11 @@ def send_telegram_message_typed(config, message, reply_markup=None, timeout=10):
     This API is intentionally separate from send_telegram_message(), whose
     legacy (success, error_text) return contract remains unchanged.
     """
+    if telegram_disabled(config):
+        return TelegramSendResult(
+            TelegramSendOutcome.DEFINITE_TRANSIENT_FAILURE,
+            error_details="Telegram is disabled by deployment configuration.",
+        )
     token = str(config.get("bot_token") or "").strip()
     chat_id = str(config.get("chat_id") or "").strip()
     if not token or not chat_id:
@@ -220,6 +225,14 @@ def _as_bool(value, default=False):
     return default
 
 
+def telegram_disabled(config=None, environ=None):
+    env = os.environ if environ is None else environ
+    return bool((config or {}).get("disabled_by_env")) or (
+        "TELEGRAM_ALERTS_ENABLED" in env
+        and not _as_bool(env["TELEGRAM_ALERTS_ENABLED"])
+    )
+
+
 def _parse_time(raw_value, fallback):
     if isinstance(raw_value, time):
         return raw_value
@@ -250,13 +263,16 @@ def _time_label(value):
 
 def build_telegram_config(app_settings=None, environ=None):
     settings = app_settings or {}
-    env = environ or os.environ
+    env = os.environ if environ is None else environ
     token = str(env.get("TELEGRAM_BOT_TOKEN") or settings.get("telegram_bot_token") or "").strip()
     chat_id = str(settings.get("telegram_chat_id") or env.get("TELEGRAM_CHAT_ID") or "").strip()
     env_enabled = _as_bool(env.get("TELEGRAM_ALERTS_ENABLED"), default=False)
     settings_enabled = _as_bool(settings.get("telegram_alerts_enabled"), default=False)
-    enabled = settings_enabled or env_enabled
-    if settings_enabled and env_enabled:
+    disabled_by_env = telegram_disabled(environ=env)
+    enabled = not disabled_by_env and (settings_enabled or env_enabled)
+    if disabled_by_env:
+        enabled_source = "disabled_by_env"
+    elif settings_enabled and env_enabled:
         enabled_source = "settings+env"
     elif settings_enabled:
         enabled_source = "settings"
@@ -268,6 +284,7 @@ def build_telegram_config(app_settings=None, environ=None):
     return {
         "enabled": bool(enabled),
         "enabled_source": enabled_source,
+        "disabled_by_env": disabled_by_env,
         "enabled_from_settings": bool(settings_enabled),
         "enabled_from_env": bool(env_enabled),
         "bot_token": token,
@@ -527,6 +544,8 @@ def prune_alert_history(history, now_value=None, max_entries=2000, max_age_days=
 
 def call_api(config, method, payload, timeout=10):
     """Generic Telegram Bot API call. Returns (ok, result_or_error_text)."""
+    if telegram_disabled(config):
+        return False, "Telegram is disabled by deployment configuration."
     token = str(config.get("bot_token") or "").strip()
     if not token:
         return False, "Missing TELEGRAM_BOT_TOKEN."
@@ -550,6 +569,8 @@ def call_api(config, method, payload, timeout=10):
 
 
 def send_telegram_message(config, message, reply_markup=None):
+    if telegram_disabled(config):
+        return False, "Telegram is disabled by deployment configuration."
     token = str(config.get("bot_token") or "").strip()
     chat_id = str(config.get("chat_id") or "").strip()
     if not token or not chat_id:

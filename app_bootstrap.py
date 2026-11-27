@@ -556,7 +556,7 @@ def run_app(context, st_module=st):
 
         st_module.markdown("---")
         st_module.markdown("### My Apps")
-        st_module.link_button("📊 Signal Scanner", "https://tradingbot-production-ed44.up.railway.app/?auth=eyJlbWFpbCI6ImNhbGViLnQua2VubmVkeTIxQGdtYWlsLmNvbSIsImV4cCI6MTc3OTkzODAxNX0.2zIv6Ip3AFgaTsAHNWzYU9GhlKIGUq8f_B_gA-7nBKE", use_container_width=True)
+        st_module.link_button("📊 Signal Scanner", "https://tradingbot-production-ed44.up.railway.app/", use_container_width=True)
         st_module.link_button("💰 Budgeting Bot", "https://budgetingbot-production.up.railway.app/", use_container_width=True)
 
         if diagnostics_enabled:

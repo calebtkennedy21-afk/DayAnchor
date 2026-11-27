@@ -8408,6 +8408,7 @@ def render_notifications_panel(tasks, active_tasks, app_settings=None, panel_key
     telegram_cols[3].metric("Alert history", history_count)
 
     source_label_lookup = {
+        "disabled_by_env": "Disabled by ENV",
         "settings": "Settings",
         "env": "ENV",
         "settings+env": "Settings + ENV",

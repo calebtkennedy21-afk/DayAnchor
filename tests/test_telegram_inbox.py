@@ -98,3 +98,18 @@ def test_process_updates_reports_api_error_without_touching_offset():
         FakeConnection(), {"chat_id": CHAT}, settings, NOW, api=lambda *a, **k: (False, "HTTP 409")
     )
     assert result["error"] == "HTTP 409" and settings["telegram_update_offset"] == 5
+
+
+def test_disabled_telegram_blocks_inbound_processing_even_with_injected_api(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALERTS_ENABLED", "false")
+    settings = {"telegram_update_offset": 5, "telegram_alerts_enabled": True}
+    connection = FakeConnection()
+
+    def unexpected_api(*args, **kwargs):
+        raise AssertionError("Disabled Telegram must not poll for updates")
+
+    result = telegram_inbox.process_updates(connection, {"chat_id": CHAT}, settings, NOW, api=unexpected_api)
+    assert result["handled"] == 0
+    assert "disabled" in result["error"]
+    assert settings["telegram_update_offset"] == 5
+    assert connection.commits == 0

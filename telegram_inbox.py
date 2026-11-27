@@ -113,6 +113,9 @@ def handle_action(connection, action, now_local):
 def process_updates(connection, config, settings, now_local, api=telegram_alerts.call_api):
     """Poll for replies, act on them, and record the next update offset in settings."""
     result = {"handled": 0, "ignored": 0, "error": ""}
+    if telegram_alerts.telegram_disabled(config):
+        result["error"] = "Telegram is disabled by deployment configuration."
+        return result
     payload = {"timeout": 0, "limit": MAX_UPDATES_PER_RUN, "allowed_updates": ["message", "callback_query"]}
     try:
         offset = int(settings.get("telegram_update_offset") or 0)

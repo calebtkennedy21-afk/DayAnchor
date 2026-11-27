@@ -196,6 +196,51 @@ def test_legacy_send_message_return_contract_is_unchanged(monkeypatch):
     assert send_telegram_message(TELEGRAM_CONFIG, "Legacy caller") == (True, "")
 
 
+@pytest.mark.parametrize("disabled_value", ["false", "0", "no", "off", "", "invalid"])
+def test_telegram_disable_flag_overrides_saved_settings(disabled_value):
+    config = build_telegram_config(
+        {"telegram_alerts_enabled": True, "telegram_bot_token": "saved-token", "telegram_chat_id": "123"},
+        {"TELEGRAM_ALERTS_ENABLED": disabled_value},
+    )
+
+    assert config["enabled"] is False
+    assert config["disabled_by_env"] is True
+    assert config["enabled_source"] == "disabled_by_env"
+    assert config["bot_token"] == "saved-token"
+    assert config["chat_id"] == "123"
+
+
+def test_telegram_enable_behavior_is_preserved_when_flag_is_unset_or_true():
+    settings = {"telegram_alerts_enabled": True}
+    assert build_telegram_config(settings, {})["enabled"] is True
+    assert build_telegram_config({}, {"TELEGRAM_ALERTS_ENABLED": "true"})["enabled"] is True
+    assert build_telegram_config({}, {})["enabled"] is False
+
+
+def test_disabled_telegram_blocks_all_network_entry_points(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALERTS_ENABLED", "false")
+
+    def unexpected_network(*args, **kwargs):
+        pytest.fail("Disabled Telegram must not make network calls")
+
+    monkeypatch.setattr(telegram_alerts.request, "urlopen", unexpected_network)
+    config = {**TELEGRAM_CONFIG, "enabled": True}
+    ok, error_text = telegram_alerts.call_api(config, "getUpdates", {})
+    assert not ok and "disabled" in error_text
+    ok, error_text = send_telegram_message(config, "Manual test")
+    assert not ok and "disabled" in error_text
+    typed = send_telegram_message_typed(config, "Outbox")
+    assert typed.outcome is TelegramSendOutcome.DEFINITE_TRANSIENT_FAILURE
+    assert "disabled" in typed.error_details
+
+
+def test_explicit_disabled_config_blocks_send_without_environment(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_ALERTS_ENABLED", raising=False)
+    config = build_telegram_config({"telegram_alerts_enabled": True}, {"TELEGRAM_ALERTS_ENABLED": "false"})
+    ok, error_text = send_telegram_message(config, "Manual test")
+    assert not ok and "disabled" in error_text
+
+
 def alert_config(**overrides):
     config = {
         "timezone": "America/Denver",
