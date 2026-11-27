@@ -3,7 +3,9 @@ from zoneinfo import ZoneInfo
 import calendar
 
 import streamlit as st
+import psycopg
 
+from activity_history import build_daily_history
 from scheduling_core import scheduled_date_range
 
 
@@ -553,6 +555,48 @@ def render_planner_daily_overview(
     st_module.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_daily_activity_history(today, panel_key, app_settings, load_sources, st_module=st):
+    with st_module.expander("Daily Activity History", expanded=False):
+        selected_day = st_module.date_input(
+            "Activity date", value=today, min_value=date(1000, 1, 1), max_value=today,
+            key=f"{panel_key}_activity_date",
+        )
+        if selected_day is None:
+            st_module.info("Select a date to view activity.")
+            return
+        try:
+            tasks, issues = load_sources(selected_day)
+        except psycopg.Error:
+            st_module.error("Daily activity history could not be loaded from the database.")
+            return
+        entries = build_daily_history(
+            selected_day, tasks, app_settings.get("quick_reminders") or [], issues
+        )
+        completed = sum(entry["outcome"] == "Completed" for entry in entries)
+        st_module.caption(f"{completed} completed · {len(entries)} activities handled")
+        if entries:
+            st_module.dataframe(
+                [
+                    {
+                        "Time (Mountain)": entry["timestamp"].strftime("%I:%M %p").lstrip("0")
+                        if entry["timestamp"] else "Time not recorded",
+                        "Activity": entry["name"],
+                        "Type": entry["type"],
+                        "Outcome": entry["outcome"],
+                    }
+                    for entry in entries
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+        else:
+            st_module.caption("No retained activity for this date.")
+        st_module.caption(
+            "History reflects retained records; deleted or reopened items and alert acknowledgements "
+            "may not be available. Clinical issues are shown without details."
+        )
+
+
 def render_overview_control_tower(
     tasks,
     active_tasks,
@@ -598,6 +642,9 @@ def render_overview_control_tower(
         )
         render_planner_daily_overview(
             daily_summary, today, panel_key=f"{panel_key}_daily", st_module=st_module
+        )
+        render_daily_activity_history(
+            today, panel_key, app_settings, deps["load_daily_history_sources"], st_module=st_module
         )
         with st_module.expander("Detailed overview and quick actions", expanded=False):
             _render_overview_control_tower_details(

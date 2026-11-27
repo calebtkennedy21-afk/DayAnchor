@@ -6,6 +6,14 @@ Daily task app for personal and clinic responsibilities.
 The Planner workspace offers Auto, Clinical, and Personal views and a daily
 overview. Auto stays balanced until the recurring work schedule is confirmed
 for the current session; confirmation does not change saved settings.
+Daily Activity History shows retained completed tasks, dismissed quick reminders,
+and resolved clinical issues by Mountain date. Recurring task occurrences remain
+separate tasks. Older date-only completions and clinical issues have no recorded
+time; deleted or reopened records, reminders without dismissal timestamps, and
+alert acknowledgements may not be retained. History deduplicates by existing
+record ID; separately created duplicate occurrences cannot be reliably linked.
+Clinical issue details and surgical cases are excluded. Session-only history
+lasts only for the current session.
 
 The app now supports Postgres persistence using Railway-provided URL environment variables.
 If no database URL is found, the app falls back to session memory.

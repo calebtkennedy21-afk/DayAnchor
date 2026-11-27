@@ -4,6 +4,16 @@ Owner: DayAnchor Team
 Date: 2026-07-07  
 Primary objective: Improve app speed and maintainability immediately by shipping architecture split and feature flags first.
 
+## Future consideration: Daily Activity History
+
+- Retain history for deleted or reopened items and alert acknowledgements; older
+  records or reminders without dismissal timestamps cannot be reconstructed.
+- Preserve reliable occurrence identity to prevent and detect separately
+  created duplicates; the current view deduplicates only existing record IDs.
+- Record precise completion times where only a date is currently retained.
+- Consider durable session-fallback history without exposing clinical details or
+  surgical cases. Any schema or infrastructure change requires separate approval.
+
 ## Sprint 0 (ASAP, 3-5 days)
 
 Goal: Reduce render overhead and unblock modular development in parallel.

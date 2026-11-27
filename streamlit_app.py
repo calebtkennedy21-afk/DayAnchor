@@ -28,6 +28,7 @@ from clinical_reference import (
     suggest_protocols_for_case as ref_suggest_protocols_for_case,
 )
 from cpt_reference import CPT_REFERENCE
+import activity_history
 import ai_envelope
 import ai_workflows
 import app_bootstrap
@@ -15754,6 +15755,9 @@ page_shared_deps = {
     "weekly_family_schedule_summary": weekly_family_schedule_summary,
     "load_lead_relationship_touchpoints": load_lead_relationship_touchpoints,
     "normalize_quick_reminders": normalize_quick_reminders,
+    "load_daily_history_sources": lambda day: activity_history.load_history_sources(
+        day, db_enabled, get_connection, st.session_state
+    ),
     "format_due": format_due,
     "add_task": add_task,
     "update_task": update_task,
